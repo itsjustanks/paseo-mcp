@@ -1,4 +1,5 @@
 import type { PluginTheme } from "@getpaseo/plugin";
+import { Icon } from "@getpaseo/plugin/react-native";
 import React, { createContext, useContext, useMemo, useState } from "react";
 import { ActivityIndicator, Clipboard, Image, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 
@@ -130,6 +131,7 @@ export function tokens(theme: PluginTheme, compact: boolean) {
     // because a phone is held further from nobody's face than a monitor.
     text: {
       display: { fontSize: 20, fontWeight: "700" as const, lineHeight: 26, color: fg },
+      value: { fontSize: compact ? 24 : 28, fontWeight: "700" as const, lineHeight: compact ? 30 : 34, color: fg },
       heading: { fontSize: 15, fontWeight: "600" as const, lineHeight: 20, color: fg },
       body: { fontSize: compact ? 14 : 13, fontWeight: "400" as const, lineHeight: compact ? 20 : 18, color: fg },
       bodyStrong: { fontSize: compact ? 14 : 13, fontWeight: "600" as const, lineHeight: compact ? 20 : 18, color: fg },
@@ -183,11 +185,15 @@ export function Screen({
   t,
   children,
   scroll = true,
+  paddingTop,
 }: {
   t: Tokens;
   children: React.ReactNode;
   scroll?: boolean;
+  /** A header rendered above the scroll area already carries the top padding. */
+  paddingTop?: number;
 }) {
+  const pad = t.compact ? 16 : 20;
   const body = (
     <View style={{ maxWidth: t.maxWidth, width: "100%", alignSelf: "center", gap: t.space.lg }}>{children}</View>
   );
@@ -196,14 +202,138 @@ export function Screen({
       {scroll ? (
         <ScrollView
           style={{ flex: 1, backgroundColor: t.color.surface0 }}
-          contentContainerStyle={{ padding: t.compact ? 16 : 20, paddingBottom: 48 }}
+          contentContainerStyle={{ padding: pad, paddingTop: paddingTop ?? pad, paddingBottom: 48 }}
         >
           {body}
         </ScrollView>
       ) : (
-        <View style={{ flex: 1, backgroundColor: t.color.surface0, padding: t.compact ? 16 : 20 }}>{body}</View>
+        <View style={{ flex: 1, backgroundColor: t.color.surface0, padding: pad, paddingTop: paddingTop ?? pad }}>{body}</View>
       )}
     </TokensProvider>
+  );
+}
+
+/** Title, "Selected host: …" caption, and one status pill — the header every Paseo plugin shares. */
+export function Header({ title, caption, pill }: { title: string; caption: string; pill?: React.ReactNode }) {
+  const t = useTokens();
+  return (
+    <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", gap: t.space.md }}>
+      <View style={{ gap: 3, flexShrink: 1, minWidth: 0 }}>
+        <Text style={t.text.display}>{title}</Text>
+        <Text style={t.text.label}>{caption}</Text>
+      </View>
+      {pill}
+    </View>
+  );
+}
+
+export type ChoiceItem<Id extends string> = { id: Id; label: string; icon: string; description: string };
+
+/**
+ * Section tiles. On a phone with more than three of them they become one
+ * horizontally scrolling strip instead of a wall of half-width boxes.
+ */
+export function Choice<Id extends string>({
+  items,
+  selected,
+  onChange,
+  label,
+}: {
+  items: ChoiceItem<Id>[];
+  selected: Id;
+  onChange: (id: Id) => void;
+  label: string;
+}) {
+  const t = useTokens();
+  const narrowNavigation = t.compact && items.length > 3;
+  const choices = (
+    <View accessibilityRole="tablist" accessibilityLabel={label} style={{ flexDirection: "row", flexWrap: narrowNavigation ? "nowrap" : "wrap", gap: t.space.sm }}>
+      {items.map((item) => {
+        const on = selected === item.id;
+        return (
+          <Pressable
+            key={item.id}
+            accessibilityRole="tab"
+            accessibilityLabel={item.label}
+            accessibilityState={{ selected: on }}
+            onPress={() => onChange(item.id)}
+            style={({ pressed }) => ({
+              flexGrow: narrowNavigation ? 0 : 1,
+              flexBasis: narrowNavigation ? "auto" : t.compact ? "44%" : items.length > 3 ? 140 : 180,
+              minHeight: narrowNavigation ? 44 : 68,
+              padding: t.space.md,
+              gap: 5,
+              borderRadius: t.radius.md,
+              borderWidth: 1,
+              borderColor: on ? t.color.accent : t.color.border,
+              backgroundColor: on ? alpha(t.color.accent, 0.09) : pressed ? t.color.surface2 : t.color.surface1,
+            })}
+          >
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 7 }}>
+              <Icon name={item.icon} size={16} color={on ? t.color.accent : t.color.muted} />
+              <Text style={t.text.bodyStrong}>{item.label}</Text>
+            </View>
+            {!narrowNavigation ? <Text style={t.text.caption}>{item.description}</Text> : null}
+          </Pressable>
+        );
+      })}
+    </View>
+  );
+  return narrowNavigation ? <ScrollView horizontal showsHorizontalScrollIndicator={false}>{choices}</ScrollView> : choices;
+}
+
+/** Fixed-width cards that wrap on wide layouts and stack in compact ones. */
+export function Grid({ children, min = 240 }: { children: React.ReactNode; min?: number }) {
+  const t = useTokens();
+  return (
+    <View style={{ flexDirection: t.compact ? "column" : "row", flexWrap: t.compact ? "nowrap" : "wrap", alignItems: "stretch", gap: t.space.md }}>
+      {React.Children.map(children, (child) =>
+        child ? (
+          <View style={{ width: t.compact ? "100%" : undefined, flexGrow: 1, flexBasis: t.compact ? undefined : min, minWidth: t.compact ? undefined : min }}>
+            {child}
+          </View>
+        ) : null,
+      )}
+    </View>
+  );
+}
+
+/** One number with its name above and one line of meaning below. */
+export function StatCard({ label, value, detail }: { label: string; value: string | number; detail?: string }) {
+  const t = useTokens();
+  return (
+    <Card>
+      <Text style={t.text.label}>{label}</Text>
+      <Text style={t.text.value}>{value}</Text>
+      {detail ? <Text style={t.text.caption}>{detail}</Text> : null}
+    </Card>
+  );
+}
+
+/** A numbered heading for a walkthrough card. Index 0 draws no number. */
+export function Step({ index, title }: { index: number; title: string }) {
+  const t = useTokens();
+  return (
+    <View style={{ flexDirection: "row", alignItems: "center", gap: t.space.sm }}>
+      {index > 0 ? (
+        <View style={{ width: 22, height: 22, borderRadius: 11, backgroundColor: t.color.accentWash, alignItems: "center", justifyContent: "center" }}>
+          <Text style={{ fontSize: 12, fontWeight: "700", color: t.color.accent }}>{index}</Text>
+        </View>
+      ) : null}
+      <Text style={[t.text.heading, { flexShrink: 1 }]}>{title}</Text>
+    </View>
+  );
+}
+
+/** Eyebrow, headline and one paragraph — the opening of a section. */
+export function Intro({ eyebrow, title, description }: { eyebrow?: string; title: string; description?: string }) {
+  const t = useTokens();
+  return (
+    <View style={{ gap: t.space.xs }}>
+      {eyebrow ? <Text style={t.text.label}>{eyebrow.toUpperCase()}</Text> : null}
+      <Text style={[t.text.display, { fontSize: t.compact ? 22 : 26, lineHeight: t.compact ? 28 : 32 }]}>{title}</Text>
+      {description ? <Text style={[t.text.body, { color: t.color.muted, maxWidth: 680 }]}>{description}</Text> : null}
+    </View>
   );
 }
 

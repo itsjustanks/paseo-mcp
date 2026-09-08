@@ -1,0 +1,113 @@
+/** Browser stand-in for @getpaseo/plugin: every MCP contract answered from fixtures. */
+import React, { useCallback } from "react";
+import { Text, View } from "react-native";
+export function defineRpc<T>(contract: T) { return contract; }
+const params = new URLSearchParams(location.search);
+const empty = params.has("empty"), failed = params.has("error");
+const calls: string[] = [];
+const toasts: { message: string; variant: string }[] = [];
+Object.assign(window, { __fixtureCalls: calls, __toasts: toasts });
+
+const HOME = "/home/demo";
+const destinations = [
+  { id: `${HOME}/.claude.json`, label: "Claude · demo@example.com (primary)", provider: "claude", account: "demo@example.com", configPath: `${HOME}/.claude.json`, format: "json-mcp" },
+  { id: `${HOME}/.codex/config.toml`, label: "Codex · demo@example.com (primary)", provider: "codex", account: "demo@example.com", configPath: `${HOME}/.codex/config.toml`, format: "toml-mcp" },
+  { id: `${HOME}/.agent-link/claude/work/.claude.json`, label: "Claude · work@example.com (AgentLink)", provider: "claude", account: "work@example.com", configPath: `${HOME}/.agent-link/claude/work/.claude.json`, format: "json-mcp" },
+  { id: `${HOME}/.kimi/mcp.json`, label: "Kimi", provider: "kimi", account: "", configPath: `${HOME}/.kimi/mcp.json`, format: "json-mcp" },
+];
+const [claude, codex, work, kimi] = destinations.map((d) => d.id);
+const servers = [
+  { name: "heroui-pro", transport: "http", detail: "https://mcp.heroui.pro/mcp", authStyle: "inline-credentials", inlineCredentialsIn: [claude, codex], presentIn: [claude, codex, work, kimi] },
+  { name: "jam", transport: "http", detail: "https://mcp.jam.dev/mcp", authStyle: "oauth-or-none", inlineCredentialsIn: [], presentIn: [claude, codex] },
+  { name: "posthog", transport: "http", detail: "https://mcp.posthog.com/mcp", authStyle: "oauth-or-none", inlineCredentialsIn: [], presentIn: [claude] },
+  { name: "playwright", transport: "stdio", detail: "npx @playwright/mcp@latest", authStyle: "oauth-or-none", inlineCredentialsIn: [], presentIn: [claude, codex, work, kimi] },
+  { name: "supabase", transport: "stdio", detail: "npx -y @supabase/mcp-server", authStyle: "inline-credentials", inlineCredentialsIn: [work], presentIn: [claude, work] },
+  { name: "linear", transport: "http", detail: "https://mcp.linear.app/mcp", authStyle: "oauth-or-none", inlineCredentialsIn: [], presentIn: [claude, codex, work, kimi] },
+];
+const health = [
+  { name: "heroui-pro", status: "ok", note: "" },
+  { name: "jam", status: "auth-required", note: "Server answered 401; an OAuth grant is needed." },
+  { name: "posthog", status: "auth-required", note: "Server answered 401; an OAuth grant is needed." },
+  { name: "playwright", status: "ok", note: "" },
+  { name: "supabase", status: "binary-missing", note: "npx could not resolve @supabase/mcp-server." },
+  { name: "linear", status: "ok", note: "" },
+];
+const accounts = [
+  { provider: "claude", email: "demo@example.com", dir: `${HOME}/.claude`, isPrimary: true, definedServers: 6, needsAuth: ["jam", "posthog"], authStatus: { jam: "not-connected", posthog: "not-connected", linear: "connected" } },
+  { provider: "codex", email: "demo@example.com", dir: `${HOME}/.codex`, isPrimary: true, definedServers: 4, needsAuth: ["jam"], authStatus: { jam: "not-connected", linear: "connected" } },
+  { provider: "claude", email: "work@example.com", dir: `${HOME}/.agent-link/claude/work`, isPrimary: false, definedServers: 4, needsAuth: [], authStatus: { linear: "connected" } },
+];
+const projectServers = [
+  { project: "data-glue", name: "supabase" },
+  { project: "investorkit-context", name: "Attio Docs" },
+  { project: "investorkit-context", name: "azure-devops" },
+  { project: "unfold-mobile", name: "expo" },
+];
+const sessions = [
+  { key: `claude|${HOME}/.claude||jam`, server: "jam", account: "demo@example.com", provider: "claude", workspaceId: "", state: "waiting", url: "https://auth.jam.dev/authorize?client_id=demo&state=abc", callbackUrl: "http://localhost:53021/callback", browserOpened: true, expectsRedirect: true, message: "Waiting for the browser to return.", startedAt: Date.now() - 20_000 },
+];
+const definition = (name: string) => {
+  const server = servers.find((s) => s.name === name)!;
+  return server.transport === "http"
+    ? { type: "http", url: server.detail, ...(server.inlineCredentialsIn.length ? { headers: { Authorization: "Bearer •••a1b2" } } : {}) }
+    : { command: "npx", args: server.detail.split(" ").slice(1), ...(server.inlineCredentialsIn.length ? { env: { SUPABASE_ACCESS_TOKEN: "•••c3d4" } } : {}) };
+};
+const toml = (name: string, def: any) => def.url
+  ? `[mcp_servers.${name}]\nurl = "${def.url}"${def.headers ? `\n[mcp_servers.${name}.http_headers]\nAuthorization = "${def.headers.Authorization}"` : ""}`
+  : `[mcp_servers.${name}]\ncommand = "${def.command}"\nargs = ${JSON.stringify(def.args)}`;
+const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function call(contract: any, input: any) {
+  const name = String(contract.name).replace("paseo-mcp.", "");
+  calls.push(name);
+  await delay(120);
+  if (failed && (name === "matrix" || name === "auth")) throw new Error("Fictional daemon unreachable. Retry the connection.");
+  switch (name) {
+    case "matrix": return { destinations, servers: empty ? [] : servers };
+    case "health": return { results: empty ? [] : health };
+    case "auth": return { accounts, projectServers: empty ? [] : projectServers };
+    case "login-status": return { sessions, daemonIsLocal: true, hostname: "paseo" };
+    case "raw-get": {
+      const server = servers.find((s) => s.name === input.name)!;
+      return { containsSecrets: server.inlineCredentialsIn.length > 0, rows: destinations.map((d) => {
+        const found = server.presentIn.includes(d.id); const def = definition(input.name);
+        const json = JSON.stringify(def, null, 2);
+        return { destId: d.id, destLabel: d.label, dialect: d.format === "toml-mcp" ? "codex-toml" : d.provider === "kimi" ? "kimi-json" : "claude-json", found, json: found ? json : "", masked: !input.reveal && server.inlineCredentialsIn.includes(d.id), nativePreview: found ? (d.format === "toml-mcp" ? toml(input.name, def) : json) : "" };
+      }) };
+    }
+    case "def-all": {
+      const server = servers.find((s) => s.name === input.name)!;
+      return { rows: destinations.map((d) => ({ destId: d.id, found: server.presentIn.includes(d.id), kind: server.transport === "http" ? "http" : "stdio", command: server.transport === "stdio" ? server.detail : "", url: server.transport === "http" ? server.detail : "", kvLines: server.inlineCredentialsIn.includes(d.id) ? "Authorization=Bearer •••a1b2" : "" })) };
+    }
+    case "raw-put": return { ok: true, issues: [], warnings: [], preview: input.json, dropped: [], message: input.dryRun ? "Checked clean." : "Written." };
+    case "import-parse": {
+      if (!input.blob.trim().startsWith("{")) return { servers: [], normalisations: [], issues: [{ line: 1, column: 1, code: "json-syntax", message: "Expected an object." }] };
+      return { servers: [{ name: "example", json: input.blob, kind: "http", summary: "https://example.com/mcp", hasPlaceholders: input.blob.includes("<") ? ["API_KEY"] : [] }], normalisations: input.blob.includes("```") ? ["Removed a code fence."] : [], issues: [] };
+    }
+    case "import-apply": return { ok: true, written: input.servers.map((s: any) => `${s.name} → ${input.targets.length} editors`), skipped: [], issues: [], message: `Imported ${input.servers.length} servers.` };
+    case "export": return { text: JSON.stringify({ mcpServers: Object.fromEntries(servers.map((s) => [s.name, definition(s.name)])) }, null, 2), filename: input.scope === "all" ? "mcp-export.json" : `${input.name}.json`, containsSecrets: Boolean(input.reveal) };
+    case "export-file": return { ok: true, path: `${HOME}/Downloads/${input.filename}`, message: `Saved to ${HOME}/Downloads/${input.filename}.` };
+    case "workspace": return { workspace: { id: "ws-1", name: "data-glue", directory: `${HOME}/projects/data-glue`, projectRootPath: `${HOME}/projects/data-glue` }, configPath: `${HOME}/projects/data-glue/.mcp.json`, servers: [{ name: "supabase", transport: "stdio", detail: "npx -y @supabase/mcp-server", authStyle: "inline-credentials" }, { name: "jam", transport: "http", detail: "https://mcp.jam.dev/mcp", authStyle: "oauth-or-none" }], accounts };
+    case "sync": return { ok: true, log: "Copied 6 server definitions into 1 AgentLink slot.\nTrusted projects: 3 copied.\nOAuth grants: untouched." };
+    case "login": return { ok: true, session: { ...sessions[0], server: input.server, account: input.account, provider: input.provider, workspaceId: input.workspaceId ?? "" }, message: `Sign-in started for ${input.server}.` };
+    case "login-complete": return { ok: true, message: "Connection finished." };
+    case "login-cancel": return { ok: true, message: "Sign-in cancelled." };
+    case "logout": return { ok: true, message: `Signed out of ${input.server}.` };
+    case "add": return { ok: true, message: `Added ${input.name} to ${input.targets.length} editors.` };
+    case "apply": return { ok: true, message: `Copied ${input.name} to ${input.targets.length} editors.` };
+    case "remove": return { ok: true, message: `Removed ${input.name} from ${input.targets.length} editors.` };
+    case "rename": return { ok: true, message: `Renamed ${input.name} to ${input.newName}.` };
+    case "edit-one": return { ok: true, message: `Saved ${input.name}.` };
+    default: throw new Error(`Fixture has no answer for ${name}`);
+  }
+}
+export function useRpc(contract: any) { return useCallback((input: unknown) => call(contract, input), [contract]); }
+export function useWorkspace<T>(_id: string, select: (workspace: { name: string; directory: string }) => T): T { return select({ name: "data-glue", directory: `${HOME}/projects/data-glue` }); }
+export const Icon = ({ name, size = 16, color }: { name: string; size?: number; color?: string }) => <Text style={{ fontSize: size - 4, color, fontWeight: "700" }} accessibilityLabel={name}>{name.replace(/[a-z]/g, "").slice(0, 2)}</Text>;
+export const Modal = Object.assign(({ children, open, title }: any) => open ? <View role="dialog" aria-label={title} style={{ position: "absolute", inset: 0, zIndex: 100, backgroundColor: "rgba(0,0,0,0.7)", alignItems: "center", justifyContent: "center" }}><View style={{ maxWidth: 520, padding: 20, backgroundColor: "#1a2029" }}><Text style={{ color: "#eef1f6", fontSize: 18 }}>{title}</Text>{children}</View></View> : null, { Content: ({ children }: any) => <View>{children}</View> });
+export function useToast() {
+  return {
+    show(message: string, options?: { variant?: string }) { toasts.push({ message, variant: options?.variant ?? "default" }); console.info("[toast]", options?.variant ?? "default", message); },
+    error(message: string) { toasts.push({ message, variant: "error" }); console.error("[toast] error", message); },
+  };
+}

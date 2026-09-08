@@ -1,6 +1,7 @@
 /** MCP definitions, health and OAuth grants, kept together by server. */
 import type { PluginSurfaceProps, PluginWorkspacePanelProps } from "@getpaseo/plugin";
 import { useRpc, useWorkspace } from "@getpaseo/plugin";
+import { useToast } from "@getpaseo/plugin/react-native";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import React, { useEffect, useMemo, useState } from "react";
 import { Linking, Text, View } from "react-native";
@@ -44,6 +45,7 @@ import {
 import {
   Button,
   Card,
+  Choice,
   CodeBlock,
   ConfirmButton,
   Coverage,
@@ -52,25 +54,30 @@ import {
   ErrorText,
   Facts,
   Field,
+  Grid,
+  Header,
+  Intro,
   Loading,
   Notice,
   Row,
   Screen,
   Section,
   Segmented,
+  StatCard,
   StatusPill,
+  Step,
   Tag,
-  Toolbar,
+  TokensProvider,
   copyToClipboard,
   useTokens,
   useUi,
+  type ChoiceItem,
   type Status,
 } from "./ui.client";
 
 type ParsedServer = z.infer<typeof ParsedServerSchema>;
 type PutResult = z.output<typeof mcpRawPut.output>;
-type Flash = { tone: Status; text: string };
-type Mode = "browse" | "add" | "import";
+type Mode = "add" | "import";
 type Kind = "stdio" | "http";
 
 // -------------------------------------------------------------------- helpers
@@ -683,8 +690,64 @@ function AuthRows({
 
 // -------------------------------------------------------------------- surface
 
-export function McpSurface({ theme, layout }: PluginSurfaceProps) {
+type SectionId = "overview" | "servers" | "accounts" | "projects" | "transfer" | "guide";
+type Filter = "all" | "gaps" | "issues";
+
+const SECTIONS: ChoiceItem<SectionId>[] = [
+  { id: "overview", label: "Overview", icon: "LayoutDashboard", description: "Your next step" },
+  { id: "servers", label: "Servers", icon: "Server", description: "Definitions across editors" },
+  { id: "accounts", label: "Accounts", icon: "KeyRound", description: "Sign-in and OAuth grants" },
+  { id: "projects", label: "Projects", icon: "FolderCode", description: "Per-project .mcp.json" },
+  { id: "transfer", label: "Import & Export", icon: "ArrowLeftRight", description: "Paste JSON, back up" },
+  { id: "guide", label: "Guide & Setup", icon: "BookOpen", description: "How this works" },
+];
+
+const GUIDE_STEPS: { title: string; detail: string; label: string; section: SectionId }[] = [
+  { title: "Add or import servers", detail: "Type a URL or command, or paste the JSON block straight out of a README. Fences, comments and the mcpServers wrapper are handled.", label: "Open Import & Export", section: "transfer" },
+  { title: "Apply to every editor", detail: "A server defined in one editor can be copied to the others. Codex and Grok store TOML; the translation happens for you and anything dropped is reported.", label: "Review servers", section: "servers" },
+  { title: "Sign in per account", detail: "HTTP servers that use OAuth need a grant for each account. Connect opens the server's own sign-in on the daemon host.", label: "Open accounts", section: "accounts" },
+  { title: "Project servers", detail: "A workspace's .mcp.json is read-only here. Open MCP connections from that workspace to connect its accounts.", label: "See projects", section: "projects" },
+];
+
+function providerName(provider: string): string {
+  const known: Record<string, string> = { claude: "Claude", codex: "Codex", kimi: "Kimi", grok: "Grok" };
+  return known[provider] ?? (provider ? provider.charAt(0).toUpperCase() + provider.slice(1) : "Editor");
+}
+
+function plural(count: number, word: string): string {
+  return `${count} ${word}${count === 1 ? "" : "s"}`;
+}
+
+/** Toasts carry one line. Anything longer is kept where the section can show it. */
+function firstLine(text: string, fallback: string): string {
+  const line = text.split("\n").map((entry) => entry.trim()).find(Boolean) ?? "";
+  if (!line) return fallback;
+  return text.trim().includes("\n") ? `${line} …` : line;
+}
+
+/** "Claude · Codex ×2 · Kimi" — which editors hold a server, provider by provider. */
+function editorFacts(presentIn: string[], destinations: Destination[]): string[] {
+  const counts = new Map<string, number>();
+  for (const dest of destinations) {
+    if (!presentIn.includes(dest.id)) continue;
+    const name = providerName(dest.provider);
+    counts.set(name, (counts.get(name) ?? 0) + 1);
+  }
+  return [...counts.entries()].map(([name, count]) => (count > 1 ? `${name} ×${count}` : name));
+}
+
+export function McpSurface({ theme, layout, host }: PluginSurfaceProps) {
   const t = useUi(theme, layout.compact);
+  return (
+    <TokensProvider value={t}>
+      <McpBody key={host.id} theme={theme} layout={layout} host={host} />
+    </TokensProvider>
+  );
+}
+
+function McpBody({ layout, host }: PluginSurfaceProps) {
+  const t = useTokens();
+  const toast = useToast();
   const queryClient = useQueryClient();
 
   const callMatrix = useRpc(mcpMatrix);
@@ -709,15 +772,17 @@ export function McpSurface({ theme, layout }: PluginSurfaceProps) {
   const callLoginCancel = useRpc(mcpLoginCancel);
   const callLogout = useRpc(mcpLogout);
 
-  const [flash, setFlash] = useState<Flash | null>(null);
+  const [section, setSection] = useState<SectionId>("overview");
   const [search, setSearch] = useState("");
-  const [filter, setFilter] = useState<"all" | "gaps" | "issues">("all");
-  const [mode, setMode] = useState<Mode>("browse");
+  const [filter, setFilter] = useState<Filter>("all");
+  const [mode, setMode] = useState<Mode>("add");
   const [selected, setSelected] = useState<string | null>(null);
   const [editing, setEditing] = useState<string | null>(null);
   const [editTab, setEditTab] = useState<"fields" | "json">("fields");
   const [revealed, setRevealed] = useState(false);
+  const [exportRevealed, setExportRevealed] = useState(false);
   const [renameTo, setRenameTo] = useState("");
+  const [syncLog, setSyncLog] = useState("");
 
   const [addName, setAddName] = useState("");
   const [addKind, setAddKind] = useState<Kind>("http");
@@ -736,7 +801,7 @@ export function McpSurface({ theme, layout }: PluginSurfaceProps) {
     issues: JsonIssue[];
   } | null>(null);
 
-  const matrixQuery = useQuery({ queryKey: ["paseo-mcp", "matrix"], queryFn: () => callMatrix({}) });
+  const matrixQuery = useQuery({ queryKey: ["paseo-mcp", "matrix"], queryFn: () => callMatrix({}), retry: 1 });
   const destinations = useMemo<Destination[]>(() => matrixQuery.data?.destinations ?? [], [matrixQuery.data]);
   const servers = useMemo<McpServerRow[]>(() => matrixQuery.data?.servers ?? [], [matrixQuery.data]);
   const healthQuery = useQuery({
@@ -754,7 +819,8 @@ export function McpSurface({ theme, layout }: PluginSurfaceProps) {
   const addTargets = useTargetSet(destinations);
   const importTargets = useTargetSet(destinations);
 
-  const authQuery = useQuery({ queryKey: ["paseo-mcp", "auth"], queryFn: () => callAuth({}) });
+  const authQuery = useQuery({ queryKey: ["paseo-mcp", "auth"], queryFn: () => callAuth({}), retry: 1 });
+  const accounts = useMemo<McpAuthAccount[]>(() => authQuery.data?.accounts ?? [], [authQuery.data]);
   const rawQuery = useQuery({
     queryKey: ["paseo-mcp", "raw", selected, revealed],
     queryFn: () => callRawGet({ name: selected as string, reveal: revealed }),
@@ -776,15 +842,16 @@ export function McpSurface({ theme, layout }: PluginSurfaceProps) {
   });
   const sessions = useMemo<LoginSession[]>(() => loginQuery.data?.sessions ?? [], [loginQuery.data]);
   const daemonIsLocal = loginQuery.data?.daemonIsLocal ?? true;
-  const daemonHostname = loginQuery.data?.hostname ?? "";
+  const daemonHostname = loginQuery.data?.hostname ?? host.label;
   const anyLive = sessions.some((entry) => entry.state === "starting" || entry.state === "waiting");
   useEffect(() => setLiveLogin(anyLive), [anyLive]);
   // A grant that just landed changes who still needs one.
   const settled = sessions.filter((entry) => entry.state === "done").map((entry) => entry.key).join("|");
+  const refetchAuth = authQuery.refetch;
   useEffect(() => {
     if (!settled) return;
-    void queryClient.invalidateQueries({ queryKey: ["paseo-mcp", "auth"] });
-  }, [settled, queryClient]);
+    void refetchAuth();
+  }, [settled, refetchAuth]);
 
   useEffect(() => {
     const timer = setTimeout(() => setDebouncedBlob(blob), 400);
@@ -793,7 +860,7 @@ export function McpSurface({ theme, layout }: PluginSurfaceProps) {
   const parseQuery = useQuery({
     queryKey: ["paseo-mcp", "import-parse", debouncedBlob],
     queryFn: () => callImportParse({ blob: debouncedBlob }),
-    enabled: mode === "import" && debouncedBlob.trim().length > 0,
+    enabled: section === "transfer" && mode === "import" && debouncedBlob.trim().length > 0,
   });
   const parsed = parseQuery.data;
   const parsedNames = (parsed?.servers ?? []).map((entry) => entry.name).join("|");
@@ -802,19 +869,51 @@ export function McpSurface({ theme, layout }: PluginSurfaceProps) {
     setImportResult(null);
   }, [parsedNames]);
 
-  const invalidate = () => void queryClient.invalidateQueries({ queryKey: ["paseo-mcp"] });
-  const fail = (error: unknown) => setFlash({ tone: "error", text: clampLines(errorText(error), 12) });
+  // Targeted refreshes: a definition change moves the matrix, health and who
+  // still needs a grant; a login only moves the session list.
+  const refreshDefinitions = () => {
+    void matrixQuery.refetch();
+    void healthQuery.refetch();
+    void authQuery.refetch();
+    void queryClient.invalidateQueries({ queryKey: ["paseo-mcp", "raw"] });
+    void queryClient.invalidateQueries({ queryKey: ["paseo-mcp", "def"] });
+  };
+  const refreshLogins = () => void loginQuery.refetch();
+  const refreshAll = () => {
+    refreshDefinitions();
+    refreshLogins();
+  };
+  const fail = (error: unknown) => toast.error(firstLine(errorText(error), "Something went wrong. Please retry."));
   const report = (result: { ok: boolean; message: string }) => {
-    setFlash({ tone: result.ok ? "ok" : "error", text: clampLines(result.message, 12) || (result.ok ? "Done." : "Refused.") });
-    if (result.ok) invalidate();
+    if (result.ok) {
+      toast.show(firstLine(result.message, "Done."), { variant: "success" });
+      refreshDefinitions();
+    } else {
+      toast.error(firstLine(result.message, "Refused."));
+    }
+  };
+  const notify = (result: { ok: boolean; message: string }) => {
+    if (result.ok) toast.show(firstLine(result.message, "Done."), { variant: "success" });
+    else toast.error(firstLine(result.message, "Refused."));
   };
 
-  const selectServer = (name: string) => {
-    setMode("browse");
+  const selectServer = (name: string | null) => {
+    setSection("servers");
     setSelected(name);
     setEditing(null);
     setRevealed(false);
     setRenameTo("");
+  };
+  const go = (next: SectionId, options: { server?: string | null; filter?: Filter; mode?: Mode } = {}) => {
+    setSection(next);
+    if (options.server !== undefined) {
+      setSelected(options.server);
+      setEditing(null);
+      setRevealed(false);
+      setRenameTo("");
+    }
+    if (options.filter) setFilter(options.filter);
+    if (options.mode) setMode(options.mode);
   };
   const closeEditor = () => {
     setEditing(null);
@@ -841,8 +940,7 @@ export function McpSurface({ theme, layout }: PluginSurfaceProps) {
       setAddCommand("");
       setAddKv("");
       addTargets.reset();
-      setMode("browse");
-      setSelected(name);
+      selectServer(name);
     },
   });
   const applyMutation = useMutation({
@@ -858,18 +956,18 @@ export function McpSurface({ theme, layout }: PluginSurfaceProps) {
   // Export is two steps on purpose: the first produces the text (masked unless
   // secrets are revealed), the second writes it where the user can find it.
   const exportMutation = useMutation({
-    mutationFn: async (input: { scope: "one" | "all"; name?: string }) => {
-      const made = await callExport({ scope: input.scope, name: input.name, reveal: revealed });
+    mutationFn: async (input: { scope: "one" | "all"; name?: string; reveal: boolean }) => {
+      const made = await callExport({ scope: input.scope, name: input.name, reveal: input.reveal });
       const saved = await callExportFile({ text: made.text, filename: made.filename });
       return { ...saved, containsSecrets: made.containsSecrets };
     },
-    onSuccess: (result) =>
-      setFlash({
-        tone: result.ok ? "ok" : "error",
-        text: result.ok
-          ? `${result.message}${result.containsSecrets ? " It holds live credentials." : " Credentials are redacted, so it cannot be re-imported as-is."}`
-          : result.message,
-      }),
+    onSuccess: (result) => {
+      if (!result.ok) return toast.error(firstLine(result.message, "Export failed."));
+      toast.show(
+        `${firstLine(result.message, "Export written.")}${result.containsSecrets ? " It holds live credentials." : " Credentials are redacted."}`,
+        { variant: result.containsSecrets ? "warning" : "success" },
+      );
+    },
     onError: fail,
   });
 
@@ -893,7 +991,10 @@ export function McpSurface({ theme, layout }: PluginSurfaceProps) {
   const syncMutation = useMutation({
     mutationFn: () => callSync({}),
     onError: fail,
-    onSuccess: (result) => report({ ok: result.ok, message: result.log }),
+    onSuccess: (result) => {
+      setSyncLog(result.log.trim());
+      report({ ok: result.ok, message: result.ok ? "Accounts synced. Definitions copied; grants untouched." : result.log });
+    },
   });
   const importMutation = useMutation({
     mutationFn: () =>
@@ -916,32 +1017,38 @@ export function McpSurface({ theme, layout }: PluginSurfaceProps) {
       callLogin(input),
     onError: fail,
     onSuccess: (result) => {
-      setFlash({ tone: result.ok ? "ok" : "error", text: result.message });
+      notify(result);
       setLiveLogin(true);
-      void queryClient.invalidateQueries({ queryKey: ["paseo-mcp", "login-status"] });
+      refreshLogins();
     },
   });
   const loginCancelMutation = useMutation({
     mutationFn: (key: string) => callLoginCancel({ key }),
     onError: fail,
     onSuccess: (result) => {
-      setFlash({ tone: result.ok ? "ok" : "error", text: result.message });
-      void queryClient.invalidateQueries({ queryKey: ["paseo-mcp", "login-status"] });
+      notify(result);
+      refreshLogins();
     },
   });
   const loginCompleteMutation = useMutation({
     mutationFn: (input: { key: string; redirectUrl: string }) => callLoginComplete(input),
     onError: fail,
     onSuccess: (result) => {
-      setFlash({ tone: result.ok ? "ok" : "error", text: result.message });
+      notify(result);
       setLiveLogin(true);
-      void queryClient.invalidateQueries({ queryKey: ["paseo-mcp", "login-status"] });
+      refreshLogins();
     },
   });
   const logoutMutation = useMutation({
     mutationFn: (input: { provider: "claude" | "codex"; accountDir: string; server: string; workspaceId?: string }) => callLogout(input),
     onError: fail,
-    onSuccess: report,
+    onSuccess: (result) => {
+      notify(result);
+      if (result.ok) {
+        void authQuery.refetch();
+        refreshLogins();
+      }
+    },
   });
 
   const putJson = async (destId: string, json: string, dryRun: boolean): Promise<PutResult | null> => {
@@ -955,13 +1062,30 @@ export function McpSurface({ theme, layout }: PluginSurfaceProps) {
     }
   };
 
+  // ------------------------------------------------------------ derived state
+
   const query = search.trim().toLowerCase();
-  const gapCount = servers.filter((server) => server.presentIn.length < destinations.length).length;
+  const gapServers = servers.filter((server) => server.presentIn.length < destinations.length);
   const isIssue = (server: McpServerRow) => {
     const entry = health?.get(server.name);
     return Boolean(entry && entry.status !== "ok" && entry.status !== "unknown");
   };
-  const issueCount = health ? servers.filter(isIssue).length : 0;
+  const issueServers = health ? servers.filter(isIssue) : [];
+  const brokenServers = issueServers.filter((server) => {
+    const status = health?.get(server.name)?.status;
+    return status === "down" || status === "binary-missing";
+  });
+  const needsAuthNames = [...new Set(accounts.flatMap((account) => account.needsAuth))].filter((name) =>
+    servers.some((server) => server.name === name),
+  );
+  const coveredEditors = destinations.filter((dest) => servers.every((server) => server.presentIn.includes(dest.id))).length;
+  const inlineServers = servers.filter((server) => server.inlineCredentialsIn.length > 0);
+  const projectGroups = [...(authQuery.data?.projectServers ?? []).reduce((groups, entry) => {
+    const names = groups.get(entry.project) ?? [];
+    names.push(entry.name);
+    groups.set(entry.project, names);
+    return groups;
+  }, new Map<string, string[]>()).entries()];
   const shown = servers.filter((server) => {
     if (query && !server.name.toLowerCase().includes(query)) return false;
     if (filter === "gaps" && server.presentIn.length >= destinations.length) return false;
@@ -975,9 +1099,7 @@ export function McpSurface({ theme, layout }: PluginSurfaceProps) {
   const rawRows: RawDefRow[] = rawQuery.data?.rows ?? [];
   const defRows: McpDefRow[] = defQuery.data?.rows ?? [];
   const accountForDestination = (dest: Destination) =>
-    (authQuery.data?.accounts ?? []).find(
-      (account) => account.provider === dest.provider && account.email === dest.account,
-    );
+    accounts.find((account) => account.provider === dest.provider && account.email === dest.account);
   const oauthDestinations = server
     ? destinations.filter((dest) => {
         if (!server.presentIn.includes(dest.id) || server.inlineCredentialsIn.includes(dest.id)) return false;
@@ -986,41 +1108,102 @@ export function McpSurface({ theme, layout }: PluginSurfaceProps) {
       })
     : [];
   const inlineCredentialCount = server?.inlineCredentialsIn.length ?? 0;
-  const refreshAction = <Button key="refresh" label="Refresh" variant="ghost" grow={layout.compact} onPress={invalidate} />;
-  const panelActions: React.ReactNode[] = mode === "browse" && !selected
-    ? [
-        <Button
-          key="add"
-          label="Add server"
-          variant="primary"
-          grow={layout.compact}
-          onPress={() => {
-            setMode("add");
-            setSelected(null);
-            setEditing(null);
-          }}
-        />,
-        <Button
-          key="paste"
-          label="Paste JSON"
-          grow={layout.compact}
-          onPress={() => {
-            setMode("import");
-            setSelected(null);
-            setEditing(null);
-          }}
-        />,
-        <Button
-          key="sync"
-          label="Sync accounts"
-          variant="ghost"
-          grow={layout.compact}
-          loading={syncMutation.isPending}
-          onPress={() => syncMutation.mutate()}
-        />,
-        refreshAction,
-      ]
-    : [refreshAction];
+  const ready = Boolean(matrixQuery.data) && !matrixQuery.isError;
+
+  const headerPill = matrixQuery.isError
+    ? { status: "error" as Status, label: "Host unavailable" }
+    : !matrixQuery.data
+      ? { status: "neutral" as Status, label: "Connecting" }
+      : servers.length === 0
+        ? { status: "neutral" as Status, label: "No servers yet" }
+        : brokenServers.length > 0
+          ? { status: "error" as Status, label: `${plural(brokenServers.length, "server")} down` }
+          : needsAuthNames.length > 0
+            ? { status: "attention" as Status, label: `${needsAuthNames.length} need sign-in` }
+            : gapServers.length > 0
+              ? { status: "attention" as Status, label: plural(gapServers.length, "gap") }
+              : { status: "ok" as Status, label: "All servers healthy" };
+
+  // Decision table for the Overview card, first match wins.
+  const nextStep: { title: string; detail: string; label: string; onPress: () => void } = matrixQuery.isError
+    ? { title: "Reconnect to the host", detail: "The MCP plugin could not read the editor configs on this host. Retry once the daemon is reachable.", label: "Retry", onPress: refreshAll }
+    : !matrixQuery.data
+      ? { title: "Reading editor configs", detail: `Looking for Claude, Codex, Kimi and Grok configs on ${host.label}. This takes a moment.`, label: "Refresh", onPress: refreshAll }
+    : servers.length === 0
+      ? { title: "Add or import your first server", detail: "Paste the JSON block from a server's README, or type a URL or command. It is written to every editor you choose.", label: "Open Import & Export", onPress: () => go("transfer", { mode: "import" }) }
+      : gapServers.length > 0
+        ? { title: `Apply ${plural(gapServers.length, "server")} to the editors missing them`, detail: "A server defined in one editor is not yet in the others. Open a server and choose Add to missing to copy its definition across.", label: "Review gaps", onPress: () => go("servers", { server: null, filter: "gaps" }) }
+        : needsAuthNames.length > 0
+          ? { title: `Sign in to ${plural(needsAuthNames.length, "server")}`, detail: "OAuth grants are per account. Connect each one once; the browser sign-in runs on the daemon host.", label: "Open Accounts", onPress: () => go("accounts") }
+          : brokenServers.length > 0
+            ? { title: `Fix ${plural(brokenServers.length, "unhealthy server")}`, detail: "A server is down or its binary is missing. Open it to read the health note and edit its definition.", label: "Show issues", onPress: () => go("servers", { server: null, filter: "issues" }) }
+            : { title: "Ready", detail: `${plural(servers.length, "server")} defined in every editor, with every account connected. Add another server or export a backup whenever you like.`, label: "Browse servers", onPress: () => go("servers", { server: null, filter: "all" }) };
+
+  const attention: { key: string; title: string; detail: string; tone: Status; server: string }[] = [
+    ...issueServers.map((entry) => {
+      const item = health!.get(entry.name)!;
+      return {
+        key: `health-${entry.name}`,
+        title: `${entry.name} — ${healthWord(item.status)}`,
+        detail: item.note || (item.status === "auth-required" ? "Needs an OAuth grant." : "Health check did not pass."),
+        tone: healthStatus(item.status),
+        server: entry.name,
+      };
+    }),
+    ...inlineServers.map((entry) => ({
+      key: `inline-${entry.name}`,
+      title: `${entry.name} — credentials in ${plural(entry.inlineCredentialsIn.length, "config file")}`,
+      detail: "A token is stored in clear text in the editor config. Exports keep it masked unless you reveal secrets.",
+      tone: "attention" as Status,
+      server: entry.name,
+    })),
+  ];
+
+  // ---------------------------------------------------------------- sections
+
+  const overview = (
+    <View style={{ gap: t.space.lg }}>
+      <Intro
+        title="Every MCP server, in every editor."
+        description={`You are managing ${host.label}. Definitions, health and account sign-in below belong to the editors installed on this host.`}
+      />
+      <Grid min={160}>
+        <StatCard label="Servers" value={ready ? servers.length : "—"} detail="Defined in at least one editor" />
+        <StatCard label="Editors covered" value={ready ? `${coveredEditors} of ${destinations.length}` : "—"} detail="Hold every server" />
+        <StatCard label="Need sign-in" value={ready ? needsAuthNames.length : "—"} detail="OAuth grants missing" />
+        <StatCard label="Projects with MCP" value={authQuery.data ? projectGroups.length : "—"} detail="Workspaces with a .mcp.json" />
+      </Grid>
+      <Card>
+        <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: t.space.sm }}>
+          <StatusPill status={headerPill.status} label={headerPill.label} />
+          <Text style={t.text.caption}>MCP · selected host</Text>
+        </View>
+        <Text style={t.text.heading}>{nextStep.title}</Text>
+        <Text style={t.text.body}>{nextStep.detail}</Text>
+        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: t.space.sm }}>
+          <Button label={nextStep.label} variant="primary" onPress={nextStep.onPress} />
+          <Button label="Read the walkthrough" onPress={() => go("guide")} />
+          <Button label="Refresh" variant="ghost" loading={matrixQuery.isFetching || healthQuery.isFetching} onPress={refreshAll} />
+        </View>
+      </Card>
+      {attention.length > 0 ? (
+        <Card>
+          <Step index={0} title="Needs attention" />
+          <View style={{ gap: t.space.md }}>
+            {attention.map((item) => (
+              <View key={item.key} style={{ gap: t.space.xs, borderTopWidth: 1, borderTopColor: t.color.borderSubtle, paddingTop: t.space.md }}>
+                <StatusPill status={item.tone} label={item.title} />
+                <Text style={t.text.caption}>{item.detail}</Text>
+                <View style={{ flexDirection: "row" }}>
+                  <Button label={`Open ${item.server}`} onPress={() => selectServer(item.server)} />
+                </View>
+              </View>
+            ))}
+          </View>
+        </Card>
+      ) : null}
+    </View>
+  );
 
   const filters = (
     <View style={{ flexDirection: layout.compact ? "column" : "row", alignItems: layout.compact ? "stretch" : "center", gap: t.space.md }}>
@@ -1032,8 +1215,8 @@ export function McpSurface({ theme, layout }: PluginSurfaceProps) {
         onChange={setFilter}
         options={[
           { value: "all", label: `All ${servers.length}` },
-          { value: "gaps", label: `Gaps ${gapCount}` },
-          { value: "issues", label: `Issues ${issueCount}`, disabled: !health },
+          { value: "gaps", label: `Gaps ${gapServers.length}` },
+          { value: "issues", label: `Issues ${issueServers.length}`, disabled: !health },
         ]}
       />
     </View>
@@ -1042,11 +1225,6 @@ export function McpSurface({ theme, layout }: PluginSurfaceProps) {
   const list = (
     <Card padded={false}>
       {matrixQuery.isLoading ? <Loading label="Reading configs…" /> : null}
-      {matrixQuery.error ? (
-        <View style={{ padding: t.space.md }}>
-          <ErrorText>{errorText(matrixQuery.error)}</ErrorText>
-        </View>
-      ) : null}
       {healthQuery.error ? (
         <View style={{ padding: t.space.md }}>
           <ErrorText>{`Automatic health check failed: ${errorText(healthQuery.error)}`}</ErrorText>
@@ -1057,58 +1235,447 @@ export function McpSurface({ theme, layout }: PluginSurfaceProps) {
           title="Nothing here"
           body={
             servers.length === 0
-              ? "No MCP server is defined in any destination yet."
+              ? "No MCP server is defined in any editor yet."
               : "No server matches this search and filter."
           }
+          action={servers.length === 0 ? <Button label="Add or import a server" variant="primary" onPress={() => go("transfer")} /> : undefined}
         />
       ) : null}
-      {shown.map((entry, index) => {
-        const entryHealth = health?.get(entry.name);
-        return (
-          <Row
-            key={entry.name}
-            first={index === 0}
-            selected={selected === entry.name}
-            onPress={() => selectServer(entry.name)}
-            title={entry.name}
-            meta={
-              <Coverage
-                present={entry.presentIn.length}
-                total={destinations.length}
-                label={`${entry.presentIn.length} of ${destinations.length} destinations`}
-              />
-            }
-            trailing={
-              healthQuery.isFetching && !entryHealth ? (
-                <StatusPill status="busy" label="checking" />
-              ) : entryHealth ? (
-                <StatusPill status={healthStatus(entryHealth.status)} label={healthWord(entryHealth.status)} />
-              ) : undefined
-            }
-          />
-        );
-      })}
+      {[...shown]
+        .sort((a, b) => a.name.localeCompare(b.name))
+        .map((entry, index) => {
+          const entryHealth = health?.get(entry.name);
+          return (
+            <Row
+              key={entry.name}
+              first={index === 0}
+              selected={selected === entry.name}
+              onPress={() => selectServer(entry.name)}
+              title={
+                <View style={{ flexDirection: "row", alignItems: "center", gap: t.space.sm, minWidth: 0 }}>
+                  <Text numberOfLines={1} style={[t.text.bodyStrong, { flexShrink: 1 }]}>{entry.name}</Text>
+                  <Tag label={entry.transport} />
+                </View>
+              }
+              meta={
+                <View style={{ gap: t.space.xs, paddingTop: 2 }}>
+                  <Coverage
+                    present={entry.presentIn.length}
+                    total={destinations.length}
+                    label={`${entry.presentIn.length} of ${plural(destinations.length, "editor")}`}
+                  />
+                  <Facts items={editorFacts(entry.presentIn, destinations).map((value) => ({ value }))} />
+                </View>
+              }
+              trailing={
+                healthQuery.isFetching && !entryHealth ? (
+                  <StatusPill status="busy" label="checking" />
+                ) : entryHealth ? (
+                  <StatusPill status={healthStatus(entryHealth.status)} label={healthWord(entryHealth.status)} />
+                ) : undefined
+              }
+            />
+          );
+        })}
     </Card>
   );
 
   const back = (
-    <Button
-      label="← MCP servers"
-      variant="ghost"
-      onPress={() => {
-        setMode("browse");
-        setSelected(null);
-        setEditing(null);
-      }}
+    <View style={{ flexDirection: "row" }}>
+      <Button label="← All servers" variant="ghost" onPress={() => selectServer(null)} />
+    </View>
+  );
+
+  const destinationConnection = (entry: McpServerRow, dest: Destination) => (
+    <AuthRows
+      server={entry.name}
+      accounts={accounts}
+      destinations={[dest]}
+      presentIn={[dest.id]}
+      sessions={sessions}
+      oauthCapable={entry.transport === "http" && !entry.inlineCredentialsIn.includes(dest.id)}
+      daemonIsLocal={daemonIsLocal}
+      daemonHostname={daemonHostname}
+      pendingAccount={
+        loginMutation.isPending && loginMutation.variables
+          ? `${loginMutation.variables.provider}|${loginMutation.variables.account}`
+          : null
+      }
+      onAuthorise={(account) =>
+        loginMutation.mutate({
+          provider: account.provider,
+          accountDir: account.isPrimary ? "" : account.dir,
+          account: account.email,
+          server: entry.name,
+        })
+      }
+      onCancel={(key) => loginCancelMutation.mutate(key)}
+      onSignOut={(account) =>
+        logoutMutation.mutate({
+          provider: account.provider,
+          accountDir: account.isPrimary ? "" : account.dir,
+          server: entry.name,
+        })
+      }
+      onComplete={(key, redirectUrl) => loginCompleteMutation.mutate({ key, redirectUrl })}
+      onCopied={(ok) =>
+        ok ? toast.show("Sign-in link copied.", { variant: "success" }) : toast.show("No clipboard here — the link above is selectable.", { variant: "warning" })
+      }
+      bare
+      onlyAccount={{ provider: dest.provider, email: dest.account }}
     />
+  );
+
+  const serverPane = server ? (
+    <View style={{ gap: t.space.lg }}>
+      {back}
+      <Card>
+        <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: t.space.sm }}>
+          <Text style={[t.text.display, { flexShrink: 1 }]} numberOfLines={1}>
+            {server.name}
+          </Text>
+          <Tag label={server.transport} />
+          {inlineCredentialCount > 0 ? <Tag label={`credentials in ${inlineCredentialCount}`} /> : null}
+          {oauthDestinations.length > 0 ? <Tag label={`OAuth on ${oauthDestinations.length}`} /> : null}
+          {serverHealth ? (
+            <StatusPill status={healthStatus(serverHealth.status)} label={healthWord(serverHealth.status)} />
+          ) : null}
+        </View>
+        <Facts
+          items={[
+            { value: `${server.presentIn.length} of ${plural(destinations.length, "editor")}` },
+            ...editorFacts(server.presentIn, destinations).map((value) => ({ value })),
+            server.detail ? { value: server.detail } : null,
+          ]}
+        />
+        {serverHealth && serverHealth.status !== "ok" && serverHealth.note ? (
+          <Text style={t.text.body}>{serverHealth.note}</Text>
+        ) : null}
+        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: t.space.sm }}>
+          {missing.length > 0 ? (
+            <Button
+              label={`Add to ${missing.length} missing`}
+              variant="primary"
+              loading={applyMutation.isPending}
+              onPress={() => applyMutation.mutate({ name: server.name, targets: missing.map((dest) => dest.id) })}
+            />
+          ) : null}
+          <Button
+            label={revealed ? "Hide secrets" : "Reveal secrets"}
+            onPress={() => setRevealed((value) => !value)}
+          />
+          {/* A panel cannot download, so an export is written next to the
+              user's other files and the path is reported back. */}
+          <Button
+            label="Export"
+            loading={exportMutation.isPending}
+            onPress={() => exportMutation.mutate({ scope: "one", name: server.name, reveal: revealed })}
+          />
+        </View>
+        <Disclosure title="Rename this server everywhere">
+          <Field label="New name" value={renameTo} onChangeText={setRenameTo} placeholder={server.name} />
+          <Button
+            label="Rename everywhere"
+            loading={renameMutation.isPending}
+            disabled={!renameTo.trim() || renameTo.trim() === server.name}
+            onPress={() => renameMutation.mutate({ name: server.name, newName: renameTo.trim() })}
+          />
+        </Disclosure>
+      </Card>
+
+      {server.transport === "http" && authQuery.error ? (
+        <ErrorText>{errorText(authQuery.error)}</ErrorText>
+      ) : null}
+
+      {revealed ? (
+        <Notice tone="error">
+          <View style={{ gap: t.space.sm }}>
+            <Text style={t.text.body}>
+              Secrets are in clear text on this pane. They re-mask when the editor closes or you leave this server.
+            </Text>
+            <View style={{ flexDirection: "row", gap: t.space.sm }}>
+              <Button label="Hide secrets" onPress={() => setRevealed(false)} />
+            </View>
+          </View>
+        </Notice>
+      ) : null}
+
+      <Section title="Editors">
+        <Card padded={false}>
+          {destinations.map((dest, index) => {
+            const present = server.presentIn.includes(dest.id);
+            const rawRow = rawRows.find((entry) => entry.destId === dest.id);
+            const defRow = defRows.find((entry) => entry.destId === dest.id);
+            const open = editing === dest.id && present;
+            const authAccount = accountForDestination(dest);
+            const destinationOauth = authAccount ? oauthState(authAccount, server.name) : null;
+            return (
+              <Row
+                key={dest.id}
+                first={index === 0}
+                tone={present ? undefined : "attention"}
+                title={dest.label}
+                subtitle={
+                  present
+                    ? rawRow?.nativePreview ?? (rawQuery.isFetching ? "reading…" : undefined)
+                    : "not defined here"
+                }
+                meta={
+                  present && server.inlineCredentialsIn.includes(dest.id) ? (
+                    <StatusPill status="ok" label="credentials in definition" />
+                  ) : present && destinationOauth?.known ? (
+                    <StatusPill
+                      status={destinationOauth.auth === "connected" ? "ok" : "attention"}
+                      label={destinationOauth.auth === "connected" ? "OAuth connected" : "OAuth needed"}
+                    />
+                  ) : undefined
+                }
+                trailing={
+                  present ? (
+                    open ? undefined : (
+                      <Button
+                        label="Manage"
+                        onPress={() => {
+                          setEditing(dest.id);
+                          setEditTab("fields");
+                        }}
+                      />
+                    )
+                  ) : (
+                    <Button
+                      label="Add here"
+                      loading={applyMutation.isPending && (applyMutation.variables?.targets ?? []).includes(dest.id)}
+                      disabled={applyMutation.isPending}
+                      onPress={() => applyMutation.mutate({ name: server.name, targets: [dest.id] })}
+                    />
+                  )
+                }
+                expanded={
+                  open ? (
+                    <View style={{ gap: t.space.md }}>
+                      {destinationConnection(server, dest)}
+                      <DestinationEditor
+                        tab={editTab}
+                        onTab={setEditTab}
+                        defRow={defRow}
+                        rawRow={rawRow}
+                        saving={editOneMutation.isPending}
+                        otherCount={destinations.length - 1}
+                        onSaveFields={(input) => editOneMutation.mutate({ destId: dest.id, ...input })}
+                        onPut={(json, dryRun) => putJson(dest.id, json, dryRun)}
+                        onCopyEverywhere={() =>
+                          applyMutation.mutate({
+                            name: server.name,
+                            targets: destinations.filter((other) => other.id !== dest.id).map((other) => other.id),
+                            sourceDestId: dest.id,
+                          })
+                        }
+                        onClose={closeEditor}
+                      />
+                      <ConfirmButton
+                        label="Remove from this editor"
+                        confirmLabel="Remove from here"
+                        onConfirm={() => removeMutation.mutate({ name: server.name, targets: [dest.id] })}
+                      />
+                    </View>
+                  ) : undefined
+                }
+              />
+            );
+          })}
+        </Card>
+      </Section>
+    </View>
+  ) : null;
+
+  const serversSection = server ? serverPane : (
+    <View style={{ gap: t.space.lg }}>
+      <Intro
+        eyebrow="Servers"
+        title={`${plural(servers.length, "server")} across ${plural(destinations.length, "editor")}`}
+        description="Every editor that stores MCP definitions on this host is listed as a destination. Open a server to copy it to missing editors, edit one editor's copy, or connect its accounts."
+      />
+      {filters}
+      {list}
+    </View>
+  );
+
+  const accountCard = (account: McpAuthAccount, index: number) => {
+    const connectedNames = Object.entries(account.authStatus).filter(([, state]) => state === "connected").map(([name]) => name);
+    const needs = account.needsAuth.filter((name) => servers.some((server) => server.name === name));
+    const rowsFor = (name: string) => {
+      const entry = servers.find((candidate) => candidate.name === name);
+      return (
+        <AuthRows
+          key={`${account.provider}-${account.dir}-${name}`}
+          server={name}
+          accounts={accounts}
+          destinations={destinations}
+          presentIn={entry?.presentIn ?? []}
+          sessions={sessions}
+          oauthCapable
+          daemonIsLocal={daemonIsLocal}
+          daemonHostname={daemonHostname}
+          pendingAccount={
+            loginMutation.isPending && loginMutation.variables
+              ? `${loginMutation.variables.provider}|${loginMutation.variables.account}`
+              : null
+          }
+          forceDefined
+          onAuthorise={(target) =>
+            loginMutation.mutate({
+              provider: target.provider,
+              accountDir: target.isPrimary ? "" : target.dir,
+              account: target.email,
+              server: name,
+            })
+          }
+          onCancel={(key) => loginCancelMutation.mutate(key)}
+          onSignOut={(target) =>
+            logoutMutation.mutate({
+              provider: target.provider,
+              accountDir: target.isPrimary ? "" : target.dir,
+              server: name,
+            })
+          }
+          onComplete={(key, redirectUrl) => loginCompleteMutation.mutate({ key, redirectUrl })}
+          onCopied={(ok) =>
+            ok ? toast.show("Sign-in link copied.", { variant: "success" }) : toast.show("No clipboard here — the link above is selectable.", { variant: "warning" })
+          }
+          bare
+          onlyAccount={{ provider: account.provider, email: account.email }}
+        />
+      );
+    };
+    return (
+      <Card key={`${account.provider}-${account.dir}-${index}`}>
+        <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: t.space.sm }}>
+          <Text style={[t.text.heading, { flexShrink: 1 }]} numberOfLines={1}>
+            {`${providerName(account.provider)} · ${account.email || "no account"}`}
+          </Text>
+          <Tag label={account.isPrimary ? "primary" : "AgentLink slot"} />
+          <View style={{ flexGrow: 1 }} />
+          <StatusPill
+            status={needs.length > 0 ? "attention" : connectedNames.length > 0 ? "ok" : "neutral"}
+            label={needs.length > 0 ? `${needs.length} need sign-in` : `${connectedNames.length} connected`}
+          />
+        </View>
+        <Facts
+          items={[
+            { value: plural(account.definedServers, "server") },
+            { value: `${connectedNames.length} connected`, tone: connectedNames.length > 0 ? "ok" : undefined },
+            { value: account.dir },
+          ]}
+        />
+        {needs.length > 0 ? (
+          <View style={{ gap: t.space.sm }}>
+            {needs.map((name) => (
+              <View key={name} style={{ gap: t.space.xs }}>
+                <View style={{ flexDirection: "row", alignItems: "center", gap: t.space.sm }}>
+                  <Text style={t.text.bodyStrong}>{name}</Text>
+                  <Button label="Open server" variant="ghost" onPress={() => selectServer(name)} />
+                </View>
+                <Card level={2} padded={false}>{rowsFor(name)}</Card>
+              </View>
+            ))}
+          </View>
+        ) : (
+          <Text style={t.text.caption}>Nothing waits on this account.</Text>
+        )}
+        {connectedNames.length > 0 ? (
+          <Disclosure title={`Connected: ${connectedNames.join(", ")}`}>
+            {connectedNames.map((name) => (
+              <View key={name} style={{ gap: t.space.xs }}>
+                <Text style={t.text.bodyStrong}>{name}</Text>
+                <Card level={2} padded={false}>{rowsFor(name)}</Card>
+              </View>
+            ))}
+          </Disclosure>
+        ) : null}
+      </Card>
+    );
+  };
+
+  const accountsSection = (
+    <View style={{ gap: t.space.lg }}>
+      <Intro
+        eyebrow="Accounts"
+        title="One grant per account, per server."
+        description="Definitions can be copied between editors. OAuth grants cannot, so each Claude or Codex account signs in to a server once. Sign-in runs in a browser on the daemon host."
+      />
+      {authQuery.isLoading ? <Loading label="Reading accounts…" /> : null}
+      {authQuery.error ? (
+        <Notice tone="error">
+          <View style={{ gap: t.space.sm }}>
+            <Text style={t.text.body}>{errorText(authQuery.error)}</Text>
+            <View style={{ flexDirection: "row" }}>
+              <Button label="Retry" onPress={() => void authQuery.refetch()} />
+            </View>
+          </View>
+        </Notice>
+      ) : null}
+      {loginQuery.error ? <ErrorText>{errorText(loginQuery.error)}</ErrorText> : null}
+      {authQuery.data && accounts.length === 0 ? (
+        <Card>
+          <EmptyState title="No Claude or Codex account found" body="Sign in to Claude Code or Codex on this host once. Their config directories are discovered automatically." />
+        </Card>
+      ) : null}
+      {accounts.map(accountCard)}
+      <Card>
+        <Step index={0} title="Sync accounts" />
+        <Text style={t.text.body}>
+          Copies server definitions, trusted projects and preferences from the primary account into every AgentLink slot. OAuth grants are never copied — each account still connects on its own.
+        </Text>
+        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: t.space.sm }}>
+          {syncMutation.isPending ? (
+            <Button label="Syncing…" loading onPress={() => undefined} />
+          ) : (
+            <ConfirmButton label="Sync accounts" confirmLabel="Overwrite slot definitions" variant="secondary" onConfirm={() => syncMutation.mutate()} />
+          )}
+        </View>
+        {syncLog ? (
+          <Disclosure title="Last sync log">
+            <CodeBlock>{clampLines(syncLog, 30)}</CodeBlock>
+          </Disclosure>
+        ) : null}
+      </Card>
+    </View>
+  );
+
+  const projectsSection = (
+    <View style={{ gap: t.space.lg }}>
+      <Intro
+        eyebrow="Projects"
+        title="Servers a project brings with it."
+        description="A .mcp.json at a project root defines servers for that workspace only. They are read here; sign-in happens from the workspace itself."
+      />
+      {authQuery.isLoading ? <Loading label="Reading projects…" /> : null}
+      {authQuery.data && projectGroups.length === 0 ? (
+        <Notice tone="neutral">No trusted project on this host has a .mcp.json yet. Add one at a project root and it appears here after the next refresh.</Notice>
+      ) : null}
+      {projectGroups.length > 0 ? (
+        <Card padded={false}>
+          {projectGroups.map(([project, names], index) => (
+            <Row
+              key={project}
+              first={index === 0}
+              title={project}
+              subtitle={names.join(", ")}
+              meta={<Facts items={[{ value: plural(names.length, "server") }]} />}
+              trailing={<Tag label="workspace panel" />}
+            />
+          ))}
+        </Card>
+      ) : null}
+      <Text style={t.text.caption}>Open MCP connections from a project workspace (command palette → "Open workspace MCP connections") to connect that project's accounts.</Text>
+    </View>
   );
 
   const addPane = (
     <View style={{ gap: t.space.lg }}>
-      {back}
       <Card>
         <Text style={t.text.heading}>Add a server</Text>
-        <Field label="Name" value={addName} onChangeText={setAddName} placeholder="my-server" autoFocus />
+        <Field label="Name" value={addName} onChangeText={setAddName} placeholder="my-server" />
         <Segmented
           value={addKind}
           onChange={setAddKind}
@@ -1146,7 +1713,7 @@ export function McpSurface({ theme, layout }: PluginSurfaceProps) {
       />
       <View style={{ flexDirection: "row", gap: t.space.sm }}>
         <Button
-          label={`Add to ${addTargets.ids.length} destinations`}
+          label={`Add to ${plural(addTargets.ids.length, "editor")}`}
           variant="primary"
           loading={addMutation.isPending}
           disabled={
@@ -1164,7 +1731,6 @@ export function McpSurface({ theme, layout }: PluginSurfaceProps) {
   const stillPlaceholders = pickedServers.filter((entry) => entry.hasPlaceholders.length > 0);
   const importPane = (
     <View style={{ gap: t.space.lg }}>
-      {back}
       <Card>
         <Text style={t.text.heading}>Paste a server definition</Text>
         <Field
@@ -1258,7 +1824,7 @@ export function McpSurface({ theme, layout }: PluginSurfaceProps) {
           ) : null}
           <View style={{ flexDirection: "row", gap: t.space.sm }}>
             <Button
-              label={`Import ${pickedServers.length} into ${importTargets.ids.length} destinations`}
+              label={`Import ${pickedServers.length} into ${plural(importTargets.ids.length, "editor")}`}
               variant="primary"
               loading={importMutation.isPending}
               disabled={
@@ -1289,276 +1855,139 @@ export function McpSurface({ theme, layout }: PluginSurfaceProps) {
     </View>
   );
 
-  const destinationConnection = (entry: McpServerRow, dest: Destination) => (
-    <AuthRows
-      server={entry.name}
-      accounts={authQuery.data?.accounts ?? []}
-      destinations={[dest]}
-      presentIn={[dest.id]}
-      sessions={sessions}
-      oauthCapable={entry.transport === "http" && !entry.inlineCredentialsIn.includes(dest.id)}
-      daemonIsLocal={daemonIsLocal}
-      daemonHostname={daemonHostname}
-      pendingAccount={
-        loginMutation.isPending && loginMutation.variables
-          ? `${loginMutation.variables.provider}|${loginMutation.variables.account}`
-          : null
-      }
-      onAuthorise={(account) =>
-        loginMutation.mutate({
-          provider: account.provider,
-          accountDir: account.isPrimary ? "" : account.dir,
-          account: account.email,
-          server: entry.name,
-        })
-      }
-      onCancel={(key) => loginCancelMutation.mutate(key)}
-      onSignOut={(account) =>
-        logoutMutation.mutate({
-          provider: account.provider,
-          accountDir: account.isPrimary ? "" : account.dir,
-          server: entry.name,
-        })
-      }
-      onComplete={(key, redirectUrl) => loginCompleteMutation.mutate({ key, redirectUrl })}
-      onCopied={(ok) =>
-        setFlash(
-          ok
-            ? { tone: "ok", text: "Sign-in link copied." }
-            : { tone: "attention", text: "No clipboard here — the link above is selectable." },
-        )
-      }
-      bare
-      onlyAccount={{ provider: dest.provider, email: dest.account }}
-    />
-  );
-
-  const serverPane = server ? (
+  const transferSection = (
     <View style={{ gap: t.space.lg }}>
-      {back}
+      <Intro
+        eyebrow="Import & Export"
+        title="Bring servers in, keep a copy out."
+        description="Add one server by hand, paste a whole block of JSON, or write every definition to a backup file on this host."
+      />
+      <Segmented
+        value={mode}
+        onChange={setMode}
+        options={[
+          { value: "add", label: "Add server" },
+          { value: "import", label: "Paste JSON" },
+        ]}
+      />
+      {mode === "add" ? addPane : importPane}
       <Card>
-        <View style={{ flexDirection: "row", alignItems: "center", gap: t.space.sm }}>
-          <Text style={[t.text.display, { flexShrink: 1 }]} numberOfLines={1}>
-            {server.name}
-          </Text>
-          <Tag label={server.transport} />
-          {inlineCredentialCount > 0 ? <Tag label={`credentials in ${inlineCredentialCount}`} /> : null}
-          {oauthDestinations.length > 0 ? <Tag label={`OAuth on ${oauthDestinations.length}`} /> : null}
-          {serverHealth ? (
-            <StatusPill status={healthStatus(serverHealth.status)} label={healthWord(serverHealth.status)} />
-          ) : null}
-        </View>
-        <Facts
-          items={[
-            { value: `${server.presentIn.length} of ${destinations.length} destinations` },
-            server.detail ? { value: server.detail } : null,
+        <Step index={0} title="Export everything" />
+        <Text style={t.text.body}>
+          Writes one JSON file with every server from every editor, next to your other files on {host.label}. Secrets are masked unless you reveal them, and a masked export cannot be re-imported as-is.
+        </Text>
+        <Segmented
+          value={exportRevealed ? "reveal" : "mask"}
+          onChange={(value) => setExportRevealed(value === "reveal")}
+          options={[
+            { value: "mask", label: "Mask secrets" },
+            { value: "reveal", label: "Include secrets" },
           ]}
         />
-        {serverHealth && serverHealth.status !== "ok" && serverHealth.note ? (
-          <Text style={t.text.body}>{serverHealth.note}</Text>
+        {exportRevealed ? (
+          <Notice tone="error">The export file will hold live credentials in clear text. Delete it once it has been restored elsewhere.</Notice>
         ) : null}
-        <View style={{ flexDirection: "row", gap: t.space.sm }}>
-          {missing.length > 0 ? (
-            <Button
-              label={`Add to ${missing.length} missing`}
-              loading={applyMutation.isPending}
-              onPress={() => applyMutation.mutate({ name: server.name, targets: missing.map((dest) => dest.id) })}
-            />
-          ) : null}
+        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: t.space.sm }}>
           <Button
-            label={revealed ? "Hide secrets" : "Reveal secrets"}
-            onPress={() => setRevealed((value) => !value)}
-          />
-          {/* A panel cannot download, so an export is written next to the
-              user's other files and the path is reported back. */}
-          <Button
-            label="Export"
-            loading={exportMutation.isPending}
-            onPress={() => exportMutation.mutate({ scope: "one", name: server.name })}
+            label="Export all servers"
+            loading={exportMutation.isPending && exportMutation.variables?.scope === "all"}
+            disabled={servers.length === 0}
+            onPress={() => exportMutation.mutate({ scope: "all", reveal: exportRevealed })}
           />
         </View>
-        <Disclosure title="Rename this server everywhere">
-          <Field label="New name" value={renameTo} onChangeText={setRenameTo} placeholder={server.name} />
-          <Button
-            label="Rename everywhere"
-            loading={renameMutation.isPending}
-            disabled={!renameTo.trim() || renameTo.trim() === server.name}
-            onPress={() => renameMutation.mutate({ name: server.name, newName: renameTo.trim() })}
-          />
-        </Disclosure>
       </Card>
-
-      {server.transport === "http" && authQuery.error ? (
-        <ErrorText>{errorText(authQuery.error)}</ErrorText>
-      ) : null}
-
-      {revealed ? (
-        <Notice tone="error">
-          <View style={{ gap: t.space.sm }}>
-            <Text style={t.text.body}>
-              Secrets are in clear text on this pane. They re-mask when the editor closes or you leave this server.
-            </Text>
-            <View style={{ flexDirection: "row", gap: t.space.sm }}>
-              <Button label="Hide secrets" onPress={() => setRevealed(false)} />
-            </View>
-          </View>
-        </Notice>
-      ) : null}
-
-      <Section title="Destinations">
-        <Card padded={false}>
-          {destinations.map((dest, index) => {
-            const present = server.presentIn.includes(dest.id);
-            const rawRow = rawRows.find((entry) => entry.destId === dest.id);
-            const defRow = defRows.find((entry) => entry.destId === dest.id);
-            const open = editing === dest.id && present;
-            const authAccount = accountForDestination(dest);
-            const destinationOauth = authAccount ? oauthState(authAccount, server.name) : null;
-            return (
-              <Row
-                key={dest.id}
-                first={index === 0}
-                tone={present ? undefined : "attention"}
-                title={dest.label}
-                subtitle={
-                  present
-                    ? rawRow?.nativePreview ?? (rawQuery.isFetching ? "reading…" : undefined)
-                    : "not defined here"
-                }
-                meta={
-                  present && server.inlineCredentialsIn.includes(dest.id) ? (
-                    <StatusPill status="ok" label="credentials in definition" />
-                  ) : present && destinationOauth?.known ? (
-                    <StatusPill
-                      status={destinationOauth.auth === "connected" ? "ok" : "attention"}
-                      label={destinationOauth.auth === "connected" ? "OAuth connected" : "OAuth needed"}
-                    />
-                  ) : undefined
-                }
-                trailing={
-                  present ? (
-                    open ? undefined : (
-                      <Button
-                        label="Manage"
-                        onPress={() => {
-                          setEditing(dest.id);
-                          setEditTab("fields");
-                        }}
-                      />
-                    )
-                  ) : (
-                    <Button
-                      label="Add here"
-                      loading={applyMutation.isPending && (applyMutation.variables?.targets ?? []).includes(dest.id)}
-                      disabled={applyMutation.isPending}
-                      onPress={() => applyMutation.mutate({ name: server.name, targets: [dest.id] })}
-                    />
-                  )
-                }
-                expanded={
-                  open ? (
-                    <View style={{ gap: t.space.md }}>
-                      {destinationConnection(server, dest)}
-                      <DestinationEditor
-                        tab={editTab}
-                        onTab={setEditTab}
-                        defRow={defRow}
-                        rawRow={rawRow}
-                        saving={editOneMutation.isPending}
-                        otherCount={destinations.length - 1}
-                        onSaveFields={(input) => editOneMutation.mutate({ destId: dest.id, ...input })}
-                        onPut={(json, dryRun) => putJson(dest.id, json, dryRun)}
-                        onCopyEverywhere={() =>
-                          applyMutation.mutate({
-                            name: server.name,
-                            targets: destinations.filter((other) => other.id !== dest.id).map((other) => other.id),
-                            sourceDestId: dest.id,
-                          })
-                        }
-                        onClose={closeEditor}
-                      />
-                      <ConfirmButton
-                        label="Remove from this destination"
-                        confirmLabel="Remove from here"
-                        onConfirm={() => removeMutation.mutate({ name: server.name, targets: [dest.id] })}
-                      />
-                    </View>
-                  ) : undefined
-                }
-              />
-            );
-          })}
-        </Card>
-      </Section>
-
     </View>
-  ) : null;
-
-  const projectServerGroups = [...(authQuery.data?.projectServers ?? []).reduce((groups, entry) => {
-    const names = groups.get(entry.project) ?? [];
-    names.push(entry.name);
-    groups.set(entry.project, names);
-    return groups;
-  }, new Map<string, string[]>()).entries()];
-  const projectInventory = projectServerGroups.length > 0 ? (
-    <Section title="Project MCP servers">
-      <Card padded={false}>
-        {projectServerGroups.map(([project, names], index) => (
-          <Row
-            key={project}
-            first={index === 0}
-            title={project}
-            subtitle={names.join(", ")}
-            meta={<Facts items={[{ value: `${names.length} server${names.length === 1 ? "" : "s"}` }]} />}
-          />
-        ))}
-      </Card>
-      <Text style={t.text.caption}>Open MCP connections from a project workspace to manage its sign-ins.</Text>
-    </Section>
-  ) : null;
-
-  const help = (
-    <Disclosure title="MCP FAQs">
-      <Text style={t.text.heading}>Why is OAuth per account?</Text>
-      <Text style={t.text.body}>Definitions can be copied. Provider grants cannot, so each account connects once.</Text>
-      <Text style={t.text.heading}>Where does sign-in open?</Text>
-      <Text style={t.text.body}>On the Paseo daemon computer. The authorization link and callback target remain visible for manual recovery.</Text>
-      <Text style={t.text.heading}>What does Sync accounts move?</Text>
-      <Text style={t.text.body}>Server definitions, trusted projects and preferences. It never copies OAuth tokens.</Text>
-      <Text style={t.text.heading}>Where are project servers?</Text>
-      <Text style={t.text.body}>Open MCP connections from a Paseo workspace to read that workspace's .mcp.json and connect its accounts.</Text>
-    </Disclosure>
   );
 
-  const serverContent = mode === "add"
-    ? addPane
-    : mode === "import"
-      ? importPane
-      : selected
-        ? serverPane
-        : <View style={{ gap: t.space.lg }}>{filters}{list}{projectInventory}{help}</View>;
-
-  return (
-    <Screen t={t}>
-      <Toolbar
-        title="MCP"
-        subtitle="Definitions, health and account sign-in in one server view. Health refreshes automatically."
-        actions={panelActions}
+  const guideSection = (
+    <View style={{ gap: t.space.lg }}>
+      <Intro
+        eyebrow="Guide & Setup"
+        title="How MCP management works."
+        description="Four steps take a server from a README to every editor and every account on this host."
       />
-      {flash ? (
-        <Notice tone={flash.tone} onDismiss={() => setFlash(null)}>
-          {flash.text.includes("\n") ? <CodeBlock tone={flash.tone}>{flash.text}</CodeBlock> : flash.text}
-        </Notice>
-      ) : null}
-      {serverContent}
-    </Screen>
+      <Grid min={260}>
+        {GUIDE_STEPS.map((step, index) => (
+          <Card key={step.title}>
+            <Step index={index + 1} title={step.title} />
+            <Text style={t.text.body}>{step.detail}</Text>
+            <View style={{ flexDirection: "row" }}>
+              <Button label={step.label} onPress={() => go(step.section, step.section === "servers" ? { server: null } : {})} />
+            </View>
+          </Card>
+        ))}
+      </Grid>
+      <Card>
+        <Step index={0} title="When something does not work" />
+        <Text style={t.text.body}>
+          Sign-in runs on the daemon host, not necessarily on the device you are holding. Connect opens the server's own authorization page in a browser there.
+        </Text>
+        <Text style={t.text.body}>
+          If the browser lands on a localhost page that will not load, the callback reached the wrong machine. Copy that page's full address and paste it into the Callback return URL field under the account, then choose Finish connection.
+        </Text>
+        <Text style={t.text.body}>
+          OAuth grants are per account and are never synced. Sync accounts copies definitions and preferences only; every account still connects to each server once.
+        </Text>
+        <Text style={t.text.body}>
+          A server marked "no binary" needs its command installed on {host.label}. A server marked "down" answered with an error; open it to read the note and check its URL or headers.
+        </Text>
+        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: t.space.sm }}>
+          <Button label="Open accounts" onPress={() => go("accounts")} />
+          <Button label="Show issues" onPress={() => go("servers", { server: null, filter: "issues" })} />
+        </View>
+      </Card>
+    </View>
+  );
+
+  const content = section === "overview"
+    ? overview
+    : section === "servers"
+      ? serversSection
+      : section === "accounts"
+        ? accountsSection
+        : section === "projects"
+          ? projectsSection
+          : section === "transfer"
+            ? transferSection
+            : guideSection;
+
+  const pad = t.compact ? 16 : 20;
+  return (
+    <View style={{ flex: 1, backgroundColor: t.color.surface0 }}>
+      <View style={{ padding: pad, paddingBottom: t.space.md, gap: t.space.md, width: "100%", maxWidth: t.maxWidth, alignSelf: "center" }}>
+        <Header title="MCP" caption={`Selected host: ${host.label}`} pill={<StatusPill status={headerPill.status} label={headerPill.label} />} />
+        <Choice<SectionId> items={SECTIONS} selected={section} onChange={(next) => go(next, next === "servers" ? { server: null } : {})} label="MCP sections" />
+      </View>
+      <Screen t={t} paddingTop={4}>
+        {matrixQuery.isError ? (
+          <Notice tone="error">
+            <View style={{ gap: t.space.sm }}>
+              <Text style={t.text.body}>{errorText(matrixQuery.error)}</Text>
+              <View style={{ flexDirection: "row" }}>
+                <Button label="Retry connection" onPress={refreshAll} />
+              </View>
+            </View>
+          </Notice>
+        ) : null}
+        <View key={section}>{content}</View>
+      </Screen>
+    </View>
   );
 }
 
 /** Workspace-local .mcp.json inventory and OAuth, opened beside that workspace. */
-export function McpWorkspacePanel({ theme, layout, workspaceId }: PluginWorkspacePanelProps) {
-  const t = useUi(theme, layout.compact);
-  const queryClient = useQueryClient();
+export function McpWorkspacePanel(props: PluginWorkspacePanelProps) {
+  const t = useUi(props.theme, props.layout.compact);
+  return (
+    <TokensProvider value={t}>
+      <WorkspaceBody key={props.workspaceId} {...props} />
+    </TokensProvider>
+  );
+}
+
+function WorkspaceBody({ host, workspaceId }: PluginWorkspacePanelProps) {
+  const t = useTokens();
+  const toast = useToast();
   const workspace = useWorkspace(workspaceId, ({ name, directory }) => ({ name, directory }));
   const callWorkspace = useRpc(mcpWorkspace);
   const callLogin = useRpc(mcpLogin);
@@ -1567,7 +1996,6 @@ export function McpWorkspacePanel({ theme, layout, workspaceId }: PluginWorkspac
   const callLoginComplete = useRpc(mcpLoginComplete);
   const callLogout = useRpc(mcpLogout);
   const [selected, setSelected] = useState<string | null>(null);
-  const [flash, setFlash] = useState<Flash | null>(null);
   const [liveLogin, setLiveLogin] = useState(false);
 
   const workspaceQuery = useQuery({
@@ -1587,12 +2015,18 @@ export function McpWorkspacePanel({ theme, layout, workspaceId }: PluginWorkspac
     .filter((entry) => entry.workspaceId === workspaceId && entry.state === "done")
     .map((entry) => entry.key)
     .join("|");
+  const refetchWorkspace = workspaceQuery.refetch;
   useEffect(() => {
     if (!settled) return;
-    void queryClient.invalidateQueries({ queryKey: ["paseo-mcp", "workspace", workspaceId] });
-  }, [settled, queryClient, workspaceId]);
+    void refetchWorkspace();
+  }, [settled, refetchWorkspace]);
 
-  const fail = (error: unknown) => setFlash({ tone: "error", text: clampLines(errorText(error), 12) });
+  const fail = (error: unknown) => toast.error(firstLine(errorText(error), "Something went wrong. Please retry."));
+  const notify = (result: { ok: boolean; message: string }) => {
+    if (result.ok) toast.show(firstLine(result.message, "Done."), { variant: "success" });
+    else toast.error(firstLine(result.message, "Refused."));
+  };
+  const refreshLogins = () => void loginQuery.refetch();
   const loginMutation = useMutation({
     mutationFn: (input: {
       provider: "claude" | "codex";
@@ -1603,26 +2037,26 @@ export function McpWorkspacePanel({ theme, layout, workspaceId }: PluginWorkspac
     }) => callLogin(input),
     onError: fail,
     onSuccess: (result) => {
-      setFlash({ tone: result.ok ? "ok" : "error", text: result.message });
+      notify(result);
       setLiveLogin(result.ok);
-      void queryClient.invalidateQueries({ queryKey: ["paseo-mcp", "login-status"] });
+      refreshLogins();
     },
   });
   const cancelMutation = useMutation({
     mutationFn: (key: string) => callLoginCancel({ key }),
     onError: fail,
     onSuccess: (result) => {
-      setFlash({ tone: result.ok ? "ok" : "error", text: result.message });
-      void queryClient.invalidateQueries({ queryKey: ["paseo-mcp", "login-status"] });
+      notify(result);
+      refreshLogins();
     },
   });
   const completeMutation = useMutation({
     mutationFn: (input: { key: string; redirectUrl: string }) => callLoginComplete(input),
     onError: fail,
     onSuccess: (result) => {
-      setFlash({ tone: result.ok ? "ok" : "error", text: result.message });
+      notify(result);
       setLiveLogin(result.ok);
-      void queryClient.invalidateQueries({ queryKey: ["paseo-mcp", "login-status"] });
+      refreshLogins();
     },
   });
   const logoutMutation = useMutation({
@@ -1630,8 +2064,8 @@ export function McpWorkspacePanel({ theme, layout, workspaceId }: PluginWorkspac
       callLogout(input),
     onError: fail,
     onSuccess: (result) => {
-      setFlash({ tone: result.ok ? "ok" : "error", text: result.message });
-      if (result.ok) void queryClient.invalidateQueries({ queryKey: ["paseo-mcp", "workspace", workspaceId] });
+      notify(result);
+      if (result.ok) void workspaceQuery.refetch();
     },
   });
 
@@ -1644,17 +2078,38 @@ export function McpWorkspacePanel({ theme, layout, workspaceId }: PluginWorkspac
         (account) => account.provider === "claude" && oauthState(account, server.name).known,
       )
     : [];
-  const refresh = () => void queryClient.invalidateQueries({ queryKey: ["paseo-mcp", "workspace", workspaceId] });
+  const refresh = () => {
+    void workspaceQuery.refetch();
+    refreshLogins();
+  };
+  const pill = !workspace
+    ? { status: "error" as Status, label: "Workspace unavailable" }
+    : workspaceQuery.isError
+      ? { status: "error" as Status, label: "Host unavailable" }
+      : !data
+        ? { status: "neutral" as Status, label: "Reading" }
+        : data.servers.length === 0
+          ? { status: "neutral" as Status, label: "No project servers" }
+          : { status: "ok" as Status, label: plural(data.servers.length, "project server") };
 
   const body = !workspace ? (
     <EmptyState title="Workspace unavailable" body="This Paseo workspace no longer exists." />
   ) : workspaceQuery.isLoading ? (
     <Loading label="Reading project MCP servers…" />
   ) : workspaceQuery.error ? (
-    <ErrorText>{errorText(workspaceQuery.error)}</ErrorText>
+    <Notice tone="error">
+      <View style={{ gap: t.space.sm }}>
+        <Text style={t.text.body}>{errorText(workspaceQuery.error)}</Text>
+        <View style={{ flexDirection: "row" }}>
+          <Button label="Retry" onPress={refresh} />
+        </View>
+      </View>
+    </Notice>
   ) : server && data ? (
     <View style={{ gap: t.space.lg }}>
-      <Button label="← Workspace MCP servers" variant="ghost" onPress={() => setSelected(null)} />
+      <View style={{ flexDirection: "row" }}>
+        <Button label="← Workspace MCP servers" variant="ghost" onPress={() => setSelected(null)} />
+      </View>
       <View style={{ gap: t.space.sm }}>
         <View style={{ flexDirection: "row", alignItems: "center", gap: t.space.sm }}>
           <Text style={[t.text.display, { flexShrink: 1 }]} numberOfLines={1}>{server.name}</Text>
@@ -1680,7 +2135,7 @@ export function McpWorkspacePanel({ theme, layout, workspaceId }: PluginWorkspac
         sessions={sessions}
         oauthCapable={projectOauthAccounts.length > 0}
         daemonIsLocal={loginQuery.data?.daemonIsLocal ?? true}
-        daemonHostname={loginQuery.data?.hostname ?? ""}
+        daemonHostname={loginQuery.data?.hostname ?? host.label}
         pendingAccount={
           loginMutation.isPending && loginMutation.variables
             ? `${loginMutation.variables.provider}|${loginMutation.variables.account}`
@@ -1709,11 +2164,7 @@ export function McpWorkspacePanel({ theme, layout, workspaceId }: PluginWorkspac
         }
         onComplete={(key, redirectUrl) => completeMutation.mutate({ key, redirectUrl })}
         onCopied={(ok) =>
-          setFlash(
-            ok
-              ? { tone: "ok", text: "Sign-in link copied." }
-              : { tone: "attention", text: "No clipboard here — the link above is selectable." },
-          )
+          ok ? toast.show("Sign-in link copied.", { variant: "success" }) : toast.show("No clipboard here — the link above is selectable.", { variant: "warning" })
         }
       />
     </View>
@@ -1722,7 +2173,7 @@ export function McpWorkspacePanel({ theme, layout, workspaceId }: PluginWorkspac
       <Facts
         items={[
           { value: data.configPath || "No .mcp.json" },
-          { value: `${data.servers.length} project servers` },
+          { value: plural(data.servers.length, "project server") },
         ]}
       />
       <Card padded={false}>
@@ -1746,19 +2197,20 @@ export function McpWorkspacePanel({ theme, layout, workspaceId }: PluginWorkspac
     </View>
   ) : null;
 
+  const pad = t.compact ? 16 : 20;
   return (
-    <Screen t={t}>
-      <Toolbar
-        title={workspace?.name ?? "MCP connections"}
-        subtitle="Project MCP definitions and account sign-in for this workspace."
-        actions={<Button label="Refresh" variant="ghost" onPress={refresh} />}
-      />
-      {flash ? (
-        <Notice tone={flash.tone} onDismiss={() => setFlash(null)}>
-          {flash.text.includes("\n") ? <CodeBlock tone={flash.tone}>{flash.text}</CodeBlock> : flash.text}
-        </Notice>
-      ) : null}
-      {body}
-    </Screen>
+    <View style={{ flex: 1, backgroundColor: t.color.surface0 }}>
+      <View style={{ padding: pad, paddingBottom: t.space.md, gap: t.space.md, width: "100%", maxWidth: t.maxWidth, alignSelf: "center" }}>
+        <Header
+          title={workspace?.name ?? "MCP connections"}
+          caption={`Selected host: ${host.label} · project MCP servers and sign-in`}
+          pill={<StatusPill status={pill.status} label={pill.label} />}
+        />
+        <View style={{ flexDirection: "row" }}>
+          <Button label="Refresh" variant="ghost" onPress={refresh} />
+        </View>
+      </View>
+      <Screen t={t} paddingTop={4}>{body}</Screen>
+    </View>
   );
 }
