@@ -493,6 +493,7 @@ function AuthRows({
   sessions,
   oauthCapable,
   daemonIsLocal,
+  daemonHostname,
   pendingAccount,
   forceDefined = false,
   workspaceId = "",
@@ -512,6 +513,7 @@ function AuthRows({
   sessions: LoginSession[];
   oauthCapable: boolean;
   daemonIsLocal: boolean;
+  daemonHostname: string;
   pendingAccount: string | null;
   forceDefined?: boolean;
   workspaceId?: string;
@@ -611,7 +613,8 @@ function AuthRows({
                     {remote ? (
                       <>
                         <Text style={t.text.caption}>
-                          The browser callback lands on the daemon machine, not this one — run it there:
+                          Sign-in runs on {daemonHostname || "the daemon machine"}. Approve in any browser, then paste
+                          the return address below if it does not finish on its own.
                         </Text>
                         <CodeBlock>{loginCommand(account, server, workspaceDirectory)}</CodeBlock>
                       </>
@@ -652,7 +655,7 @@ function AuthRows({
                               value={redirects[session.key] ?? ""}
                               onChangeText={(value) => setRedirects((previous) => ({ ...previous, [session.key]: value }))}
                               placeholder={session.callbackUrl || "Paste the full URL after sign-in"}
-                              hint="If the browser cannot return automatically, copy its final address here."
+                              hint="Approve in your browser. If it lands on a localhost page that won't load, copy that page's full address from the address bar and paste it here."
                             />
                             <Button
                               label="Finish connection"
@@ -773,6 +776,7 @@ export function McpSurface({ theme, layout }: PluginSurfaceProps) {
   });
   const sessions = useMemo<LoginSession[]>(() => loginQuery.data?.sessions ?? [], [loginQuery.data]);
   const daemonIsLocal = loginQuery.data?.daemonIsLocal ?? true;
+  const daemonHostname = loginQuery.data?.hostname ?? "";
   const anyLive = sessions.some((entry) => entry.state === "starting" || entry.state === "waiting");
   useEffect(() => setLiveLogin(anyLive), [anyLive]);
   // A grant that just landed changes who still needs one.
@@ -1294,6 +1298,7 @@ export function McpSurface({ theme, layout }: PluginSurfaceProps) {
       sessions={sessions}
       oauthCapable={entry.transport === "http" && !entry.inlineCredentialsIn.includes(dest.id)}
       daemonIsLocal={daemonIsLocal}
+      daemonHostname={daemonHostname}
       pendingAccount={
         loginMutation.isPending && loginMutation.variables
           ? `${loginMutation.variables.provider}|${loginMutation.variables.account}`
@@ -1675,6 +1680,7 @@ export function McpWorkspacePanel({ theme, layout, workspaceId }: PluginWorkspac
         sessions={sessions}
         oauthCapable={projectOauthAccounts.length > 0}
         daemonIsLocal={loginQuery.data?.daemonIsLocal ?? true}
+        daemonHostname={loginQuery.data?.hostname ?? ""}
         pendingAccount={
           loginMutation.isPending && loginMutation.variables
             ? `${loginMutation.variables.provider}|${loginMutation.variables.account}`

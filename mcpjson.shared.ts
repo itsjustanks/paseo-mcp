@@ -138,9 +138,10 @@ export const mcpExportFile = defineRpc({
  * and store the grant in that account's own config directory. The panel spawns
  * one, surfaces the URL it prints, and watches for it to finish.
  *
- * The callback lands on the DAEMON machine's localhost, so this works when
- * Paseo's daemon is the machine you are sitting at. For a remote daemon the
- * panel says so and hands over the command instead.
+ * The callback lands on the DAEMON machine's localhost, which the browser may
+ * not be able to reach. So the panel also accepts the address that browser
+ * finally landed on and the daemon replays it to that listener itself, which
+ * makes a sign-in work from any machine.
  */
 export const LoginSessionSchema = z.object({
   key: z.string(), // provider|accountDir|workspaceId|server
@@ -151,8 +152,9 @@ export const LoginSessionSchema = z.object({
   state: z.enum(["starting", "waiting", "done", "failed"]),
   url: z.string(), // the page to open, when the CLI printed one
   callbackUrl: z.string(), // redirect target advertised by the OAuth request
+  callbackPort: z.number(), // loopback port the CLI is listening on, 0 until known
   browserOpened: z.boolean(), // system-browser handoff was attempted on the daemon
-  expectsRedirect: z.boolean(), // CLI needs the returned redirect URL on stdin
+  expectsRedirect: z.boolean(), // a loopback callback the panel can hand back
   message: z.string(),
   startedAt: z.number(),
 });
@@ -173,7 +175,11 @@ export const mcpLogin = defineRpc({
 export const mcpLoginStatus = defineRpc({
   name: "paseo-mcp.login-status",
   input: z.object({}),
-  output: z.object({ sessions: z.array(LoginSessionSchema), daemonIsLocal: z.boolean() }),
+  output: z.object({
+    sessions: z.array(LoginSessionSchema),
+    daemonIsLocal: z.boolean(), // kept for compatibility: the daemon has a CLI to spawn
+    hostname: z.string(), // the machine the sign-in actually runs on
+  }),
 });
 
 export const mcpLoginCancel = defineRpc({

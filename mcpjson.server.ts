@@ -1,5 +1,6 @@
 import type { PluginHandlerContext } from "@getpaseo/plugin/server";
 import { spawn, type ChildProcess } from "node:child_process";
+import { request as httpRequest } from "node:http";
 import { chmodSync, existsSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
 import { homedir, hostname } from "node:os";
 import { basename, dirname, join, resolve, sep } from "node:path";
@@ -1085,8 +1086,44 @@ type Live = { session: LoginSession; child: ChildProcess; timer: ReturnType<type
 
 const logins = new Map<string, Live>();
 
-const ANSI = /\[[0-9;]*[A-Za-z]/g;
-const LOGIN_TIMEOUT_MS = 120_000;
+const ANSI = /\x1b\[[0-9;?]*[ -\/]*[@-~]/g;
+/** OSC sequences, including the OSC-8 hyperlink wrapper a pty paints links with. */
+const OSC = /\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g;
+const URL_IN_TEXT = /https?:\/\/[^\s'"<>()\]]+/g;
+/** Hosts a CLI's own OAuth callback listener may live on. Nothing else is dialled. */
+const CALLBACK_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
+/** A human has to carry a URL between two machines, so give them five minutes. */
+const LOGIN_TIMEOUT_MS = 300_000;
+
+/** Colour codes and hyperlink wrappers both hide the link; strip them together. */
+function stripEscapes(text: string): string {
+  return text.replace(OSC, "").replace(ANSI, "").replace(/\x1b/g, "");
+}
+
+/** One run of text can hold two links back to back once a hyperlink wrapper is
+ * stripped, or once wrapped rows are rejoined. Keep only the first. */
+function firstUrlIn(candidate: string): string {
+  return candidate.split(/(?=https?:\/\/)/).filter(Boolean)[0] ?? candidate;
+}
+
+function urlsIn(text: string): string[] {
+  const found = [...text.matchAll(URL_IN_TEXT)].map((match) => firstUrlIn(match[0].replace(/[.,;:]+$/, "")));
+  return [...new Set(found)];
+}
+
+/**
+ * A pty paints the link twice — once plainly, once inside a hyperlink wrapper —
+ * and wraps long rows at the terminal width. So read the link as printed first,
+ * and only fall back to rejoining wrapped rows when nothing usable was printed;
+ * rejoining unconditionally would splice two copies into one dead link.
+ */
+function extractLoginUrl(text: string): string {
+  const printed = urlsIn(text);
+  const usable = printed.filter((candidate) => callbackTarget(candidate) !== null);
+  if (usable.length > 0) return usable[0]!;
+  const rejoined = urlsIn(text.replace(/\r/g, "").replace(/\n(?=\S)/g, ""));
+  return rejoined.find((candidate) => callbackTarget(candidate) !== null) ?? printed[0] ?? "";
+}
 
 function cliPath(provider: "claude" | "codex"): string {
   for (const directory of searchPath()) {
@@ -1129,17 +1166,14 @@ async function workspaceLoginDirectory(
 }
 
 /**
- * The OAuth callback lands on the DAEMON machine's localhost, so a login only
- * completes when the daemon is the machine the user is sitting at. A handler
- * cannot see the browser, and os.hostname() has nothing to be compared against
- * from in here, so this answers the question it can actually answer: is there a
- * CLI to spawn and an account directory for the grant to land in. Anything less
- * certain is reported as false, and the panel hands over the command instead.
+ * The browser no longer has to be on this machine — a callback pasted back into
+ * the panel is replayed to the CLI's own localhost listener from here. So the
+ * only thing that still decides whether the panel can drive a sign-in is
+ * whether there is a CLI on this host to spawn. The key keeps its old name for
+ * compatibility; `hostname` is what the panel should actually show a user.
  */
-function daemonIsLocal(): boolean {
-  const haveCli = cliPath("claude") !== "" || cliPath("codex") !== "";
-  const haveConfig = existsSync(join(HOME, ".claude.json")) || existsSync(join(HOME, ".codex"));
-  return haveCli && haveConfig;
+function daemonHasCli(): boolean {
+  return cliPath("claude") !== "" || cliPath("codex") !== "";
 }
 
 function finish(key: string, state: LoginSession["state"], message: string): void {
@@ -1154,6 +1188,87 @@ function callbackFrom(url: string): string {
     return new URL(url).searchParams.get("redirect_uri") ?? "";
   } catch {
     return "";
+  }
+}
+
+/**
+ * The port and path the CLI is listening on for its own OAuth callback, read
+ * out of the `redirect_uri` it asked the provider to send the browser to. Only
+ * loopback targets count: this is the single address the daemon will dial on a
+ * paste, so narrowing it here is what stops the field being an SSRF hole.
+ */
+function callbackTarget(url: string): { port: number; path: string } | null {
+  const redirect = callbackFrom(url);
+  if (!redirect) return null;
+  try {
+    const target = new URL(redirect);
+    if (target.protocol !== "http:" && target.protocol !== "https:") return null;
+    if (!CALLBACK_HOSTS.has(target.hostname)) return null;
+    const port = Number(target.port || (target.protocol === "https:" ? 443 : 80));
+    if (!Number.isInteger(port) || port < 1 || port > 65535) return null;
+    return { port, path: target.pathname || "/" };
+  } catch {
+    return null;
+  }
+}
+
+/** Replay a returned callback to the CLI's listener, exactly as a browser would. */
+function deliverCallback(port: number, path: string, query: string): Promise<{ ok: boolean; message: string }> {
+  return new Promise((done) => {
+    const call = httpRequest(
+      { host: "127.0.0.1", port, path: `${path}${query}`, method: "GET", timeout: 10_000, headers: { accept: "*/*" } },
+      (response) => {
+        const status = response.statusCode ?? 0;
+        response.resume();
+        done(
+          status >= 200 && status < 400
+            ? { ok: true, message: `the listener answered ${status}` }
+            : { ok: false, message: `the listener answered ${status}` },
+        );
+      },
+    );
+    call.on("timeout", () => call.destroy(new Error("no answer within 10s")));
+    call.on("error", (error) => done({ ok: false, message: error.message }));
+    call.end();
+  });
+}
+
+function toolPath(name: string): string {
+  for (const directory of searchPath()) {
+    const candidate = join(directory, name);
+    if (existsSync(candidate)) return candidate;
+  }
+  return existsSync(`/usr/bin/${name}`) ? `/usr/bin/${name}` : "";
+}
+
+function shellQuote(parts: string[]): string {
+  return parts.map((part) => `'${part.replace(/'/g, `'\\''`)}'`).join(" ");
+}
+
+/**
+ * `claude mcp login` refuses to run at all when stdin is not a terminal, so it
+ * is handed a real pty by `script`. The two platforms spell that differently.
+ */
+function ptyCommand(binary: string, args: string[]): { command: string; args: string[] } | null {
+  const wrapper = toolPath("script");
+  if (!wrapper) return null;
+  if (process.platform === "darwin") return { command: wrapper, args: ["-q", "/dev/null", binary, ...args] };
+  if (process.platform === "linux") return { command: wrapper, args: ["-qfec", shellQuote([binary, ...args]), "/dev/null"] };
+  return null;
+}
+
+/** A login runs in its own process group, so the whole tree dies with it. */
+function killLogin(child: ChildProcess, signal: NodeJS.Signals = "SIGTERM"): void {
+  const pid = child.pid;
+  try {
+    if (pid && process.platform !== "win32") process.kill(-pid, signal);
+    else child.kill(signal);
+  } catch {
+    try {
+      child.kill(signal);
+    } catch {
+      // already gone
+    }
   }
 }
 
@@ -1204,14 +1319,20 @@ export async function handleMcpLogin(
   if (existing && (existing.session.state === "starting" || existing.session.state === "waiting")) {
     return { ok: true, session: existing.session, message: "a login for that server is already running" };
   }
-  logins.get(key)?.child.kill("SIGTERM");
+  const previous = logins.get(key);
+  if (previous) killLogin(previous.child);
 
-  const expectsRedirect = provider === "claude";
-  const args = ["mcp", "login", server, ...(expectsRedirect ? ["--no-browser"] : [])];
-  const child = spawn(binary, args, {
-    stdio: [expectsRedirect ? "pipe" : "ignore", "pipe", "pipe"],
-    env: accountConfig.env,
+  const needsPty = provider === "claude";
+  const args = ["mcp", "login", server, ...(needsPty ? ["--no-browser"] : [])];
+  const pty = needsPty ? ptyCommand(binary, args) : null;
+  const ptyMissing = needsPty && pty === null;
+  const child = spawn(pty?.command ?? binary, pty?.args ?? args, {
+    // stdin stays an open pipe nothing is ever written to: closing it would send
+    // the CLI an EOF at its own paste prompt and make it give up early.
+    stdio: [needsPty ? "pipe" : "ignore", "pipe", "pipe"],
+    env: { ...accountConfig.env, COLUMNS: "1000", LINES: "50", TERM: accountConfig.env.TERM ?? "xterm-256color" },
     cwd,
+    detached: process.platform !== "win32",
   });
 
   const session: LoginSession = {
@@ -1223,15 +1344,18 @@ export async function handleMcpLogin(
     state: "starting",
     url: "",
     callbackUrl: "",
+    callbackPort: 0,
     browserOpened: false,
-    expectsRedirect,
-    message: `running '${provider} mcp login ${server}' on ${hostname()}`,
+    expectsRedirect: false,
+    message: ptyMissing
+      ? `no 'script' on this host to give ${provider} a terminal — this sign-in will probably fail; run it in a terminal instead`
+      : `running '${provider} mcp login ${server}' on ${hostname()}`,
     startedAt: Math.floor(Date.now() / 1000),
   };
   const timer = setTimeout(() => {
     const live = logins.get(key);
     if (!live || live.session.state === "done" || live.session.state === "failed") return;
-    live.child.kill("SIGTERM");
+    killLogin(live.child);
     finish(
       key,
       "failed",
@@ -1243,22 +1367,31 @@ export async function handleMcpLogin(
   const live: Live = { session, child, timer };
   logins.set(key, live);
 
+  let raw = "";
   let output = "";
   const onChunk = (chunk: Buffer) => {
-    output = `${output}${chunk.toString().replace(ANSI, "")}`.slice(-8000);
+    raw = `${raw}${chunk.toString()}`.slice(-16000);
+    output = stripEscapes(raw);
     if (live.session.url) return;
-    const match = /https?:\/\/[^\s'"<>()\]]+/.exec(output);
-    if (!match) return;
-    const browserOpened = openDefaultBrowser(match[0]);
+    const found = extractLoginUrl(output);
+    if (!found) return;
+    const target = callbackTarget(found);
+    const browserOpened = openDefaultBrowser(found);
     live.session = {
       ...live.session,
       state: "waiting",
-      url: match[0],
-      callbackUrl: callbackFrom(match[0]),
+      url: found,
+      callbackUrl: callbackFrom(found),
+      callbackPort: target?.port ?? 0,
+      // Either CLI can be finished by replaying its callback, so the paste box
+      // is offered whenever one advertised a loopback listener to replay into.
+      expectsRedirect: target !== null,
       browserOpened,
-      message: browserOpened
-        ? `opened the sign-in page in ${hostname()}'s default browser`
-        : "open the sign-in link to continue",
+      message: target
+        ? `open the sign-in link — ${provider} is listening on ${hostname()} port ${target.port}`
+        : browserOpened
+          ? `opened the sign-in page in ${hostname()}'s default browser`
+          : "open the sign-in link to continue",
     };
   };
   child.stdout?.on("data", onChunk);
@@ -1275,25 +1408,44 @@ export async function handleMcpLogin(
   return { ok: true, session: logins.get(key)?.session ?? session, message: live.session.url ? "open the link to finish" : "starting…" };
 }
 
+/**
+ * The browser that finished the grant may be on another machine entirely, where
+ * the CLI's localhost listener is unreachable. So the panel takes the address
+ * that browser landed on and this replays it here, against the one loopback
+ * port this session is actually waiting on — never anywhere the paste asks for.
+ */
 export async function handleMcpLoginComplete({ key, redirectUrl }: { key: string; redirectUrl: string }) {
   const live = logins.get(key);
   if (!live || live.session.state !== "waiting") return { ok: false, message: "that login is not waiting for a callback" };
-  if (!live.session.expectsRedirect || !live.child.stdin?.writable) {
-    return { ok: false, message: "this provider completes through its localhost callback; keep the sign-in page open" };
+  const target = callbackTarget(live.session.url);
+  if (!target) {
+    return { ok: false, message: "this sign-in never advertised a localhost callback, so there is nothing to hand back" };
   }
   const trimmed = redirectUrl.trim();
   if (/\r|\n/.test(trimmed)) return { ok: false, message: "paste one callback URL, without extra lines" };
+  let returned: URL;
   try {
-    const returned = new URL(trimmed);
-    if (returned.protocol !== "http:" && returned.protocol !== "https:") {
-      return { ok: false, message: "the callback must be an http or https URL" };
-    }
-    live.child.stdin.write(`${trimmed}\n`);
-    live.session = { ...live.session, message: "callback returned — finishing authorisation" };
-    return { ok: true, message: "callback returned; waiting for the provider to confirm" };
+    returned = new URL(trimmed);
   } catch {
     return { ok: false, message: "that is not a complete callback URL" };
   }
+  if (returned.protocol !== "http:" && returned.protocol !== "https:") {
+    return { ok: false, message: "the callback must be an http or https URL" };
+  }
+  if (!CALLBACK_HOSTS.has(returned.hostname)) {
+    return { ok: false, message: `that address points at ${returned.hostname}; only the sign-in's own localhost callback can be handed back` };
+  }
+  const returnedPort = Number(returned.port || (returned.protocol === "https:" ? 443 : 80));
+  if (returnedPort !== target.port || returned.pathname !== target.path) {
+    return {
+      ok: false,
+      message: `that address is ${returned.hostname}:${returnedPort}${returned.pathname}, but this sign-in is waiting on 127.0.0.1:${target.port}${target.path}`,
+    };
+  }
+  const delivered = await deliverCallback(target.port, target.path, returned.search);
+  if (!delivered.ok) return { ok: false, message: `could not hand the callback to ${live.session.provider}: ${delivered.message}` };
+  live.session = { ...live.session, message: "callback delivered — waiting for the CLI to confirm" };
+  return { ok: true, message: "callback delivered; waiting for the provider to confirm" };
 }
 
 export async function handleMcpLoginStatus() {
@@ -1306,7 +1458,8 @@ export async function handleMcpLoginStatus() {
   }
   return {
     sessions: [...logins.values()].map((live) => live.session).sort((a, b) => b.startedAt - a.startedAt),
-    daemonIsLocal: daemonIsLocal(),
+    daemonIsLocal: daemonHasCli(),
+    hostname: hostname(),
   };
 }
 
@@ -1314,7 +1467,7 @@ export async function handleMcpLoginCancel({ key }: { key: string }) {
   const live = logins.get(key);
   if (!live) return { ok: false, message: "that login is no longer running" };
   clearTimeout(live.timer);
-  live.child.kill("SIGTERM");
+  killLogin(live.child);
   logins.delete(key);
   return { ok: true, message: `cancelled ${live.session.provider} mcp login ${live.session.server}` };
 }
@@ -1373,7 +1526,7 @@ export async function handleMcpLogout({
 function mcpLoginShutdown(): void {
   for (const live of logins.values()) {
     clearTimeout(live.timer);
-    live.child.kill("SIGTERM");
+    killLogin(live.child);
   }
   logins.clear();
 }
