@@ -12,6 +12,7 @@ import {
   handleMcpSync,
   handleMcpWorkspace,
 } from "./server/handlers";
+import { registerHooks } from "./server/hooks";
 import { runShutdown, runStart } from "./server/lifecycle";
 import {
   handleMcpExport,
@@ -56,6 +57,7 @@ import { injectionSettings } from "./shared/settings";
 
 export default function contribute(server: PluginServerContext) {
   server.registerSettings(injectionSettings);
+  registerHooks(server);
   server.handle(mcpMatrix, handleMcpMatrix);
   server.handle(mcpAdd, handleMcpAdd);
   server.handle(mcpApply, handleMcpApply);
