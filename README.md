@@ -4,7 +4,7 @@ Manage MCP servers, project connections, credentials, and OAuth from Paseo.
 
 ## Install
 
-Requires Paseo 0.7 or newer:
+Requires Paseo 0.8 or newer (0.1.0 is the last release for Paseo 0.7):
 
 ```sh
 paseo plugin add itsjustanks/paseo-mcp
