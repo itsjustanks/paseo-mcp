@@ -1,4 +1,5 @@
 import type { PluginClientContext } from "@getpaseo/plugin/client";
+import { McpAgentPanel } from "./client/agent";
 import { McpSurface, McpWorkspacePanel } from "./client/mcp";
 import { InjectionSettingsScreen } from "./client/settings";
 
@@ -10,6 +11,14 @@ export default function contribute(client: PluginClientContext) {
     icon: "Plug",
     context: "workspace",
     Component: McpWorkspacePanel,
+  });
+  client.addWorkspacePanel({
+    id: "mcp-agent",
+    title: "MCP",
+    icon: "Plug",
+    context: "agent",
+    locations: ["workspace", "explorer"],
+    Component: McpAgentPanel,
   });
   client.addSidebarItem({ id: "mcp", title: "MCP", icon: "Plug", surface: "mcp" });
   client.addCommandCenterItem({
@@ -36,6 +45,16 @@ export default function contribute(client: PluginClientContext) {
     context: "global",
     onSelect({ openSettings }) {
       openSettings("injection");
+    },
+  });
+  client.addCommandCenterItem({
+    id: "open-agent-mcp",
+    title: "MCP for this agent",
+    icon: "Plug",
+    keywords: ["mcp", "agent", "inject", "servers"],
+    context: "agent",
+    onSelect({ openPanel }) {
+      openPanel("mcp-agent");
     },
   });
   client.addCommandCenterItem({

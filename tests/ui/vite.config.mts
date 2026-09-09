@@ -5,6 +5,7 @@ export default defineConfig({
   root: here("./"),
   resolve: { alias: [
     { find: "@getpaseo/plugin/client/react-native", replacement: here("./plugin.tsx") },
+    { find: "@getpaseo/plugin/client/ui", replacement: here("./plugin.tsx") },
     { find: "@getpaseo/plugin/client", replacement: here("./plugin.tsx") },
     { find: "@getpaseo/plugin", replacement: here("./plugin.tsx") },
     { find: "react-native", replacement: "react-native-web" },

@@ -2044,7 +2044,16 @@ export function McpWorkspacePanel(props: PluginWorkspacePanelProps) {
   );
 }
 
-function WorkspaceBody({ host, workspaceId }: PluginWorkspacePanelProps) {
+/**
+ * Shared by the workspace panel and the agent panel. `intro` renders under the
+ * header; the agent panel uses it for its provider/injection line.
+ */
+export function WorkspaceBody({
+  host,
+  workspaceId,
+  caption = "project MCP servers and sign-in",
+  intro,
+}: Pick<PluginWorkspacePanelProps, "host" | "workspaceId"> & { caption?: string; intro?: React.ReactNode }) {
   const t = useTokens();
   const toast = useToast();
   const workspace = useWorkspace(workspaceId, ({ name, directory }) => ({ name, directory }));
@@ -2262,9 +2271,10 @@ function WorkspaceBody({ host, workspaceId }: PluginWorkspacePanelProps) {
       <View style={{ padding: pad, paddingBottom: t.space.md, gap: t.space.md, width: "100%", maxWidth: t.maxWidth, alignSelf: "center" }}>
         <Header
           title={workspace?.name ?? "MCP connections"}
-          caption={`Selected host: ${host.label} · project MCP servers and sign-in`}
+          caption={`Selected host: ${host.label} · ${caption}`}
           pill={<StatusPill status={pill.status} label={pill.label} />}
         />
+        {intro}
         <View style={{ flexDirection: "row" }}>
           <Button label="Refresh" variant="ghost" onPress={refresh} />
         </View>
