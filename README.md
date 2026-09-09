@@ -25,6 +25,29 @@ paseo plugin update paseo-mcp
 - Syncs MCP definitions and Claude project trust to discovered account directories without copying OAuth grants.
 - Keeps backups before config writes and preserves destination-specific credentials.
 
+## Inject servers into agents
+
+Off by default. Turn it on under **Settings → Plugins → Paseo MCP → Injection**, or run the
+**Configure MCP injection** command.
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| Inject workspace servers | off | Add the workspace's `.mcp.json` servers to every new agent |
+| Providers | Codex | Inject for Codex, Claude Code, or both |
+| Skip inline-credential servers | on | Leave out entries carrying tokens in `env`, `headers`, `args`, or the URL |
+
+When an agent is created for a chosen provider, the plugin reads `.mcp.json` from the agent's
+working directory (or its git root) and adds each server to the agent's MCP configuration. Servers
+the agent already defines are kept as-is. Nothing is written to any config file, and a failure to
+read leaves the agent unchanged. The daemon log shows `injected N servers into <provider> agent`.
+
+Each agent also gets an **MCP** tab (and the **MCP for this agent** command) listing the workspace's
+project servers, with a line showing the agent's provider and whether injection applies to it.
+
+Settings live on the host at `$PASEO_HOME/plugin-settings/paseo-mcp/injection.json`
+(`~/.paseo` by default). The hook reads that file directly; if it is missing or invalid, injection
+stays off.
+
 ## AgentLink integration
 
 AgentLink is optional. Standard `~/.claude`, `~/.codex`, `~/.kimi-code`, and `~/.grok` setups work on their own.
