@@ -52,8 +52,10 @@ import {
   mcpRawGet,
   mcpRawPut,
 } from "./shared/mcpjson";
+import { injectionSettings } from "./shared/settings";
 
 export default function contribute(server: PluginServerContext) {
+  server.registerSettings(injectionSettings);
   server.handle(mcpMatrix, handleMcpMatrix);
   server.handle(mcpAdd, handleMcpAdd);
   server.handle(mcpApply, handleMcpApply);
