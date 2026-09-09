@@ -1,3 +1,4 @@
 {
-  "id": "paseo-mcp"
+  "id": "paseo-mcp",
+  "requirements": { "paseo": ">=0.8.0" }
 }

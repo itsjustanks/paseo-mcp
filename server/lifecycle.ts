@@ -1,17 +1,7 @@
-// Paseo compiles index.ts twice. Before esbuild runs, it splices the entry's
-// text: the client build DELETES every `import … from "./x.server"` statement
-// outright (no stub, no undefined — the identifier is left with no binding) and
-// deletes bare `plugin.handle(...)` statements; the server build deletes the
-// surface registrations instead. So a `*.server` import may only be *referenced*
-// from index.ts inside a statement the splice removes. Any other reference —
-// a setTimeout, a cleanup call, a variable initialiser — compiles clean and then
-// throws `ReferenceError: X is not defined` when the app evaluates the plugin,
-// which drops the whole plugin from the catalog: no sidebar items, no surfaces.
-//
-// This registry is how server-only code reaches startup and shutdown without
-// index.ts ever naming it. A *.server module registers at import time; index.ts
-// calls run*() on a list it owns. In the client bundle the server imports are
-// gone, so nothing ever registers and both calls are no-ops.
+// Startup and shutdown registry for server-only modules. A server module
+// registers at import time; index.server.ts calls runStart() after wiring its
+// handlers and returns runShutdown as the entry cleanup. Nothing under client/
+// imports this file, so the app bundle never sees these tasks.
 
 type Task = () => void;
 

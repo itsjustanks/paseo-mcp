@@ -3,9 +3,9 @@ import { execFileSync } from "node:child_process";
 import { copyFileSync, existsSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, delimiter, dirname, join } from "node:path";
-import type { Destination } from "./contracts.shared";
-import { onStart } from "./lifecycle.shared";
-import type { Dialect } from "./mcpjson.shared";
+import type { Destination } from "../shared/contracts";
+import { onStart } from "./lifecycle";
+import type { Dialect } from "../shared/mcpjson";
 
 const HOME = homedir();
 // Home dir: prefer whichever location actually holds accounts. Picking a
@@ -1003,7 +1003,7 @@ export async function handleMcpHealth(_input: Record<string, never>, { paseo }: 
       return { name, status: "unknown" as const, note: "no command or url" };
     }),
   );
-  return { results };
+  return { results, checkedAt: new Date().toISOString() };
 }
 
 // Only MCP definitions and Claude project trust are shared between accounts.

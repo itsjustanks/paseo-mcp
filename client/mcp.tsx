@@ -1,7 +1,7 @@
 /** MCP definitions, health and OAuth grants, kept together by server. */
-import type { PluginSurfaceProps, PluginWorkspacePanelProps } from "@getpaseo/plugin";
-import { useRpc, useWorkspace } from "@getpaseo/plugin";
-import { useToast } from "@getpaseo/plugin/react-native";
+import type { PluginSurfaceProps, PluginWorkspacePanelProps } from "@getpaseo/plugin/client";
+import { useRpc, useWorkspace } from "@getpaseo/plugin/client";
+import { useToast } from "@getpaseo/plugin/client/react-native";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import React, { useEffect, useMemo, useState } from "react";
 import { Linking, Text, View } from "react-native";
@@ -24,7 +24,7 @@ import {
   type McpHealth,
   type ProjectMcpServer,
   type McpServerRow,
-} from "./contracts.shared";
+} from "../shared/contracts";
 import {
   ParsedServerSchema,
   mcpExport,
@@ -41,7 +41,7 @@ import {
   type JsonIssue,
   type LoginSession,
   type RawDefRow,
-} from "./mcpjson.shared";
+} from "../shared/mcpjson";
 import {
   Button,
   Card,
@@ -67,13 +67,14 @@ import {
   StatusPill,
   Step,
   Tag,
+  Toolbar,
   TokensProvider,
   copyToClipboard,
   useTokens,
   useUi,
   type ChoiceItem,
   type Status,
-} from "./ui.client";
+} from "./ui";
 
 type ParsedServer = z.infer<typeof ParsedServerSchema>;
 type PutResult = z.output<typeof mcpRawPut.output>;
@@ -628,7 +629,7 @@ function AuthRows({
                     ) : null}
                     {!remote && !session ? (
                       <Text style={t.text.caption}>
-                        Connect opens this server's own browser sign-in. No token needs to be pasted into Agent Link.
+                        Connect starts this server's own browser sign-in. Approve it in any browser, then paste the return address below if it does not finish on its own.
                       </Text>
                     ) : null}
                     {session ? (
@@ -1346,6 +1347,7 @@ function McpBody({ layout, host }: PluginSurfaceProps) {
             { value: `${server.presentIn.length} of ${plural(destinations.length, "editor")}` },
             ...editorFacts(server.presentIn, destinations).map((value) => ({ value })),
             server.detail ? { value: server.detail } : null,
+            healthQuery.data?.checkedAt ? { value: `checked ${new Date(healthQuery.data.checkedAt).toLocaleString()}` } : null,
           ]}
         />
         {serverHealth && serverHealth.status !== "ok" && serverHealth.note ? (
@@ -1363,6 +1365,11 @@ function McpBody({ layout, host }: PluginSurfaceProps) {
           <Button
             label={revealed ? "Hide secrets" : "Reveal secrets"}
             onPress={() => setRevealed((value) => !value)}
+          />
+          <Button
+            label="Check now"
+            loading={healthQuery.isFetching}
+            onPress={() => { void healthQuery.refetch(); }}
           />
           {/* A panel cannot download, so an export is written next to the
               user's other files and the path is reported back. */}
@@ -1385,6 +1392,46 @@ function McpBody({ layout, host }: PluginSurfaceProps) {
 
       {server.transport === "http" && authQuery.error ? (
         <ErrorText>{errorText(authQuery.error)}</ErrorText>
+      ) : null}
+
+      {server.transport === "http" ? (
+        <AuthRows
+          server={server.name}
+          accounts={accounts}
+          destinations={destinations}
+          presentIn={server.presentIn}
+          sessions={sessions}
+          oauthCapable={server.inlineCredentialsIn.length < server.presentIn.length}
+          daemonIsLocal={daemonIsLocal}
+          daemonHostname={daemonHostname}
+          pendingAccount={
+            loginMutation.isPending && loginMutation.variables
+              ? `${loginMutation.variables.provider}|${loginMutation.variables.account}`
+              : null
+          }
+          onAuthorise={(account) =>
+            loginMutation.mutate({
+              provider: account.provider,
+              accountDir: account.isPrimary ? "" : account.dir,
+              account: account.email,
+              server: server.name,
+            })
+          }
+          onCancel={(key) => loginCancelMutation.mutate(key)}
+          onSignOut={(account) =>
+            logoutMutation.mutate({
+              provider: account.provider,
+              accountDir: account.isPrimary ? "" : account.dir,
+              server: server.name,
+            })
+          }
+          onComplete={(key, redirectUrl) => loginCompleteMutation.mutate({ key, redirectUrl })}
+          onCopied={(ok) =>
+            ok
+              ? toast.show("Sign-in link copied.", { variant: "success" })
+              : toast.show("No clipboard here — the link above is selectable.", { variant: "warning" })
+          }
+        />
       ) : null}
 
       {revealed ? (
@@ -1490,10 +1537,22 @@ function McpBody({ layout, host }: PluginSurfaceProps) {
 
   const serversSection = server ? serverPane : (
     <View style={{ gap: t.space.lg }}>
-      <Intro
-        eyebrow="Servers"
+      <Toolbar
         title={`${plural(servers.length, "server")} across ${plural(destinations.length, "editor")}`}
-        description="Every editor that stores MCP definitions on this host is listed as a destination. Open a server to copy it to missing editors, edit one editor's copy, or connect its accounts."
+        subtitle="Open a server to manage definitions, check reachability, and connect each account."
+        actions={
+          <>
+            <Button label="Add server" variant="primary" onPress={() => go("transfer", { mode: "add" })} />
+            <Button label="Import" onPress={() => go("transfer", { mode: "import" })} />
+            <Button
+              label="Refresh"
+              variant="ghost"
+              loading={matrixQuery.isFetching || healthQuery.isFetching}
+              onPress={refreshAll}
+            />
+          </>
+        }
+        below={healthQuery.data?.checkedAt ? <Text style={t.text.caption}>Last checked {new Date(healthQuery.data.checkedAt).toLocaleString()}</Text> : undefined}
       />
       {filters}
       {list}
@@ -1598,10 +1657,10 @@ function McpBody({ layout, host }: PluginSurfaceProps) {
 
   const accountsSection = (
     <View style={{ gap: t.space.lg }}>
-      <Intro
-        eyebrow="Accounts"
+      <Toolbar
         title="One grant per account, per server."
-        description="Definitions can be copied between editors. OAuth grants cannot, so each Claude or Codex account signs in to a server once. Sign-in runs in a browser on the daemon host."
+        subtitle="Definitions can be copied between editors. OAuth grants cannot, so each Claude or Codex account signs in to a server once."
+        actions={<Button label="Refresh account status" loading={authQuery.isFetching || loginQuery.isFetching} onPress={() => { void authQuery.refetch(); refreshLogins(); }} />}
       />
       {authQuery.isLoading ? <Loading label="Reading accounts…" /> : null}
       {authQuery.error ? (

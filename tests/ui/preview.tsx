@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { McpSurface, McpWorkspacePanel } from "../../mcp.client";
+import { McpSurface, McpWorkspacePanel } from "../../client/mcp";
 const queryClient = new QueryClient();
 const params = new URLSearchParams(location.search);
 const light = !params.has("dark");

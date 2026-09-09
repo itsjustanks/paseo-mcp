@@ -4,8 +4,8 @@ import { request as httpRequest } from "node:http";
 import { chmodSync, existsSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
 import { homedir, hostname } from "node:os";
 import { basename, dirname, join, resolve, sep } from "node:path";
-import type { Destination } from "./contracts.shared";
-import { onShutdown } from "./lifecycle.shared";
+import type { Destination } from "../shared/contracts";
+import { onShutdown } from "./lifecycle";
 import {
   DIALECTS,
   backupFile,
@@ -27,8 +27,8 @@ import {
   writeTextAtomic,
   TOML_SAFE_NAME,
   type McpDef,
-} from "./handlers.server";
-import type { Dialect, JsonIssue, LoginSession } from "./mcpjson.shared";
+} from "./handlers";
+import type { Dialect, JsonIssue, LoginSession } from "../shared/mcpjson";
 
 const HOME = homedir();
 

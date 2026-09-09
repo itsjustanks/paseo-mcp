@@ -1,4 +1,4 @@
-import { defineRpc } from "@getpaseo/plugin/server";
+import { defineRpc } from "@getpaseo/plugin";
 import { z } from "zod";
 // ---- universal MCP management -------------------------------------------------
 
@@ -159,5 +159,8 @@ export type McpHealth = z.infer<typeof McpHealthSchema>;
 export const mcpHealth = defineRpc({
   name: "paseo-mcp.health",
   input: z.object({}),
-  output: z.object({ results: z.array(McpHealthSchema) }),
+  output: z.object({
+    results: z.array(McpHealthSchema),
+    checkedAt: z.string(),
+  }),
 });
