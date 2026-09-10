@@ -197,6 +197,7 @@ export const mcpHealthCached = defineRpc({
     report: McpHealthReportSchema.nullable(),
     backgroundChecks: z.boolean(),
     intervalMinutes: z.number(),
+    showComposerPill: z.boolean(),
     nextCheckAt: z.string().nullable(),
   }),
 });
@@ -204,4 +205,11 @@ export const mcpHealthCached = defineRpc({
 /** Statuses a user has to act on; `ok` and `unknown` are not problems. */
 export function healthNeedsAttention(status: McpHealthStatus): boolean {
   return status !== "ok" && status !== "unknown";
+}
+
+/** True when one of the result's project scopes is the `.mcp.json` of `directory` or one of its parents. */
+export function scopedToDirectory(scope: McpHealthScope, directory: string): boolean {
+  if (scope.level !== "project" || !directory) return false;
+  const root = scope.configPath.replace(/[\\/]\.mcp\.json$/, "");
+  return directory === root || directory.startsWith(`${root}/`) || directory.startsWith(`${root}\\`);
 }

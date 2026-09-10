@@ -12,7 +12,6 @@ import {
   mcpAuth,
   mcpDefAll,
   mcpEditOne,
-  mcpHealth,
   mcpMatrix,
   mcpRemove,
   mcpRename,
@@ -21,7 +20,6 @@ import {
   type Destination,
   type McpAuthAccount,
   type McpDefRow,
-  type McpHealth,
   type ProjectMcpServer,
   type McpServerRow,
 } from "../shared/contracts";
@@ -42,6 +40,7 @@ import {
   type LoginSession,
   type RawDefRow,
 } from "../shared/mcpjson";
+import { HealthSummary, ServerHealthTag, healthStatus, healthWord, useHealth } from "./health";
 import {
   Button,
   Card,
@@ -82,30 +81,6 @@ type Mode = "add" | "import";
 type Kind = "stdio" | "http";
 
 // -------------------------------------------------------------------- helpers
-
-function healthStatus(status: McpHealth["status"]): Status {
-  if (status === "ok") return "ok";
-  if (status === "auth-required" || status === "warn") return "attention";
-  if (status === "unknown") return "neutral";
-  return "error";
-}
-
-function healthWord(status: McpHealth["status"]): string {
-  switch (status) {
-    case "ok":
-      return "healthy";
-    case "auth-required":
-      return "sign-in";
-    case "warn":
-      return "warning";
-    case "binary-missing":
-      return "no binary";
-    case "down":
-      return "down";
-    default:
-      return "unchecked";
-  }
-}
 
 function sessionStatus(state: LoginSession["state"]): Status {
   if (state === "done") return "ok";
@@ -760,7 +735,6 @@ function McpBody({ layout, host }: PluginSurfaceProps) {
   const callExport = useRpc(mcpExport);
   const callExportFile = useRpc(mcpExportFile);
   const callSync = useRpc(mcpSync);
-  const callHealth = useRpc(mcpHealth);
   const callDefAll = useRpc(mcpDefAll);
   const callEditOne = useRpc(mcpEditOne);
   const callRawGet = useRpc(mcpRawGet);
@@ -805,13 +779,9 @@ function McpBody({ layout, host }: PluginSurfaceProps) {
   const matrixQuery = useQuery({ queryKey: ["paseo-mcp", "matrix"], queryFn: () => callMatrix({}), retry: 1 });
   const destinations = useMemo<Destination[]>(() => matrixQuery.data?.destinations ?? [], [matrixQuery.data]);
   const servers = useMemo<McpServerRow[]>(() => matrixQuery.data?.servers ?? [], [matrixQuery.data]);
-  const healthQuery = useQuery({
-    queryKey: ["paseo-mcp", "health"],
-    queryFn: () => callHealth({}),
-    staleTime: 5 * 60_000,
-    refetchInterval: 15 * 60_000,
-    retry: false,
-  });
+  // The host probes on its own timer and caches the verdict; Refresh and
+  // Check now force a fresh probe through `refetch`.
+  const healthQuery = useHealth();
   const health = useMemo(
     () => healthQuery.data ? new Map(healthQuery.data.results.map((entry) => [entry.name, entry])) : null,
     [healthQuery.data],
@@ -2258,7 +2228,12 @@ export function WorkspaceBody({
             title={entry.name}
             subtitle={entry.detail}
             onPress={() => setSelected(entry.name)}
-            trailing={<Tag label={entry.transport} />}
+            trailing={
+              <View style={{ flexDirection: "row", alignItems: "center", gap: t.space.xs }}>
+                <ServerHealthTag name={entry.name} />
+                <Tag label={entry.transport} />
+              </View>
+            }
           />
         ))}
       </Card>
@@ -2275,6 +2250,7 @@ export function WorkspaceBody({
           pill={<StatusPill status={pill.status} label={pill.label} />}
         />
         {intro}
+        <HealthSummary directory={workspace?.directory ?? ""} />
         <View style={{ flexDirection: "row" }}>
           <Button label="Refresh" variant="ghost" onPress={refresh} />
         </View>

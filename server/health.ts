@@ -162,6 +162,7 @@ export async function handleMcpHealthCached(_input: Record<string, never>, { pas
     report: cached,
     backgroundChecks: settings.backgroundChecks,
     intervalMinutes: settings.intervalMinutes,
+    showComposerPill: settings.showComposerPill,
     nextCheckAt: settings.backgroundChecks ? nextCheckAt : null,
   };
 }

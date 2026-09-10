@@ -25,14 +25,17 @@ const servers = [
   { name: "supabase", transport: "stdio", detail: "npx -y @supabase/mcp-server", authStyle: "inline-credentials", inlineCredentialsIn: [work], presentIn: [claude, work] },
   { name: "linear", transport: "http", detail: "https://mcp.linear.app/mcp", authStyle: "oauth-or-none", inlineCredentialsIn: [], presentIn: [claude, codex, work, kimi] },
 ];
+const userScope = { level: "user", label: "Claude · demo@example.com (primary)", configPath: `${HOME}/.claude.json` };
+const projectScope = { level: "project", label: "data-glue", configPath: `${HOME}/projects/data-glue/.mcp.json` };
 const health = [
-  { name: "heroui-pro", status: "ok", note: "" },
-  { name: "jam", status: "auth-required", note: "Server answered 401; an OAuth grant is needed." },
-  { name: "posthog", status: "auth-required", note: "Server answered 401; an OAuth grant is needed." },
-  { name: "playwright", status: "ok", note: "" },
-  { name: "supabase", status: "binary-missing", note: "npx could not resolve @supabase/mcp-server." },
-  { name: "linear", status: "ok", note: "" },
+  { name: "heroui-pro", status: "ok", note: "", scopes: [userScope] },
+  { name: "jam", status: "auth-required", note: "Server answered 401; an OAuth grant is needed.", scopes: [userScope, projectScope] },
+  { name: "posthog", status: "auth-required", note: "Server answered 401; an OAuth grant is needed.", scopes: [userScope] },
+  { name: "playwright", status: "ok", note: "", scopes: [userScope] },
+  { name: "supabase", status: "binary-missing", note: "npx could not resolve @supabase/mcp-server.", scopes: [projectScope] },
+  { name: "linear", status: "ok", note: "", scopes: [userScope] },
 ];
+const checkedAt = new Date().toISOString();
 const accounts = [
   { provider: "claude", email: "demo@example.com", dir: `${HOME}/.claude`, isPrimary: true, definedServers: 6, needsAuth: ["jam", "posthog"], authStatus: { jam: "not-connected", posthog: "not-connected", linear: "connected" } },
   { provider: "codex", email: "demo@example.com", dir: `${HOME}/.codex`, isPrimary: true, definedServers: 4, needsAuth: ["jam"], authStatus: { jam: "not-connected", linear: "connected" } },
@@ -65,7 +68,8 @@ async function call(contract: any, input: any) {
   if (failed && (name === "matrix" || name === "auth")) throw new Error("Fictional daemon unreachable. Retry the connection.");
   switch (name) {
     case "matrix": return { destinations, servers: empty ? [] : servers };
-    case "health": return { results: empty ? [] : health };
+    case "health": return { results: empty ? [] : health, checkedAt };
+    case "health-cached": return { report: { results: empty ? [] : health, checkedAt }, backgroundChecks: true, intervalMinutes: 10, showComposerPill: true, nextCheckAt: checkedAt };
     case "auth": return { accounts, projectServers: empty ? [] : projectServers };
     case "login-status": return { sessions, daemonIsLocal: true, hostname: "paseo" };
     case "raw-get": {
@@ -105,7 +109,7 @@ async function call(contract: any, input: any) {
 export function useRpc(contract: any) { return useCallback((input: unknown) => call(contract, input), [contract]); }
 export function useWorkspace<T>(_id: string, select: (workspace: { name: string; directory: string }) => T): T { return select({ name: "data-glue", directory: `${HOME}/projects/data-glue` }); }
 export function useAgent<T>(_id: string, select: (agent: { provider: string; model: string | null }) => T): T { return select({ provider: params.get("provider") ?? "codex", model: "gpt-5-codex" }); }
-const settingsValues: Record<string, unknown> = { injectWorkspaceServers: !params.has("inject-off"), providers: ["codex"], skipInlineCredentialServers: true };
+const settingsValues: Record<string, unknown> = { injectWorkspaceServers: !params.has("inject-off"), providers: ["codex"], skipInlineCredentialServers: true, backgroundChecks: true, intervalMinutes: 10, showComposerPill: true };
 export function useSettings(_definition: unknown) {
   return { status: "ready" as const, values: settingsValues, revision: "fixture", saving: false, saveError: null, async save(values: Record<string, unknown>) { Object.assign(settingsValues, values); return true; }, async reset() { return true; }, async reload() {} };
 }

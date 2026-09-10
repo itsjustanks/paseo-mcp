@@ -2,7 +2,14 @@ import { useCallback, useMemo } from "react";
 import { Text } from "react-native";
 import { useSettings, type PluginSurfaceProps, type SettingsState } from "@getpaseo/plugin/client";
 import { SettingsAction, SettingsCard, SettingsRow, SettingsSection, SettingsSelect, SettingsSwitch } from "@getpaseo/plugin/client/ui";
-import { injectionSettings, type InjectionProvider, type InjectionSettings } from "../shared/settings";
+import {
+  HEALTH_INTERVAL_CHOICES,
+  healthSettings,
+  injectionSettings,
+  type HealthSettings,
+  type InjectionProvider,
+  type InjectionSettings,
+} from "../shared/settings";
 
 type Ready = Extract<SettingsState<typeof injectionSettings.schema>, { status: "ready" }>;
 
@@ -108,4 +115,95 @@ export function InjectionSettingsScreen({ theme }: PluginSurfaceProps) {
     );
   }
   return <InjectionControls settings={settings} theme={theme} />;
+}
+
+// ---------------------------------------------------------------- health
+
+type HealthReady = Extract<SettingsState<typeof healthSettings.schema>, { status: "ready" }>;
+
+const INTERVAL_OPTIONS = HEALTH_INTERVAL_CHOICES.map((minutes) => ({
+  label: minutes === 60 ? "Every hour" : `Every ${minutes} minutes`,
+  value: String(minutes),
+}));
+
+export function describeHealth(values: HealthSettings): string {
+  if (!values.backgroundChecks) return "Background checks are off; servers are probed only when you press Refresh";
+  return `Probing every ${values.intervalMinutes} minutes${values.showComposerPill ? ", with a composer pill while a server needs attention" : ""}`;
+}
+
+function HealthControls({ settings, theme }: { settings: HealthReady; theme: PluginSurfaceProps["theme"] }) {
+  const muted = useMemo(() => ({ color: theme.colors.foregroundMuted, fontSize: 13 }), [theme]);
+  const save = useCallback(
+    (patch: Partial<HealthSettings>) => {
+      void settings.save({ ...settings.values, ...patch }, settings.revision);
+    },
+    [settings],
+  );
+  const { values } = settings;
+  // A hand-edited file may hold an interval the select does not list; show it as-is.
+  const intervalOptions = INTERVAL_OPTIONS.some((option) => option.value === String(values.intervalMinutes))
+    ? INTERVAL_OPTIONS
+    : [...INTERVAL_OPTIONS, { label: `Every ${values.intervalMinutes} minutes`, value: String(values.intervalMinutes) }];
+  return (
+    <>
+      <SettingsSection title="Health checks">
+        <SettingsCard>
+          <SettingsSwitch
+            label="Check servers in the background"
+            hint="Probe every MCP server on a timer, not only when Refresh is pressed"
+            value={values.backgroundChecks}
+            disabled={settings.saving}
+            onValueChange={(backgroundChecks) => save({ backgroundChecks })}
+          />
+          <SettingsSelect
+            label="Interval"
+            hint="How often the host probes HTTP endpoints and looks for stdio binaries"
+            value={String(values.intervalMinutes)}
+            options={intervalOptions}
+            disabled={settings.saving || !values.backgroundChecks}
+            onValueChange={(choice) => save({ intervalMinutes: Number(choice) })}
+          />
+          <SettingsSwitch
+            label="Composer pill"
+            hint="Show a pill on each agent's composer while a server needs attention; press it to open MCP management"
+            value={values.showComposerPill}
+            disabled={settings.saving}
+            onValueChange={(showComposerPill) => save({ showComposerPill })}
+          />
+        </SettingsCard>
+        {settings.saveError ? (
+          <Text accessibilityRole="alert" style={{ color: theme.colors.statusDanger }}>
+            {settings.saveError}
+          </Text>
+        ) : null}
+      </SettingsSection>
+      <SettingsSection title="How it works">
+        <SettingsRow label="Status" hint={describeHealth(values)} />
+        <Text style={muted}>
+          The host keeps the most recent result and every panel, pill and the MCP surface reads that cached
+          verdict, so opening ten agents does not probe your servers ten times. Refresh and Check now always
+          run a fresh probe. A server defined in an editor's global config is flagged as a user-level problem;
+          one defined only by a project's .mcp.json is flagged against that project.
+        </Text>
+      </SettingsSection>
+    </>
+  );
+}
+
+export function HealthSettingsScreen({ theme }: PluginSurfaceProps) {
+  const settings = useSettings(healthSettings);
+  const style = useMemo(() => ({ color: theme.colors.foreground }), [theme]);
+  if (settings.status === "loading") return <Text style={style}>Loading settings…</Text>;
+  if (settings.status !== "ready") {
+    return (
+      <SettingsSection title="Health checks">
+        <Text style={style}>{settings.error}</Text>
+        <SettingsAction label="Try again" actionLabel="Reload" onPress={settings.reload} />
+        {settings.status === "invalid" ? (
+          <SettingsAction label="Restore default settings" actionLabel="Reset" onPress={settings.reset} />
+        ) : null}
+      </SettingsSection>
+    );
+  }
+  return <HealthControls settings={settings} theme={theme} />;
 }

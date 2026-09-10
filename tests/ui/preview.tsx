@@ -3,7 +3,7 @@ import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { McpAgentPanel } from "../../client/agent";
 import { McpSurface, McpWorkspacePanel } from "../../client/mcp";
-import { InjectionSettingsScreen } from "../../client/settings";
+import { HealthSettingsScreen, InjectionSettingsScreen } from "../../client/settings";
 const queryClient = new QueryClient();
 const params = new URLSearchParams(location.search);
 const light = !params.has("dark");
@@ -20,6 +20,7 @@ function Preview() {
   const props = { theme: { colors }, host: { id: "preview", label: "paseo" }, layout: { compact, platform: "web" as const } };
   return <QueryClientProvider client={queryClient}>
     {params.has("agent") ? <McpAgentPanel {...props} context="agent" workspaceId="ws-1" agentId="agent-1" />
+      : params.has("health-settings") ? <HealthSettingsScreen {...props} />
       : params.has("settings") ? <InjectionSettingsScreen {...props} />
       : params.has("workspace") ? <McpWorkspacePanel {...props} context="workspace" workspaceId="ws-1" /> : <McpSurface {...props} />}
   </QueryClientProvider>;
