@@ -19,11 +19,26 @@ export const INITIALIZE_REQUEST = {
   id: 1,
   method: "initialize",
   params: {
-    protocolVersion: "2024-11-05",
+    protocolVersion: "2025-06-18",
     capabilities: {},
-    clientInfo: { name: "paseo-mcp-health", version: "0.5.1" },
+    clientInfo: { name: "paseo-mcp", version: "0.6.0" },
   },
 } as const;
+
+/** A parsed JSON-RPC 2.0 envelope, or null for anything else. */
+export type JsonRpcEnvelope = { jsonrpc: "2.0"; id?: unknown; result?: unknown; error?: unknown };
+
+export function parseJsonRpc(payload: string): JsonRpcEnvelope | null {
+  if (!payload.startsWith("{")) return null;
+  try {
+    const parsed = JSON.parse(payload) as JsonRpcEnvelope;
+    if (parsed.jsonrpc !== "2.0") return null;
+    if (parsed.result === undefined && parsed.error === undefined) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
 
 /** What happened when the endpoint was asked to initialize, with no URL or header values in it. */
 export type ProbeOutcome =
@@ -45,16 +60,9 @@ function readJsonRpc(body: string): "result" | "error" | null {
   const payload = text.startsWith("event:") || text.startsWith("data:")
     ? text.split("\n").find((line) => line.startsWith("data:"))?.slice(5).trim() ?? ""
     : text;
-  if (!payload.startsWith("{")) return null;
-  try {
-    const parsed = JSON.parse(payload) as { jsonrpc?: unknown; result?: unknown; error?: unknown };
-    if (parsed.jsonrpc !== "2.0") return null;
-    if (parsed.result !== undefined) return "result";
-    if (parsed.error !== undefined) return "error";
-  } catch {
-    // not JSON
-  }
-  return null;
+  const parsed = parseJsonRpc(payload);
+  if (!parsed) return null;
+  return parsed.result !== undefined ? "result" : "error";
 }
 
 /**

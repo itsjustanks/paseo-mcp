@@ -258,6 +258,90 @@ export const mcpHealthCached = defineRpc({
   }),
 });
 
+// --------------------------------------------------------------------- tools
+
+/**
+ * One tool a server exposes, as `tools/list` described it, reduced to what the
+ * UI shows. `name` is the key a per-tool allow/deny/ask control will attach to
+ * later; `arguments` and `required` come from `inputSchema` so that control can
+ * show what the tool takes without re-reading the schema.
+ */
+export const McpToolSchema = z.object({
+  name: z.string(),
+  title: z.string(),
+  description: z.string(),
+  takesArguments: z.boolean(),
+  arguments: z.array(z.string()),
+  required: z.array(z.string()),
+});
+export type McpTool = z.infer<typeof McpToolSchema>;
+
+/**
+ * Why a server's tool list is or is not known. `listed` is the only state with
+ * a real list; `auth-required` is the common resting state of an OAuth server
+ * (an anonymous probe gets 401); `stdio` is a command server the plugin does
+ * not run; `unavailable` is anything else, with the redacted reason in `note`.
+ */
+export const McpToolsKindSchema = z.enum(["listed", "auth-required", "stdio", "unavailable"]);
+export type McpToolsKind = z.infer<typeof McpToolsKindSchema>;
+
+export const McpServerToolsSchema = z.object({
+  name: z.string(),
+  transport: z.enum(["stdio", "http", "unknown"]),
+  kind: McpToolsKindSchema,
+  note: z.string(),
+  tools: z.array(McpToolSchema),
+  // From the initialize handshake, when the server sent one.
+  serverInfo: z.object({ name: z.string(), version: z.string() }).nullable(),
+  protocolVersion: z.string(),
+});
+export type McpServerTools = z.infer<typeof McpServerToolsSchema>;
+
+export const McpToolsReportSchema = z.object({
+  servers: z.array(McpServerToolsSchema),
+  checkedAt: z.string(),
+});
+export type McpToolsReport = z.infer<typeof McpToolsReportSchema>;
+
+/** Ask every HTTP server for its tools now and refresh the cached report. */
+export const mcpTools = defineRpc({
+  name: "paseo-mcp.tools",
+  input: z.object({}),
+  output: McpToolsReportSchema,
+});
+
+/** Last known tool lists without asking anyone. `report` is null until the first listing has completed. */
+export const mcpToolsCached = defineRpc({
+  name: "paseo-mcp.tools-cached",
+  input: z.object({}),
+  output: z.object({
+    report: McpToolsReportSchema.nullable(),
+    inFlight: z.boolean(),
+  }),
+});
+
+/**
+ * The always-on composer chip's text: the enabled server count, then the one
+ * thing worth knowing about them. A problem wins over a sign-in count, and a
+ * sign-in count wins over the tool total, so the chip reads as a status line
+ * and not a badge that never changes.
+ */
+export function chipLabel(
+  health: McpHealthReport | null | undefined,
+  tools: McpToolsReport | null | undefined,
+): { label: string; tone: "calm" | "attention" } {
+  const results = health?.results ?? [];
+  if (results.length === 0) return { label: tools?.servers.length ? `${tools.servers.length} MCP` : "MCP", tone: "calm" };
+  const issues = results.filter((entry) => healthNeedsAttention(entry.status)).length;
+  const signIn = results.filter((entry) => healthIsSignIn(entry.status)).length;
+  const head = `${results.length} MCP`;
+  if (issues > 0) return { label: `${head} · ${issues} ${issues === 1 ? "issue" : "issues"}`, tone: "attention" };
+  if (signIn > 0) return { label: `${head} · ${signIn} need sign-in`, tone: "calm" };
+  const toolCount = (tools?.servers ?? []).reduce((sum, entry) => sum + entry.tools.length, 0);
+  if (toolCount > 0) return { label: `${head} · ${toolCount} tools`, tone: "calm" };
+  return { label: `${head} · healthy`, tone: "calm" };
+}
+
 /**
  * Statuses a user has to act on. `ok` and `unknown` are not problems, and
  * neither is `auth-required`: an OAuth server answers every anonymous probe

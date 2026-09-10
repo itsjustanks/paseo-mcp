@@ -26,6 +26,7 @@ import {
   handleMcpRawGet,
   handleMcpRawPut,
 } from "./server/mcpjson";
+import { handleMcpTools, handleMcpToolsCached } from "./server/tools";
 import { handleMcpWorkspace } from "./server/workspace";
 import {
   mcpAdd,
@@ -39,6 +40,8 @@ import {
   mcpRemove,
   mcpRename,
   mcpSync,
+  mcpTools,
+  mcpToolsCached,
   mcpWorkspace,
 } from "./shared/contracts";
 import {
@@ -71,6 +74,8 @@ export default function contribute(server: PluginServerContext) {
   server.handle(mcpHealthCached, handleMcpHealthCached);
   server.handle(mcpRemove, handleMcpRemove);
   server.handle(mcpSync, handleMcpSync);
+  server.handle(mcpTools, handleMcpTools);
+  server.handle(mcpToolsCached, handleMcpToolsCached);
   server.handle(mcpWorkspace, handleMcpWorkspace);
   server.handle(mcpRawGet, handleMcpRawGet);
   server.handle(mcpRawPut, handleMcpRawPut);

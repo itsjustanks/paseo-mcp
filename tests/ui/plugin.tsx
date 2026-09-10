@@ -36,6 +36,15 @@ const health = [
   { name: "linear", status: "ok", note: "", scopes: [userScope] },
 ];
 const checkedAt = new Date().toISOString();
+const tool = (name: string, description: string, args: string[] = [], required: string[] = []) => ({ name, title: "", description, takesArguments: args.length > 0, arguments: args, required });
+const tools = [
+  { name: "heroui-pro", transport: "http", kind: "listed", note: "3 tools", serverInfo: { name: "@heroui-pro/react-mcp", version: "0.2.0" }, protocolVersion: "2025-06-18", tools: [tool("list_components", "List every component from both packages."), tool("get_component_docs", "Full MDX documentation for components.", ["components", "context"], ["components"]), tool("get_css", "BEM CSS for Pro and OSS components.", ["components"])] },
+  { name: "jam", transport: "http", kind: "auth-required", note: "sign in to list tools", serverInfo: null, protocolVersion: "", tools: [] },
+  { name: "posthog", transport: "http", kind: "auth-required", note: "sign in to list tools", serverInfo: null, protocolVersion: "", tools: [] },
+  { name: "playwright", transport: "stdio", kind: "stdio", note: "'npx' runs as a child process of the agent; its tools are only listed while it runs", serverInfo: null, protocolVersion: "", tools: [] },
+  { name: "supabase", transport: "stdio", kind: "stdio", note: "'npx' runs as a child process of the agent; its tools are only listed while it runs", serverInfo: null, protocolVersion: "", tools: [] },
+  { name: "linear", transport: "http", kind: "unavailable", note: "answered a web page, not MCP (HTTP 200); check the URL path", serverInfo: null, protocolVersion: "", tools: [] },
+];
 const accounts = [
   { provider: "claude", email: "demo@example.com", dir: `${HOME}/.claude`, isPrimary: true, definedServers: 6, needsAuth: ["jam", "posthog"], authStatus: { jam: "not-connected", posthog: "not-connected", linear: "connected" } },
   { provider: "codex", email: "demo@example.com", dir: `${HOME}/.codex`, isPrimary: true, definedServers: 4, needsAuth: ["jam"], authStatus: { jam: "not-connected", linear: "connected" } },
@@ -87,6 +96,10 @@ async function call(contract: any, input: any) {
     case "matrix": return { destinations, servers: empty ? [] : servers };
     case "health": return { results: empty ? [] : health, checkedAt };
     case "health-cached": return { report: { results: empty ? [] : health, checkedAt }, backgroundChecks: true, intervalMinutes: 10, showComposerPill: true, nextCheckAt: checkedAt };
+    case "tools": case "tools-cached": {
+      const report = { servers: empty ? [] : tools, checkedAt };
+      return name === "tools" ? report : { report, inFlight: false };
+    }
     case "auth": return { accounts, projectServers: empty ? [] : projectServers };
     case "login-status": return { sessions, daemonIsLocal: true, hostname: "paseo" };
     case "raw-get": {
