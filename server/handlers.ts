@@ -595,6 +595,7 @@ export async function buildDestinations(paseo: PluginHandlerContext["paseo"] | n
       id: join(HOME, ".claude.json"),
       label: `Claude · ${account || "primary"} (primary)`,
       provider: "claude",
+      providerId: "claude",
       account,
       configPath: join(HOME, ".claude.json"),
       format: "json-mcp",
@@ -606,6 +607,7 @@ export async function buildDestinations(paseo: PluginHandlerContext["paseo"] | n
       id: join(HOME, ".codex", "config.toml"),
       label: `Codex · ${account || "primary"} (primary)`,
       provider: "codex",
+      providerId: "codex",
       account,
       configPath: join(HOME, ".codex", "config.toml"),
       format: "toml-mcp",
@@ -616,6 +618,7 @@ export async function buildDestinations(paseo: PluginHandlerContext["paseo"] | n
       id: join(HOME, ".kimi-code", "mcp.json"),
       label: "Kimi Code",
       provider: "kimi",
+      providerId: "kimi",
       account: "",
       configPath: join(HOME, ".kimi-code", "mcp.json"),
       format: "json-mcp",
@@ -626,6 +629,7 @@ export async function buildDestinations(paseo: PluginHandlerContext["paseo"] | n
       id: join(HOME, ".grok", "config.toml"),
       label: "Grok",
       provider: "grok",
+      providerId: "grok",
       account: "",
       configPath: join(HOME, ".grok", "config.toml"),
       format: "toml-mcp",
@@ -644,6 +648,7 @@ export async function buildDestinations(paseo: PluginHandlerContext["paseo"] | n
       id: configPath,
       label: `${base === "claude" ? "Claude" : "Codex"} · ${account || basename(dir)} (${id})`,
       provider: base,
+      providerId: id,
       account: account || basename(dir),
       configPath,
       format: base === "claude" ? "json-mcp" : "toml-mcp",
@@ -656,6 +661,7 @@ export async function buildDestinations(paseo: PluginHandlerContext["paseo"] | n
       id: configPath,
       label: `${slot.provider === "claude" ? "Claude" : "Codex"} · ${slot.email} (slot)`,
       provider: slot.provider,
+      providerId: "",
       account: slot.email,
       configPath,
       format: slot.provider === "claude" ? "json-mcp" : "toml-mcp",
@@ -1153,51 +1159,6 @@ export async function handleMcpAuth(
   return { accounts, projectServers };
 }
 
-/** Resolve project MCP state from Paseo's live workspace registry, never a client path. */
-export async function handleMcpWorkspace(
-  { workspaceId }: { workspaceId: string },
-  { paseo }: PluginHandlerContext,
-) {
-  const result = await paseo.workspaces.list();
-  const entries = (result as {
-    entries: Array<{
-      id: string;
-      name: string;
-      workspaceDirectory?: string;
-      projectRootPath: string;
-    }>;
-  }).entries;
-  const workspace = entries.find((entry) => entry.id === workspaceId);
-  if (!workspace) throw new Error("This Paseo workspace no longer exists.");
-
-  const directory = workspace.workspaceDirectory || workspace.projectRootPath;
-  const candidates = [...new Set([directory, workspace.projectRootPath].filter(Boolean))];
-  const configPath = candidates.map((candidate) => join(candidate, ".mcp.json")).find(existsSync) ?? "";
-  const definitions = configPath ? jsonMcpRead(configPath) : {};
-  const servers = Object.entries(definitions)
-    .map(([name, def]) => {
-      const hasInline = hasInlineCredentials(def);
-      return {
-        name,
-        transport: def.command ? ("stdio" as const) : def.url ? ("http" as const) : ("unknown" as const),
-        detail: redactDetail(def).slice(0, 80),
-        authStyle: hasInline ? ("inline-credentials" as const) : ("oauth-or-none" as const),
-      };
-    })
-    .sort((a, b) => a.name.localeCompare(b.name));
-  const { accounts } = await handleMcpAuth({}, { paseo });
-  return {
-    workspace: {
-      id: workspace.id,
-      name: workspace.name,
-      directory,
-      projectRootPath: workspace.projectRootPath,
-    },
-    configPath,
-    servers,
-    accounts,
-  };
-}
 
 export async function handleMcpSync(): Promise<{ ok: boolean; log: string }> {
   const logs: string[] = [];

@@ -6,6 +6,10 @@ export const DestinationSchema = z.object({
   id: z.string(), // stable: the config file path
   label: z.string(), // "Claude · you@work.com (primary)"
   provider: z.string(), // claude | codex | kimi | grok | <custom paseo id>
+  // The Paseo provider id whose agents read this config ("claude", "codex", a
+  // custom id that extends one of them), or "" for a slot no provider is wired
+  // to. Absent on rows from older hosts.
+  providerId: z.string().default(""),
   account: z.string(), // email, or "" when the CLI has no per-account identity here
   configPath: z.string(),
   format: z.enum(["json-mcp", "toml-mcp"]),
@@ -88,6 +92,46 @@ export const ProjectMcpServerSchema = z.object({
 });
 export type ProjectMcpServer = z.infer<typeof ProjectMcpServerSchema>;
 
+const TransportSchema = z.enum(["stdio", "http", "unknown"]);
+
+const ProfileServerSchema = z.object({ name: z.string(), transport: TransportSchema });
+
+/** One editor config and what an agent reading it loads in this workspace. See shared/budget.ts. */
+export const ProfileScopeSchema = z.object({
+  id: z.string(),
+  label: z.string(),
+  provider: z.string(),
+  providerId: z.string(),
+  configPath: z.string(),
+  servers: z.array(ProfileServerSchema), // user level: every workspace
+  local: z.array(ProfileServerSchema), // Claude's per-directory entries for this workspace
+});
+
+export const WorkspaceProfileSchema = z.object({
+  project: z.array(ProfileServerSchema),
+  projectConfigPath: z.string(),
+  scopes: z.array(ProfileScopeSchema),
+});
+
+/** Running MCP server processes attributed to the workspace. See shared/processes.ts. */
+export const ObservedServerSchema = z.object({ name: z.string(), processes: z.number(), rssKb: z.number() });
+
+export const ProcessObservationSchema = z.discriminatedUnion("available", [
+  z.object({
+    available: z.literal(true),
+    checkedAt: z.string(),
+    observed: z.object({
+      agents: z.number(),
+      servers: z.array(ObservedServerSchema),
+      processes: z.number(),
+      rssKb: z.number(),
+      unmatchable: z.array(z.string()),
+    }),
+  }),
+  z.object({ available: z.literal(false), reason: z.string() }),
+]);
+export type ProcessObservation = z.infer<typeof ProcessObservationSchema>;
+
 /** Read-only project MCP inventory resolved from a live Paseo workspace id. */
 export const mcpWorkspace = defineRpc({
   name: "paseo-mcp.workspace",
@@ -102,6 +146,18 @@ export const mcpWorkspace = defineRpc({
     configPath: z.string(),
     servers: z.array(ProjectMcpServerSchema),
     accounts: z.array(McpAuthAccountSchema),
+    // What an agent started here loads, per editor config, and the injection
+    // settings the load was computed against. Optional so a 0.5 client can
+    // read a 0.4 host.
+    profile: WorkspaceProfileSchema.optional(),
+    injection: z
+      .object({
+        injectWorkspaceServers: z.boolean(),
+        providers: z.array(z.string()),
+        skipInlineCredentialServers: z.boolean(),
+      })
+      .optional(),
+    processes: ProcessObservationSchema.optional(),
   }),
 });
 

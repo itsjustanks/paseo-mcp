@@ -9,7 +9,6 @@ import {
   handleMcpRemove,
   handleMcpRename,
   handleMcpSync,
-  handleMcpWorkspace,
 } from "./server/handlers";
 import { handleMcpHealth, handleMcpHealthCached } from "./server/health";
 import { registerHooks } from "./server/hooks";
@@ -27,6 +26,7 @@ import {
   handleMcpRawGet,
   handleMcpRawPut,
 } from "./server/mcpjson";
+import { handleMcpWorkspace } from "./server/workspace";
 import {
   mcpAdd,
   mcpApply,
