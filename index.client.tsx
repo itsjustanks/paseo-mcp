@@ -10,6 +10,7 @@ export default function contribute(client: PluginClientContext) {
     title: "MCP connections",
     icon: "Plug",
     context: "workspace",
+    locations: ["workspace", "explorer"],
     Component: McpWorkspacePanel,
   });
   client.addWorkspacePanel({
