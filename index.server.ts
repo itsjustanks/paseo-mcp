@@ -5,13 +5,13 @@ import {
   handleMcpAuth,
   handleMcpDefAll,
   handleMcpEditOne,
-  handleMcpHealth,
   handleMcpMatrix,
   handleMcpRemove,
   handleMcpRename,
   handleMcpSync,
   handleMcpWorkspace,
 } from "./server/handlers";
+import { handleMcpHealth, handleMcpHealthCached } from "./server/health";
 import { registerHooks } from "./server/hooks";
 import { runShutdown, runStart } from "./server/lifecycle";
 import {
@@ -34,6 +34,7 @@ import {
   mcpDefAll,
   mcpEditOne,
   mcpHealth,
+  mcpHealthCached,
   mcpMatrix,
   mcpRemove,
   mcpRename,
@@ -53,10 +54,11 @@ import {
   mcpRawGet,
   mcpRawPut,
 } from "./shared/mcpjson";
-import { injectionSettings } from "./shared/settings";
+import { healthSettings, injectionSettings } from "./shared/settings";
 
 export default function contribute(server: PluginServerContext) {
   server.registerSettings(injectionSettings);
+  server.registerSettings(healthSettings);
   registerHooks(server);
   server.handle(mcpMatrix, handleMcpMatrix);
   server.handle(mcpAdd, handleMcpAdd);
@@ -66,6 +68,7 @@ export default function contribute(server: PluginServerContext) {
   server.handle(mcpEditOne, handleMcpEditOne);
   server.handle(mcpRename, handleMcpRename);
   server.handle(mcpHealth, handleMcpHealth);
+  server.handle(mcpHealthCached, handleMcpHealthCached);
   server.handle(mcpRemove, handleMcpRemove);
   server.handle(mcpSync, handleMcpSync);
   server.handle(mcpWorkspace, handleMcpWorkspace);

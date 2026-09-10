@@ -190,7 +190,10 @@ type ProviderOverrides = Record<
 // even though a patch is written as { agents: { providers } }. Reading the
 // nested path silently yielded {} , so every provider looked unconfigured:
 // wired accounts showed as unwired and the auto-router always offered "Wire".
-async function providerOverrides(paseo: PluginHandlerContext["paseo"]): Promise<ProviderOverrides> {
+async function providerOverrides(paseo: PluginHandlerContext["paseo"] | null): Promise<ProviderOverrides> {
+  // The background health check may run before any RPC has handed us a paseo
+  // handle; without one, every discovered editor counts as enabled.
+  if (!paseo) return {};
   const { config } = await paseo.config.get();
   const shape = config as { providers?: ProviderOverrides; agents?: { providers?: ProviderOverrides } };
   return (shape.providers ?? shape.agents?.providers ?? {}) as ProviderOverrides;
@@ -561,7 +564,7 @@ export function destRead(dest: Destination): Record<string, McpDef> {
   return defs;
 }
 
-function destNames(dest: Destination): string[] {
+export function destNames(dest: Destination): string[] {
   return dest.format === "json-mcp" ? Object.keys(jsonMcpRead(dest.configPath)) : tomlMcpNames(dest.configPath);
 }
 
@@ -572,7 +575,7 @@ export function destWrite(dest: Destination, name: string, def: McpDef | null): 
 
 // ---------------------------------------------------------------- destinations
 
-export async function buildDestinations(paseo: PluginHandlerContext["paseo"]): Promise<Destination[]> {
+export async function buildDestinations(paseo: PluginHandlerContext["paseo"] | null): Promise<Destination[]> {
   const overrides = await providerOverrides(paseo);
   const destinations: Destination[] = [];
   const seen = new Set<string>();
@@ -821,7 +824,7 @@ export async function handleMcpRemove({ name, targets }: { name: string; targets
 
 // `preRead` lets a caller that looks up many names read each destination once
 // up front instead of once per name.
-function findDef(destinations: Destination[], name: string, preRead?: Map<string, Record<string, McpDef>>): McpDef | null {
+export function findDef(destinations: Destination[], name: string, preRead?: Map<string, Record<string, McpDef>>): McpDef | null {
   let def: McpDef | null = null;
   for (const dest of destinations) {
     const candidate = preRead ? (preRead.get(dest.id)?.[name] ?? null) : destReadOne(dest, name);
@@ -960,12 +963,12 @@ export async function handleMcpRename({ name, newName }: { name: string; newName
   };
 }
 
-function binaryOnPath(command: string): boolean {
+export function binaryOnPath(command: string): boolean {
   if (command.includes("/")) return existsSync(command);
   return searchPath().some((dir) => existsSync(join(dir, command)));
 }
 
-async function probeHttp(url: string, headers: Record<string, string> | undefined) {
+export async function probeHttp(url: string, headers: Record<string, string> | undefined) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 5000);
   try {
@@ -981,29 +984,6 @@ async function probeHttp(url: string, headers: Record<string, string> | undefine
   } finally {
     clearTimeout(timer);
   }
-}
-
-export async function handleMcpHealth(_input: Record<string, never>, { paseo }: PluginHandlerContext) {
-  const destinations = await buildDestinations(paseo);
-  const names = [...new Set(destinations.flatMap((dest) => destNames(dest)))].sort();
-  const defsByDest = new Map(destinations.map((dest) => [dest.id, destRead(dest)] as const));
-  const results = await Promise.all(
-    names.map(async (name) => {
-      const def = findDef(destinations, name, defsByDest);
-      if (!def) return { name, status: "unknown" as const, note: "no readable definition" };
-      if (def.command) {
-        return binaryOnPath(def.command)
-          ? { name, status: "ok" as const, note: `binary '${def.command}' found` }
-          : { name, status: "binary-missing" as const, note: `'${def.command}' not on PATH` };
-      }
-      if (def.url) {
-        const probe = await probeHttp(def.url, def.headers);
-        return { name, ...probe };
-      }
-      return { name, status: "unknown" as const, note: "no command or url" };
-    }),
-  );
-  return { results, checkedAt: new Date().toISOString() };
 }
 
 // Only MCP definitions and Claude project trust are shared between accounts.
@@ -1047,6 +1027,42 @@ function codexMcpAuth(accountDir: string): Record<string, "connected" | "not-con
   } catch {
     return {};
   }
+}
+
+// Paseo 0.7 exposes every registered project, including projects with no
+// active workspace. Prefer that catalog so the MCP inventory is not tied to
+// guessed folder roots; retain the old scan for earlier hosts.
+export async function discoverProjects(
+  paseo: PluginHandlerContext["paseo"] | null,
+): Promise<Array<{ name: string; path: string }>> {
+  let projects: Array<{ name: string; path: string }> = [];
+  const projectApi = (paseo as unknown as {
+    projects?: { list(): Promise<{ entries?: Array<{ name?: string; path?: string }> } | Array<{ name?: string; path?: string }>> };
+  } | null)?.projects;
+  if (projectApi) {
+    try {
+      const result = await projectApi.list();
+      const entries = Array.isArray(result) ? result : result.entries ?? [];
+      projects = entries.flatMap((entry) => entry.path
+        ? [{ name: entry.name || basename(entry.path), path: entry.path }]
+        : []);
+    } catch {
+      // Fall through to the directory scan supported by older hosts.
+    }
+  }
+  if (projects.length === 0) {
+    const roots = [join(HOME, ".superset", "projects"), join(HOME, "projects"), join(HOME, "code")];
+    for (const root of roots) {
+      let entries: string[] = [];
+      try {
+        entries = readdirSync(root);
+      } catch {
+        continue;
+      }
+      projects.push(...entries.map((entry) => ({ name: entry, path: join(root, entry) })));
+    }
+  }
+  return projects;
 }
 
 export async function handleMcpAuth(
@@ -1120,37 +1136,8 @@ export async function handleMcpAuth(
       authStatus: codexMcpAuth(slot.dir),
     });
   }
-  // Paseo 0.7 exposes every registered project, including projects with no
-  // active workspace. Prefer that catalog so the MCP inventory is not tied to
-  // guessed folder roots; retain the old scan for earlier hosts.
   const projectServers: Array<{ project: string; name: string }> = [];
-  let projects: Array<{ name: string; path: string }> = [];
-  const projectApi = (context?.paseo as unknown as {
-    projects?: { list(): Promise<{ entries?: Array<{ name?: string; path?: string }> } | Array<{ name?: string; path?: string }>> };
-  } | undefined)?.projects;
-  if (projectApi) {
-    try {
-      const result = await projectApi.list();
-      const entries = Array.isArray(result) ? result : result.entries ?? [];
-      projects = entries.flatMap((entry) => entry.path
-        ? [{ name: entry.name || basename(entry.path), path: entry.path }]
-        : []);
-    } catch {
-      // Fall through to the directory scan supported by older hosts.
-    }
-  }
-  if (projects.length === 0) {
-    const roots = [join(HOME, ".superset", "projects"), join(HOME, "projects"), join(HOME, "code")];
-    for (const root of roots) {
-      let entries: string[] = [];
-      try {
-        entries = readdirSync(root);
-      } catch {
-        continue;
-      }
-      projects.push(...entries.map((entry) => ({ name: entry, path: join(root, entry) })));
-    }
-  }
+  const projects = await discoverProjects(context?.paseo ?? null);
   const seenProjectServers = new Set<string>();
   for (const project of projects) {
     const file = join(project.path, ".mcp.json");

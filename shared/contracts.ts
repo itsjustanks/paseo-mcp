@@ -149,18 +149,59 @@ export const mcpRename = defineRpc({
   output: z.object({ ok: z.boolean(), message: z.string() }),
 });
 
+/**
+ * Where a checked definition was found. `user` means an editor's global config
+ * (~/.claude.json, ~/.codex/config.toml, …); `project` means a `.mcp.json` in a
+ * registered Paseo project. A server can be defined at both levels.
+ */
+export const McpHealthScopeSchema = z.object({
+  level: z.enum(["user", "project"]),
+  label: z.string(), // destination label, or project name
+  configPath: z.string(),
+});
+export type McpHealthScope = z.infer<typeof McpHealthScopeSchema>;
+
+export const McpHealthStatusSchema = z.enum(["ok", "auth-required", "warn", "down", "binary-missing", "unknown"]);
+export type McpHealthStatus = z.infer<typeof McpHealthStatusSchema>;
+
 export const McpHealthSchema = z.object({
   name: z.string(),
-  status: z.enum(["ok", "auth-required", "warn", "down", "binary-missing", "unknown"]),
+  status: McpHealthStatusSchema,
   note: z.string(),
+  // Every config that defines this server. Absent on results from older hosts.
+  scopes: z.array(McpHealthScopeSchema).default([]),
 });
 export type McpHealth = z.infer<typeof McpHealthSchema>;
 
+export const McpHealthReportSchema = z.object({
+  results: z.array(McpHealthSchema),
+  checkedAt: z.string(),
+});
+export type McpHealthReport = z.infer<typeof McpHealthReportSchema>;
+
+/** Probe every server now and refresh the cached report. */
 export const mcpHealth = defineRpc({
   name: "paseo-mcp.health",
   input: z.object({}),
+  output: McpHealthReportSchema,
+});
+
+/**
+ * Last known health without probing. `report` is null until the first check
+ * (manual or background) has completed on this host.
+ */
+export const mcpHealthCached = defineRpc({
+  name: "paseo-mcp.health-cached",
+  input: z.object({}),
   output: z.object({
-    results: z.array(McpHealthSchema),
-    checkedAt: z.string(),
+    report: McpHealthReportSchema.nullable(),
+    backgroundChecks: z.boolean(),
+    intervalMinutes: z.number(),
+    nextCheckAt: z.string().nullable(),
   }),
 });
+
+/** Statuses a user has to act on; `ok` and `unknown` are not problems. */
+export function healthNeedsAttention(status: McpHealthStatus): boolean {
+  return status !== "ok" && status !== "unknown";
+}

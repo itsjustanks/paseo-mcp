@@ -1,10 +1,10 @@
 import type { PluginBeforeRequests, PluginServerContext } from "@getpaseo/plugin/server";
 import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import { INJECTION_DEFAULTS, injectionSettings, injectionTargets, type InjectionSettings } from "../shared/settings";
 import { hasInlineCredentials, jsonMcpRead, type McpDef } from "./handlers";
+import { readSettingsDocument, settingsPath } from "./settings";
 
 type CreateRequest = PluginBeforeRequests["agent.create"];
 type McpServers = NonNullable<CreateRequest["config"]["mcpServers"]>;
@@ -14,32 +14,9 @@ const TAG = "[paseo-mcp]";
 
 // ----------------------------------------------------------------- settings
 
-/**
- * The SDK has no server-side settings read, so the hook reads the document the
- * daemon persists for this plugin: $PASEO_HOME/plugin-settings/<pluginId>/<settingsId>.json,
- * an envelope `{ version, values }` written atomically by the host. Anything
- * unreadable or invalid means injection stays off; a hook must never guess.
- */
-function paseoHome(): string {
-  const raw = process.env.PASEO_HOME?.trim();
-  if (!raw) return join(homedir(), ".paseo");
-  return resolve(raw === "~" ? homedir() : raw.startsWith("~/") ? join(homedir(), raw.slice(2)) : raw);
-}
-
-export function settingsPath(pluginId = "paseo-mcp"): string {
-  return join(paseoHome(), "plugin-settings", pluginId, `${injectionSettings.id}.json`);
-}
-
-export function readInjectionSettings(path = settingsPath()): InjectionSettings {
-  try {
-    if (!existsSync(path)) return INJECTION_DEFAULTS;
-    const envelope = JSON.parse(readFileSync(path, "utf8")) as { version?: unknown; values?: unknown };
-    if (envelope.version !== injectionSettings.version) return INJECTION_DEFAULTS;
-    const parsed = injectionSettings.schema.safeParse(envelope.values ?? {});
-    return parsed.success ? parsed.data : INJECTION_DEFAULTS;
-  } catch {
-    return INJECTION_DEFAULTS;
-  }
+/** Reads the persisted injection document; see server/settings.ts for the envelope. */
+export function readInjectionSettings(path = settingsPath(injectionSettings.id)): InjectionSettings {
+  return readSettingsDocument(injectionSettings, INJECTION_DEFAULTS, path);
 }
 
 // ------------------------------------------------------------------ .mcp.json
