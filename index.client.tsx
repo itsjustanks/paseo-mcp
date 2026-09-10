@@ -104,7 +104,7 @@ export default function contribute(client: PluginClientContext) {
  * host and shifts to "12 MCP · 2 issues" when something breaks, so there is one
  * chip to look at, not two. The chip body (client/tools.tsx) reads the cached
  * health and tool reports; this registry only decides whether a chip exists.
- * Pressing it opens the MCP surface, where the Tools section lives.
+ * Pressing it opens that agent's MCP panel (0.7.0; it used to open the surface).
  */
 const CHIP_SETTINGS_POLL_MS = 60_000;
 
@@ -124,12 +124,16 @@ function registerMcpChips(client: PluginClientContext): () => void {
           agentId,
           client.addComposerPill({
             id: "mcp-chip",
-            title: "Open MCP management",
+            title: "MCP for this agent",
             workspaceId,
             agentId,
             Component: McpChip,
             onPress() {
-              client.openSurface("mcp");
+              // The panel, not the surface: the chip belongs to one agent, and
+              // the agent's MCP panel shows what that agent loads with its
+              // per-workspace switches and sign-in. "Manage all servers" inside
+              // it is the door to the full surface.
+              client.openPanel("mcp-agent", { workspaceId, agentId });
             },
           }),
         );
