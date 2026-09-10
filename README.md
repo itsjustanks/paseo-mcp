@@ -22,6 +22,7 @@ paseo plugin update paseo-mcp
 - Adds, edits, renames, removes, imports, and exports definitions with masked secrets.
 - Starts Claude or Codex OAuth in the computer's default browser and shows the fallback URL.
 - Shows each Paseo workspace's project-level `.mcp.json` servers in an **MCP connections** tab, available in both the workspace view and the Projects/Explorer view.
+- Tells each workspace what an agent started there loads (project, local and user-level servers), what it costs in child processes and memory, and warns when the count is heavy enough to exhaust the agent's context.
 - Checks every server's health in the background and flags problems per agent, per project, and per user config.
 - Syncs MCP definitions and Claude project trust to discovered account directories without copying OAuth grants.
 - Keeps backups before config writes and preserves destination-specific credentials.
@@ -83,6 +84,40 @@ Each health result carries the configs that define the server: an editor's globa
 under three headings — this project, user config, other project — and tag each project server row
 with its health. A server defined at both levels is probed once, using the editor's copy, since that
 is what the editor actually runs.
+
+## Workspace context
+
+The **MCP connections** tab and each agent's **MCP** tab lead with what an agent started in that
+workspace actually loads, counted from the same files the CLI reads:
+
+- the workspace's `.mcp.json` (read natively by Claude Code, or added by injection for the chosen
+  providers),
+- Claude Code's per-directory ("local") entries for that workspace,
+- the editor's user-level config (`~/.claude.json`, `~/.codex/config.toml`, …), which loads in
+  every workspace.
+
+A name defined at two levels is counted once. The workspace tab shows the heaviest wired editor;
+the agent tab shows the agent's own provider. Under the count: how many are **stdio** (a child
+process per agent session) versus **http** (no local process), how many need attention here versus
+elsewhere, and a **Running now** section listing the MCP server processes currently running for
+this workspace with their resident memory. That section reads the daemon host's process table
+(`ps`, `/proc` on Linux, `lsof` on macOS), attributing a server to the workspace when its agent, or
+the server process itself, works in the workspace directory. When the table cannot be read the panel
+says so rather than showing a zero.
+
+### Context-budget warning
+
+Every server's tool definitions are sent to the agent with its first prompt. Claude Code defers
+them once they pass 10% of the context window (MCP tool search, 2.1.7+); Cursor stops at 40 tools
+and warns that some models ignore more. The panel warns at **8** servers ("getting heavy", about 40
+tools at five per server) and flags **16** or more as "over budget" (about 80 tools, well over 100K
+tokens before any work, the range where Paseo-launched agents fail with "Prompt is too long"). The
+warning lists the user-level servers the agent loads, since those are the ones that can be moved into
+one project's `.mcp.json` or removed from the editor config, with a button to MCP management. The
+thresholds live in `shared/budget.ts`.
+
+Health issues under the count are split the same way: servers this workspace loads first, each with
+an **Open** button that lands on that server in MCP management, and problems elsewhere folded away.
 
 ## AgentLink integration
 
