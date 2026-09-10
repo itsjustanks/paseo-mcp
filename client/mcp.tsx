@@ -44,6 +44,7 @@ import {
 import { WorkspaceContext, pickLoad } from "./budget";
 import { HealthSummary, ServerHealthTag, healthStatus, healthWord, splitIssues, useHealth } from "./health";
 import { takePendingServer } from "./navigate";
+import { ServerTools, ToolsSection, toolsStatus, toolsWord, useTools } from "./tools";
 import {
   Button,
   Card,
@@ -669,12 +670,13 @@ function AuthRows({
 
 // -------------------------------------------------------------------- surface
 
-type SectionId = "overview" | "servers" | "accounts" | "projects" | "transfer" | "guide";
+type SectionId = "overview" | "servers" | "tools" | "accounts" | "projects" | "transfer" | "guide";
 type Filter = "all" | "gaps" | "issues";
 
 const SECTIONS: ChoiceItem<SectionId>[] = [
   { id: "overview", label: "Overview", icon: "LayoutDashboard", description: "Your next step" },
   { id: "servers", label: "Servers", icon: "Server", description: "Definitions across editors" },
+  { id: "tools", label: "Tools", icon: "Wrench", description: "What each server exposes" },
   { id: "accounts", label: "Accounts", icon: "KeyRound", description: "Sign-in and OAuth grants" },
   { id: "projects", label: "Projects", icon: "FolderCode", description: "Per-project .mcp.json" },
   { id: "transfer", label: "Import & Export", icon: "ArrowLeftRight", description: "Paste JSON, back up" },
@@ -684,6 +686,7 @@ const SECTIONS: ChoiceItem<SectionId>[] = [
 const GUIDE_STEPS: { title: string; detail: string; label: string; section: SectionId }[] = [
   { title: "Add or import servers", detail: "Type a URL or command, or paste the JSON block straight out of a README. Fences, comments and the mcpServers wrapper are handled.", label: "Open Import & Export", section: "transfer" },
   { title: "Apply to every editor", detail: "A server defined in one editor can be copied to the others. Codex and Grok store TOML; the translation happens for you and anything dropped is reported.", label: "Review servers", section: "servers" },
+  { title: "See what each server exposes", detail: "Every HTTP server is asked for its tool list the way an agent would ask. OAuth servers list after sign-in; command servers only while they run.", label: "Browse tools", section: "tools" },
   { title: "Sign in per account", detail: "HTTP servers that use OAuth need a grant for each account. Connect opens the server's own sign-in on the daemon host.", label: "Open accounts", section: "accounts" },
   { title: "Project servers", detail: "A workspace's .mcp.json is read-only here. Open MCP connections from that workspace to connect its accounts.", label: "See projects", section: "projects" },
 ];
@@ -788,6 +791,17 @@ function McpBody({ layout, host }: PluginSurfaceProps) {
   const health = useMemo(
     () => healthQuery.data ? new Map(healthQuery.data.results.map((entry) => [entry.name, entry])) : null,
     [healthQuery.data],
+  );
+  // Tool lists are cached on the host the same way; the Tools section and the
+  // server pane read them, Refresh there asks every server again.
+  const toolsQuery = useTools();
+  const toolsByName = useMemo(
+    () => toolsQuery.data ? new Map(toolsQuery.data.servers.map((entry) => [entry.name, entry])) : null,
+    [toolsQuery.data],
+  );
+  const toolTotal = useMemo(
+    () => (toolsQuery.data?.servers ?? []).reduce((sum, entry) => sum + entry.tools.length, 0),
+    [toolsQuery.data],
   );
 
   const addTargets = useTargetSet(destinations);
@@ -1074,6 +1088,7 @@ function McpBody({ layout, host }: PluginSurfaceProps) {
 
   const server = selected ? servers.find((entry) => entry.name === selected) : undefined;
   const serverHealth = server ? health?.get(server.name) : undefined;
+  const serverTools = server ? toolsByName?.get(server.name) : undefined;
   const missing = server ? destinations.filter((dest) => !server.presentIn.includes(dest.id)) : [];
   const rawRows: RawDefRow[] = rawQuery.data?.rows ?? [];
   const defRows: McpDefRow[] = defQuery.data?.rows ?? [];
@@ -1150,6 +1165,7 @@ function McpBody({ layout, host }: PluginSurfaceProps) {
         <StatCard label="Servers" value={ready ? servers.length : "—"} detail="Defined in at least one editor" />
         <StatCard label="Editors covered" value={ready ? `${coveredEditors} of ${destinations.length}` : "—"} detail="Hold every server" />
         <StatCard label="Need sign-in" value={ready ? needsAuthNames.length : "—"} detail="OAuth grants missing" />
+        <StatCard label="Tools" value={toolsQuery.data ? toolTotal : "—"} detail="Listed by servers that answered" />
         <StatCard label="Projects with MCP" value={authQuery.data ? projectGroups.length : "—"} detail="Workspaces with a .mcp.json" />
       </Grid>
       <Card>
@@ -1161,6 +1177,7 @@ function McpBody({ layout, host }: PluginSurfaceProps) {
         <Text style={t.text.body}>{nextStep.detail}</Text>
         <View style={{ flexDirection: "row", flexWrap: "wrap", gap: t.space.sm }}>
           <Button label={nextStep.label} variant="primary" onPress={nextStep.onPress} />
+          <Button label="Browse tools" onPress={() => go("tools")} />
           <Button label="Read the walkthrough" onPress={() => go("guide")} />
           <Button label="Refresh" variant="ghost" loading={matrixQuery.isFetching || healthQuery.isFetching} onPress={refreshAll} />
         </View>
@@ -1319,6 +1336,7 @@ function McpBody({ layout, host }: PluginSurfaceProps) {
           {serverHealth ? (
             <StatusPill status={healthStatus(serverHealth.status)} label={healthWord(serverHealth.status)} />
           ) : null}
+          {serverTools ? <Tag label={toolsWord(serverTools)} tone={toolsStatus(serverTools.kind)} /> : null}
         </View>
         <Facts
           items={[
@@ -1367,6 +1385,21 @@ function McpBody({ layout, host }: PluginSurfaceProps) {
           />
         </Disclosure>
       </Card>
+
+      <Section
+        title="Tools"
+        trailing={<Button label="Refresh tools" variant="ghost" loading={toolsQuery.isFetching} onPress={() => void toolsQuery.refetch()} />}
+      >
+        <Card>
+          {serverTools ? (
+            <ServerTools entry={serverTools} open />
+          ) : toolsQuery.isFetching ? (
+            <Loading label="Asking servers for their tools…" />
+          ) : (
+            <Text style={t.text.caption}>Not listed yet. Refresh tools asks every server.</Text>
+          )}
+        </Card>
+      </Section>
 
       {server.transport === "http" && authQuery.error ? (
         <ErrorText>{errorText(authQuery.error)}</ErrorText>
@@ -1980,6 +2013,8 @@ function McpBody({ layout, host }: PluginSurfaceProps) {
     ? overview
     : section === "servers"
       ? serversSection
+      : section === "tools"
+        ? <ToolsSection onOpenServer={selectServer} />
       : section === "accounts"
         ? accountsSection
         : section === "projects"
