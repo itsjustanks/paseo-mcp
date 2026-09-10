@@ -128,7 +128,7 @@ const INTERVAL_OPTIONS = HEALTH_INTERVAL_CHOICES.map((minutes) => ({
 
 export function describeHealth(values: HealthSettings): string {
   if (!values.backgroundChecks) return "Background checks are off; servers are probed only when you press Refresh";
-  return `Probing every ${values.intervalMinutes} minutes${values.showComposerPill ? ", with a composer pill while a server needs attention" : ""}`;
+  return `Probing every ${values.intervalMinutes} minutes${values.showComposerPill ? ", with an MCP chip on every agent's composer" : ""}`;
 }
 
 function HealthControls({ settings, theme }: { settings: HealthReady; theme: PluginSurfaceProps["theme"] }) {
@@ -164,8 +164,8 @@ function HealthControls({ settings, theme }: { settings: HealthReady; theme: Plu
             onValueChange={(choice) => save({ intervalMinutes: Number(choice) })}
           />
           <SettingsSwitch
-            label="Composer pill"
-            hint="Show a pill on each agent's composer while a server needs attention; press it to open MCP management"
+            label="Composer chip"
+            hint="Always show an MCP chip on each agent's composer: server count, then issues, sign-ins or the tool total; press it to open MCP management"
             value={values.showComposerPill}
             disabled={settings.saving}
             onValueChange={(showComposerPill) => save({ showComposerPill })}

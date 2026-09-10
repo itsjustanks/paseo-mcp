@@ -63,10 +63,13 @@ export const healthSettings = defineSettings({
       .max(1440)
       .default(10)
       .describe("Minutes between background checks"),
+    // Since 0.6.0 the pill is an always-on chip: server count and status, with
+    // the text shifting to the problem when there is one. The key kept its
+    // name so a 0.4 settings file still applies.
     showComposerPill: z
       .boolean()
       .default(true)
-      .describe("Show a composer pill on each agent while a server needs attention"),
+      .describe("Show an MCP chip on each agent's composer with the server count and status"),
   }),
 });
 

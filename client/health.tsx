@@ -1,7 +1,5 @@
 /** Cached MCP health, shared by the composer pill, the panels, and the surface. */
-import type { PluginComposerPillProps } from "@getpaseo/plugin/client";
-import { useRpc, useWorkspace } from "@getpaseo/plugin/client";
-import { Icon } from "@getpaseo/plugin/client/react-native";
+import { useRpc } from "@getpaseo/plugin/client";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import React, { useCallback, useMemo } from "react";
 import { Text, View } from "react-native";
@@ -104,34 +102,8 @@ function plural(count: number, word: string): string {
   return `${count} ${word}${count === 1 ? "" : "s"}`;
 }
 
-// ------------------------------------------------------------------- pill
-
-/**
- * Composer pill body. The client entry only registers the pill while the cached
- * report has at least one issue, so a healthy host shows nothing rather than a
- * permanent "0 problems" badge on every agent; this component covers the brief
- * window between a fix landing and the entry removing the pill.
- */
-export function HealthPill({ theme, workspaceId }: PluginComposerPillProps) {
-  const workspace = useWorkspace(workspaceId, ({ directory }) => ({ directory }));
-  const { data } = useHealth();
-  const { issues, project } = useMemo(() => splitIssues(data, workspace?.directory ?? ""), [data, workspace]);
-  const calm = issues.length === 0;
-  const color = calm ? theme.colors.foregroundMuted : theme.colors.statusWarning;
-  const label = calm
-    ? "MCP healthy"
-    : project.length > 0
-      ? `${plural(issues.length, "MCP issue")} · ${project.length} in this project`
-      : plural(issues.length, "MCP issue");
-  return (
-    <>
-      <Icon name={calm ? "Plug" : "TriangleAlert"} size={14} color={color} />
-      <Text numberOfLines={1} style={{ color, flexShrink: 1 }}>
-        {label}
-      </Text>
-    </>
-  );
-}
+// The composer chip moved to client/tools.tsx (McpChip) in 0.6.0: it is always
+// on and reads both the health and the tool reports.
 
 // ---------------------------------------------------------------- panels
 

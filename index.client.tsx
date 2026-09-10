@@ -1,10 +1,10 @@
 import type { PluginClientContext } from "@getpaseo/plugin/client";
 import { McpAgentPanel } from "./client/agent";
-import { HealthPill } from "./client/health";
 import { McpSurface, McpWorkspacePanel } from "./client/mcp";
 import { registerSurfaceOpener } from "./client/navigate";
 import { HealthSettingsScreen, InjectionSettingsScreen } from "./client/settings";
-import { healthNeedsAttention, mcpHealthCached } from "./shared/contracts";
+import { McpChip } from "./client/tools";
+import { mcpHealthCached } from "./shared/contracts";
 
 export default function contribute(client: PluginClientContext) {
   // Panels have no openSurface of their own; lend them this one.
@@ -89,29 +89,31 @@ export default function contribute(client: PluginClientContext) {
       openSurface("mcp");
     },
   });
-  const removePills = registerHealthPills(client);
+  const removeChips = registerMcpChips(client);
   return () => {
-    removePills();
+    removeChips();
     registerSurfaceOpener(null);
   };
 }
 
-// ------------------------------------------------------------------ pill
+// ------------------------------------------------------------------ chip
 
 /**
- * One pill per live agent, but only while the host's cached health report
- * lists a server that needs attention and the setting is on. A pill that reads
- * "0 problems" on every agent forever is noise, so a healthy host has no pill
- * at all; it appears when something breaks and goes away once it is fixed.
- * Pressing it opens the MCP surface, whose Servers tab already has the issues
- * filter and the sign-in rows.
+ * One always-on chip per live agent while the setting is on. It replaces the
+ * 0.4 break-only pill: the same slot now reads "12 MCP · 340 tools" on a calm
+ * host and shifts to "12 MCP · 2 issues" when something breaks, so there is one
+ * chip to look at, not two. The chip body (client/tools.tsx) reads the cached
+ * health and tool reports; this registry only decides whether a chip exists.
+ * Pressing it opens the MCP surface, where the Tools section lives.
  */
-const HEALTH_PILL_POLL_MS = 60_000;
+const CHIP_SETTINGS_POLL_MS = 60_000;
 
-function registerHealthPills(client: PluginClientContext): () => void {
+function registerMcpChips(client: PluginClientContext): () => void {
   const agents = new Map<string, string>(); // agentId -> workspaceId
   const pills = new Map<string, () => void>();
-  let wanted = false;
+  // Assume on until the host says otherwise: the setting defaults to on, and a
+  // chip that appears a minute late reads worse than one that blinks off.
+  let wanted = true;
   let stopped = false;
 
   const reconcile = () => {
@@ -121,11 +123,11 @@ function registerHealthPills(client: PluginClientContext): () => void {
         pills.set(
           agentId,
           client.addComposerPill({
-            id: "mcp-health",
+            id: "mcp-chip",
             title: "Open MCP management",
             workspaceId,
             agentId,
-            Component: HealthPill,
+            Component: McpChip,
             onPress() {
               client.openSurface("mcp");
             },
@@ -146,9 +148,7 @@ function registerHealthPills(client: PluginClientContext): () => void {
   const poll = async () => {
     try {
       const cached = await client.rpc(mcpHealthCached, {});
-      wanted =
-        cached.showComposerPill &&
-        (cached.report?.results ?? []).some((entry) => healthNeedsAttention(entry.status));
+      wanted = cached.showComposerPill;
     } catch {
       // Host unreachable: keep whatever the last poll decided.
     }
@@ -166,7 +166,7 @@ function registerHealthPills(client: PluginClientContext): () => void {
     reconcile();
   });
   void poll();
-  const timer = setInterval(() => void poll(), HEALTH_PILL_POLL_MS);
+  const timer = setInterval(() => void poll(), CHIP_SETTINGS_POLL_MS);
 
   return () => {
     stopped = true;
