@@ -801,7 +801,32 @@ export async function handleMcpApply(
   };
 }
 
-export async function handleMcpRemove({ name, targets }: { name: string; targets: string[] }, { paseo }: PluginHandlerContext) {
+/**
+ * Take one server out of a project's `.mcp.json`. The file is backed up, the
+ * rest of it is kept byte-for-byte in meaning, and an emptied `mcpServers` is
+ * left as `{}` rather than the file deleted: the repo may expect the file to
+ * exist. The rewritten file is read back and must parse.
+ */
+export function removeFromProjectFile(path: string, name: string): "removed" | "absent" {
+  if (!existsSync(path)) throw new Error("file does not exist");
+  const config = readJson(path);
+  if (config === null) throw new Error("not valid JSON; refusing to overwrite it");
+  const servers = (config.mcpServers as Record<string, McpDef> | undefined) ?? {};
+  if (!(name in servers)) return "absent";
+  delete servers[name];
+  config.mcpServers = servers;
+  backupFile(path);
+  writeJsonAtomic(path, config);
+  const after = readJson(path);
+  if (after === null) throw new Error("written file does not parse; restore it from the .bak-paseo-mcp copy beside it");
+  if (name in ((after.mcpServers as Record<string, unknown> | undefined) ?? {})) throw new Error("written file still defines the server");
+  return "removed";
+}
+
+export async function handleMcpRemove(
+  { name, targets = [], projectFiles = [] }: { name: string; targets?: string[]; projectFiles?: string[] },
+  { paseo }: PluginHandlerContext,
+) {
   const destinations = await buildDestinations(paseo);
   const removed: string[] = [];
   const skipped: string[] = [];
@@ -818,6 +843,24 @@ export async function handleMcpRemove({ name, targets }: { name: string; targets
       skipped.push(`${dest.label}: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
+  if (projectFiles.length > 0) {
+    // Only a registered project's own `.mcp.json` may be written: the client
+    // names files it learned from this handler's sibling, never an arbitrary path.
+    const known = new Set((await discoverProjects(paseo)).map((project) => join(project.path, ".mcp.json")));
+    for (const path of new Set(projectFiles)) {
+      if (!known.has(path)) {
+        skipped.push(`${path}: not a registered project's .mcp.json`);
+        continue;
+      }
+      try {
+        const outcome = removeFromProjectFile(path, name);
+        if (outcome === "removed") removed.push(path);
+        else skipped.push(`${path}: does not define '${name}'`);
+      } catch (error) {
+        skipped.push(`${path}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+  }
   return {
     ok: removed.length > 0,
     message: [
@@ -826,6 +869,8 @@ export async function handleMcpRemove({ name, targets }: { name: string; targets
         : "nothing removed",
       ...skipped,
     ].join("\n"),
+    removed,
+    skipped,
   };
 }
 
@@ -1135,17 +1180,17 @@ export async function handleMcpAuth(
       authStatus: codexMcpAuth(slot.dir),
     });
   }
-  const projectServers: Array<{ project: string; name: string }> = [];
+  const projectServers: Array<{ project: string; name: string; path: string }> = [];
   const projects = await discoverProjects(context?.paseo ?? null);
   const seenProjectServers = new Set<string>();
   for (const project of projects) {
     const file = join(project.path, ".mcp.json");
     if (!existsSync(file)) continue;
     for (const name of Object.keys(jsonMcpRead(file))) {
-      const key = `${project.name}\0${name}`;
+      const key = `${file}\0${name}`;
       if (seenProjectServers.has(key)) continue;
       seenProjectServers.add(key);
-      projectServers.push({ project: project.name, name });
+      projectServers.push({ project: project.name, name, path: file });
     }
   }
   projectServers.sort((a, b) => a.project.localeCompare(b.project) || a.name.localeCompare(b.name));
