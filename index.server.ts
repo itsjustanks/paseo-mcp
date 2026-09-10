@@ -10,6 +10,7 @@ import {
   handleMcpRename,
   handleMcpSync,
 } from "./server/handlers";
+import { handleMcpAgentServers, handleMcpSetEnabled } from "./server/enabled";
 import { handleMcpHealth, handleMcpHealthCached } from "./server/health";
 import { registerHooks } from "./server/hooks";
 import { runShutdown, runStart } from "./server/lifecycle";
@@ -30,6 +31,7 @@ import { handleMcpTools, handleMcpToolsCached } from "./server/tools";
 import { handleMcpWorkspace } from "./server/workspace";
 import {
   mcpAdd,
+  mcpAgentServers,
   mcpApply,
   mcpAuth,
   mcpDefAll,
@@ -39,6 +41,7 @@ import {
   mcpMatrix,
   mcpRemove,
   mcpRename,
+  mcpSetEnabled,
   mcpSync,
   mcpTools,
   mcpToolsCached,
@@ -77,6 +80,8 @@ export default function contribute(server: PluginServerContext) {
   server.handle(mcpTools, handleMcpTools);
   server.handle(mcpToolsCached, handleMcpToolsCached);
   server.handle(mcpWorkspace, handleMcpWorkspace);
+  server.handle(mcpAgentServers, handleMcpAgentServers);
+  server.handle(mcpSetEnabled, handleMcpSetEnabled);
   server.handle(mcpRawGet, handleMcpRawGet);
   server.handle(mcpRawPut, handleMcpRawPut);
   server.handle(mcpImportParse, handleMcpImportParse);

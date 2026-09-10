@@ -58,10 +58,22 @@ export const mcpApply = defineRpc({
   output: z.object({ ok: z.boolean(), message: z.string() }),
 });
 
+/**
+ * Remove one server. `targets` are editor destination ids; `projectFiles` are
+ * absolute paths of project `.mcp.json` files (scope "everywhere"), each of
+ * which must be a registered project's file, is backed up first, and is left as
+ * `{"mcpServers":{}}` rather than deleted. At least one of the two is needed.
+ * `removed`/`skipped` carry the per-target outcome so a partial failure shows.
+ */
 export const mcpRemove = defineRpc({
   name: "paseo-mcp.remove",
-  input: z.object({ name: z.string(), targets: z.array(z.string()).min(1) }),
-  output: z.object({ ok: z.boolean(), message: z.string() }),
+  input: z.object({ name: z.string(), targets: z.array(z.string()).default([]), projectFiles: z.array(z.string()).default([]) }),
+  output: z.object({
+    ok: z.boolean(),
+    message: z.string(),
+    removed: z.array(z.string()).default([]),
+    skipped: z.array(z.string()).default([]),
+  }),
 });
 
 export const McpAuthAccountSchema = z.object({
@@ -80,7 +92,9 @@ export const mcpAuth = defineRpc({
   input: z.object({}),
   output: z.object({
     accounts: z.array(McpAuthAccountSchema),
-    projectServers: z.array(z.object({ project: z.string(), name: z.string() })),
+    // `path` is the `.mcp.json` file itself, so a removal can name it. Absent
+    // on reports from older hosts.
+    projectServers: z.array(z.object({ project: z.string(), name: z.string(), path: z.string().optional() })),
   }),
 });
 
@@ -111,6 +125,59 @@ export const WorkspaceProfileSchema = z.object({
   project: z.array(ProfileServerSchema),
   projectConfigPath: z.string(),
   scopes: z.array(ProfileScopeSchema),
+});
+
+// ------------------------------------------------------------ agent servers
+
+export const LoadScopeSchema = z.enum(["project", "local", "user"]);
+
+export const EnabledStateSchema = z.enum(["enabled", "disabled", "undecided"]);
+
+export const LeverSchema = z.enum(["disabledMcpServers", "mcpjsonServers", "injection", "none"]);
+
+/**
+ * One server an agent of a given provider loads in a workspace, with the one
+ * per-workspace switch its editor actually has for it. `enabled.writable` is
+ * false when the config has no such switch; `reason` then says why, so the
+ * panel can explain instead of offering a toggle that would do nothing. See
+ * shared/enabled.ts for the levers.
+ */
+export const AgentServerSchema = z.object({
+  name: z.string(),
+  transport: TransportSchema,
+  detail: z.string(),
+  scope: LoadScopeSchema,
+  configPath: z.string(),
+  inlineCredentials: z.boolean(),
+  enabled: z.object({ state: EnabledStateSchema, writable: z.boolean(), lever: LeverSchema, reason: z.string() }),
+});
+export type AgentServer = z.infer<typeof AgentServerSchema>;
+
+/**
+ * What one agent (provider) loads in one workspace, with the on/off state per
+ * server read fresh from the editor's config on every call, so a toggle made
+ * from `/mcp` in a terminal shows here on the next read.
+ */
+export const mcpAgentServers = defineRpc({
+  name: "paseo-mcp.agent-servers",
+  input: z.object({ workspaceId: z.string().min(1), providerId: z.string() }),
+  output: z.object({
+    /** The directory Claude Code keys the project entry by: the workspace's own directory. */
+    directory: z.string(),
+    scope: z.object({ id: z.string(), label: z.string(), provider: z.string(), providerId: z.string(), configPath: z.string() }).nullable(),
+    projectIncluded: z.boolean(),
+    projectNote: z.string(),
+    servers: z.array(AgentServerSchema),
+    /** The account whose grants the sign-in rows read, when the scope has one. */
+    account: McpAuthAccountSchema.nullable(),
+  }),
+});
+
+/** Flip the editor's per-workspace switch for one server an agent loads; refuses where the config has none. */
+export const mcpSetEnabled = defineRpc({
+  name: "paseo-mcp.set-enabled",
+  input: z.object({ workspaceId: z.string().min(1), providerId: z.string(), name: z.string().min(1), enabled: z.boolean() }),
+  output: z.object({ ok: z.boolean(), message: z.string(), state: EnabledStateSchema.optional() }),
 });
 
 /** Running MCP server processes attributed to the workspace. See shared/processes.ts. */
@@ -346,9 +413,9 @@ export function chipLabel(
  * Statuses a user has to act on. `ok` and `unknown` are not problems, and
  * neither is `auth-required`: an OAuth server answers every anonymous probe
  * with 401 whether or not the editor holds a grant, so it is the resting state
- * of a working server, shown as informational rather than as an issue. The
- * Accounts tab, which reads each editor's own grant list, is where a missing
- * sign-in is reported.
+ * of a working server, shown as informational rather than as an issue. Each
+ * server card's sign-in rows, which read the editor's own grant list, are
+ * where a missing sign-in is reported.
  */
 export function healthNeedsAttention(status: McpHealthStatus): boolean {
   return status !== "ok" && status !== "unknown" && status !== "auth-required";

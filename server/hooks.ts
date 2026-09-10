@@ -2,7 +2,9 @@ import type { PluginBeforeRequests, PluginServerContext } from "@getpaseo/plugin
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
+import { injectionDisabledFor } from "../shared/enabled";
 import { INJECTION_DEFAULTS, injectionSettings, injectionTargets, type InjectionSettings } from "../shared/settings";
+import { readInjectionStore } from "./enabled";
 import { hasInlineCredentials, jsonMcpRead, type McpDef } from "./handlers";
 import { readSettingsDocument, settingsPath } from "./settings";
 
@@ -65,12 +67,18 @@ export function planInjection(
   definitions: Record<string, McpDef>,
   existing: McpServers,
   settings: InjectionSettings,
+  disabled: readonly string[] = [],
 ): { injected: McpServers; skipped: string[] } {
   const injected: McpServers = {};
   const skipped: string[] = [];
   for (const [name, def] of Object.entries(definitions)) {
     if (name in existing) {
       skipped.push(`${name} (already on the agent)`);
+      continue;
+    }
+    // Turned off for this workspace from the MCP panel (shared/enabled.ts).
+    if (disabled.includes(name)) {
+      skipped.push(`${name} (off for this workspace)`);
       continue;
     }
     if (settings.skipInlineCredentialServers && hasInlineCredentials(def)) {
@@ -99,7 +107,8 @@ export function injectWorkspaceServers(request: CreateRequest): CreateRequest {
     const configPath = workspaceMcpJson(cwd);
     if (!configPath) return request;
     const existing = request.config.mcpServers ?? {};
-    const { injected, skipped } = planInjection(jsonMcpRead(configPath), existing, settings);
+    const disabled = injectionDisabledFor(readInjectionStore(), cwd);
+    const { injected, skipped } = planInjection(jsonMcpRead(configPath), existing, settings, disabled);
     const count = Object.keys(injected).length;
     console.log(
       `${TAG} injected ${count} servers into ${provider} agent` +
