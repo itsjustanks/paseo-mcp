@@ -7,6 +7,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { Linking, Text, View } from "react-native";
 import { z } from "zod";
 import {
+  healthNeedsAttention,
   mcpAdd,
   mcpApply,
   mcpAuth,
@@ -40,7 +41,9 @@ import {
   type LoginSession,
   type RawDefRow,
 } from "../shared/mcpjson";
-import { HealthSummary, ServerHealthTag, healthStatus, healthWord, useHealth } from "./health";
+import { WorkspaceContext, pickLoad } from "./budget";
+import { HealthSummary, ServerHealthTag, healthStatus, healthWord, splitIssues, useHealth } from "./health";
+import { takePendingServer } from "./navigate";
 import {
   Button,
   Card,
@@ -875,6 +878,11 @@ function McpBody({ layout, host }: PluginSurfaceProps) {
     setRevealed(false);
     setRenameTo("");
   };
+  // A panel's problem row can open this surface asking for one server.
+  useEffect(() => {
+    const requested = takePendingServer();
+    if (requested) selectServer(requested);
+  }, []);
   const go = (next: SectionId, options: { server?: string | null; filter?: Filter; mode?: Mode } = {}) => {
     setSection(next);
     if (options.server !== undefined) {
@@ -2023,10 +2031,17 @@ export function WorkspaceBody({
   workspaceId,
   caption = "project MCP servers and sign-in",
   intro,
-}: Pick<PluginWorkspacePanelProps, "host" | "workspaceId"> & { caption?: string; intro?: React.ReactNode }) {
+  providerId,
+}: Pick<PluginWorkspacePanelProps, "host" | "workspaceId"> & {
+  caption?: string;
+  intro?: React.ReactNode;
+  /** The agent panel names its provider so the load shown is that agent's, not the heaviest editor's. */
+  providerId?: string;
+}) {
   const t = useTokens();
   const toast = useToast();
   const workspace = useWorkspace(workspaceId, ({ name, directory }) => ({ name, directory }));
+  const healthQuery = useHealth();
   const callWorkspace = useRpc(mcpWorkspace);
   const callLogin = useRpc(mcpLogin);
   const callLoginStatus = useRpc(mcpLoginStatus);
@@ -2108,6 +2123,21 @@ export function WorkspaceBody({
   });
 
   const data = workspaceQuery.data;
+  // What an agent here loads, by name, so health issues can be split into
+  // "this workspace" and "elsewhere" on the same basis as the budget card.
+  const loaded = useMemo(() => {
+    if (!data?.profile) return null;
+    const names = new Set((pickLoad(data, providerId)?.servers ?? []).map((entry) => entry.name));
+    for (const entry of data.profile.project) names.add(entry.name);
+    return names;
+  }, [data, providerId]);
+  const attention = useMemo(() => {
+    if (!healthQuery.data) return null;
+    const directory = workspace?.directory ?? "";
+    const { issues, project } = splitIssues(healthQuery.data, directory);
+    const here = issues.filter((entry) => healthNeedsAttention(entry.status) && (loaded ? loaded.has(entry.name) : project.includes(entry))).length;
+    return { here, elsewhere: issues.length - here };
+  }, [healthQuery.data, loaded, workspace]);
   const server: ProjectMcpServer | undefined = selected
     ? data?.servers.find((entry) => entry.name === selected)
     : undefined;
@@ -2118,6 +2148,7 @@ export function WorkspaceBody({
     : [];
   const refresh = () => {
     void workspaceQuery.refetch();
+    void healthQuery.refetch();
     refreshLogins();
   };
   const pill = !workspace
@@ -2250,9 +2281,10 @@ export function WorkspaceBody({
           pill={<StatusPill status={pill.status} label={pill.label} />}
         />
         {intro}
-        <HealthSummary directory={workspace?.directory ?? ""} />
+        {data && !server ? <WorkspaceContext data={data} providerId={providerId} attention={attention} /> : null}
+        <HealthSummary directory={workspace?.directory ?? ""} names={loaded} />
         <View style={{ flexDirection: "row" }}>
-          <Button label="Refresh" variant="ghost" onPress={refresh} />
+          <Button label="Refresh" variant="ghost" loading={workspaceQuery.isFetching || healthQuery.isFetching} onPress={refresh} />
         </View>
       </View>
       <Screen t={t} paddingTop={4}>{body}</Screen>

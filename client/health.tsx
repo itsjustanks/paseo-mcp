@@ -13,7 +13,8 @@ import {
   type McpHealth,
   type McpHealthReport,
 } from "../shared/contracts";
-import { Facts, Notice, Tag, useTokens, type Status } from "./ui";
+import { canOpenMcp, openMcp } from "./navigate";
+import { Button, Disclosure, Facts, Notice, Tag, useTokens, type Status } from "./ui";
 
 export const HEALTH_QUERY_KEY = ["paseo-mcp", "health"] as const;
 
@@ -134,39 +135,50 @@ export function HealthPill({ theme, workspaceId }: PluginComposerPillProps) {
 // ---------------------------------------------------------------- panels
 
 /**
- * One block under a workspace or agent panel header: which servers need
- * attention, and whether the fix belongs in this project's `.mcp.json` or in
- * the user's editor config. Silent while everything is healthy.
+ * One block under a workspace or agent panel header: the servers an agent
+ * here would load that need attention, each one press from its management
+ * page, with problems elsewhere folded away. `names` is what an agent in this
+ * workspace loads (see shared/budget.ts); without it, "here" falls back to
+ * definitions scoped to the directory. Silent while everything is healthy.
  */
-export function HealthSummary({ directory }: { directory: string }) {
+export function HealthSummary({ directory, names }: { directory: string; names: Set<string> | null }) {
   const t = useTokens();
   const { data, error } = useHealth();
   const { issues, project, user, elsewhere } = useMemo(() => splitIssues(data, directory), [data, directory]);
   if (error && !data) return <Text style={t.text.caption}>Health check unavailable.</Text>;
   if (!data || issues.length === 0) return null;
-  const rows = (entries: McpHealth[], where: string) =>
+  const here = issues.filter((entry) => (names ? names.has(entry.name) : project.includes(entry)));
+  const away = issues.filter((entry) => !here.includes(entry));
+  const where = (entry: McpHealth) =>
+    project.includes(entry) ? "this project" : user.includes(entry) ? "user config" : elsewhere.includes(entry) ? "other project" : "";
+  const rows = (entries: McpHealth[]) =>
     entries.map((entry) => (
-      <View key={`${where}-${entry.name}`} style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: t.space.sm }}>
+      <View key={entry.name} style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: t.space.sm }}>
         <Text style={t.text.bodyStrong}>{entry.name}</Text>
         <Tag label={healthWord(entry.status)} tone={healthStatus(entry.status)} />
-        <Tag label={where} />
-        {entry.note ? <Text style={t.text.caption}>{entry.note}</Text> : null}
+        <Tag label={where(entry)} />
+        {entry.note ? <Text style={[t.text.caption, { flexShrink: 1 }]}>{entry.note}</Text> : null}
+        {canOpenMcp() ? <Button label="Open" variant="ghost" onPress={() => openMcp(entry.name)} /> : null}
       </View>
     ));
+  const tone: Status = here.some((entry) => healthStatus(entry.status) === "error") ? "error" : here.length > 0 ? "attention" : "neutral";
   return (
-    <Notice tone={issues.some((entry) => healthStatus(entry.status) === "error") ? "error" : "attention"}>
+    <Notice tone={tone}>
       <View style={{ gap: t.space.sm }}>
-        <Text style={t.text.body}>{`${plural(issues.length, "MCP server")} need attention`}</Text>
-        {rows(project, "this project")}
-        {rows(user.filter((entry) => !project.includes(entry)), "user config")}
-        {rows(elsewhere, "other project")}
-        <Facts
-          items={[
-            project.length ? { value: `${project.length} in this project's .mcp.json` } : null,
-            user.length ? { value: `${user.length} in editor configs (every workspace)` } : null,
-            { value: `checked ${new Date(data.checkedAt).toLocaleString()}` },
-          ]}
-        />
+        <Text style={t.text.body}>
+          {here.length > 0
+            ? `${plural(here.length, "MCP server")} this workspace loads ${here.length === 1 ? "needs" : "need"} attention`
+            : `No MCP problems here · ${plural(away.length, "issue")} elsewhere`}
+        </Text>
+        {rows(here)}
+        {away.length > 0 ? (
+          here.length > 0 ? (
+            <Disclosure title={`${plural(away.length, "issue")} elsewhere`}>{rows(away)}</Disclosure>
+          ) : (
+            rows(away)
+          )
+        ) : null}
+        <Facts items={[{ value: `checked ${new Date(data.checkedAt).toLocaleString()}` }]} />
       </View>
     </Notice>
   );

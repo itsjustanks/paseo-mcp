@@ -11,10 +11,10 @@ Object.assign(window, { __fixtureCalls: calls, __toasts: toasts });
 
 const HOME = "/home/demo";
 const destinations = [
-  { id: `${HOME}/.claude.json`, label: "Claude · demo@example.com (primary)", provider: "claude", account: "demo@example.com", configPath: `${HOME}/.claude.json`, format: "json-mcp" },
-  { id: `${HOME}/.codex/config.toml`, label: "Codex · demo@example.com (primary)", provider: "codex", account: "demo@example.com", configPath: `${HOME}/.codex/config.toml`, format: "toml-mcp" },
-  { id: `${HOME}/.agent-link/claude/work/.claude.json`, label: "Claude · work@example.com (AgentLink)", provider: "claude", account: "work@example.com", configPath: `${HOME}/.agent-link/claude/work/.claude.json`, format: "json-mcp" },
-  { id: `${HOME}/.kimi/mcp.json`, label: "Kimi", provider: "kimi", account: "", configPath: `${HOME}/.kimi/mcp.json`, format: "json-mcp" },
+  { id: `${HOME}/.claude.json`, label: "Claude · demo@example.com (primary)", provider: "claude", providerId: "claude", account: "demo@example.com", configPath: `${HOME}/.claude.json`, format: "json-mcp" },
+  { id: `${HOME}/.codex/config.toml`, label: "Codex · demo@example.com (primary)", provider: "codex", providerId: "codex", account: "demo@example.com", configPath: `${HOME}/.codex/config.toml`, format: "toml-mcp" },
+  { id: `${HOME}/.agent-link/claude/work/.claude.json`, label: "Claude · work@example.com (AgentLink)", provider: "claude", providerId: "claude-work", account: "work@example.com", configPath: `${HOME}/.agent-link/claude/work/.claude.json`, format: "json-mcp" },
+  { id: `${HOME}/.kimi/mcp.json`, label: "Kimi", provider: "kimi", providerId: "kimi", account: "", configPath: `${HOME}/.kimi/mcp.json`, format: "json-mcp" },
 ];
 const [claude, codex, work, kimi] = destinations.map((d) => d.id);
 const servers = [
@@ -47,6 +47,23 @@ const projectServers = [
   { project: "investorkit-context", name: "azure-devops" },
   { project: "unfold-mobile", name: "expo" },
 ];
+// ?heavy makes the primary Claude config carry 25 user-level servers, the
+// configuration that produced "Prompt is too long" on a real host.
+const heavy = params.has("heavy");
+const profileServers = (ids: string[]) => servers.filter((s) => ids.some((id) => s.presentIn.includes(id))).map((s) => ({ name: s.name, transport: s.transport }));
+const padded = (list: { name: string; transport: string }[]) => heavy ? [...list, ...Array.from({ length: 25 - list.length }, (_, i) => ({ name: `extra-${i + 1}`, transport: i % 5 === 0 ? "stdio" : "http" }))] : list;
+const profile = {
+  project: [{ name: "supabase", transport: "stdio" }, { name: "jam", transport: "http" }],
+  projectConfigPath: `${HOME}/projects/data-glue/.mcp.json`,
+  scopes: destinations.map((d) => ({
+    id: d.id, label: d.label, provider: d.provider, providerId: d.providerId, configPath: d.configPath,
+    servers: d.id === claude ? padded(profileServers([claude])) : profileServers([d.id]),
+    local: d.id === claude ? [{ name: "zapier", transport: "http" }] : [],
+  })),
+};
+const processes = params.has("no-procs")
+  ? { available: false, reason: "process table not readable on win32" }
+  : { available: true, checkedAt, observed: { agents: 2, processes: 6, rssKb: 333996, servers: [{ name: "playwright", processes: 4, rssKb: 210664 }, { name: "supabase", processes: 2, rssKb: 123332 }], unmatchable: [] } };
 const sessions = [
   { key: `claude|${HOME}/.claude||jam`, server: "jam", account: "demo@example.com", provider: "claude", workspaceId: "", state: "waiting", url: "https://auth.jam.dev/authorize?client_id=demo&state=abc", callbackUrl: "http://localhost:53021/callback", browserOpened: true, expectsRedirect: true, message: "Waiting for the browser to return.", startedAt: Date.now() - 20_000 },
 ];
@@ -92,7 +109,7 @@ async function call(contract: any, input: any) {
     case "import-apply": return { ok: true, written: input.servers.map((s: any) => `${s.name} → ${input.targets.length} editors`), skipped: [], issues: [], message: `Imported ${input.servers.length} servers.` };
     case "export": return { text: JSON.stringify({ mcpServers: Object.fromEntries(servers.map((s) => [s.name, definition(s.name)])) }, null, 2), filename: input.scope === "all" ? "mcp-export.json" : `${input.name}.json`, containsSecrets: Boolean(input.reveal) };
     case "export-file": return { ok: true, path: `${HOME}/Downloads/${input.filename}`, message: `Saved to ${HOME}/Downloads/${input.filename}.` };
-    case "workspace": return { workspace: { id: "ws-1", name: "data-glue", directory: `${HOME}/projects/data-glue`, projectRootPath: `${HOME}/projects/data-glue` }, configPath: `${HOME}/projects/data-glue/.mcp.json`, servers: [{ name: "supabase", transport: "stdio", detail: "npx -y @supabase/mcp-server", authStyle: "inline-credentials" }, { name: "jam", transport: "http", detail: "https://mcp.jam.dev/mcp", authStyle: "oauth-or-none" }], accounts };
+    case "workspace": return { workspace: { id: "ws-1", name: "data-glue", directory: `${HOME}/projects/data-glue`, projectRootPath: `${HOME}/projects/data-glue` }, configPath: `${HOME}/projects/data-glue/.mcp.json`, servers: [{ name: "supabase", transport: "stdio", detail: "npx -y @supabase/mcp-server", authStyle: "inline-credentials" }, { name: "jam", transport: "http", detail: "https://mcp.jam.dev/mcp", authStyle: "oauth-or-none" }], accounts, profile, injection: { injectWorkspaceServers: !params.has("inject-off"), providers: ["codex"], skipInlineCredentialServers: true }, processes };
     case "sync": return { ok: true, log: "Copied 6 server definitions into 1 AgentLink slot.\nTrusted projects: 3 copied.\nOAuth grants: untouched." };
     case "login": return { ok: true, session: { ...sessions[0], server: input.server, account: input.account, provider: input.provider, workspaceId: input.workspaceId ?? "" }, message: `Sign-in started for ${input.server}.` };
     case "login-complete": return { ok: true, message: "Connection finished." };

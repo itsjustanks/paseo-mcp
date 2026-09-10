@@ -2,10 +2,13 @@ import type { PluginClientContext } from "@getpaseo/plugin/client";
 import { McpAgentPanel } from "./client/agent";
 import { HealthPill } from "./client/health";
 import { McpSurface, McpWorkspacePanel } from "./client/mcp";
+import { registerSurfaceOpener } from "./client/navigate";
 import { HealthSettingsScreen, InjectionSettingsScreen } from "./client/settings";
 import { healthNeedsAttention, mcpHealthCached } from "./shared/contracts";
 
 export default function contribute(client: PluginClientContext) {
+  // Panels have no openSurface of their own; lend them this one.
+  registerSurfaceOpener((id) => client.openSurface(id));
   client.addSurface("mcp", McpSurface);
   client.addWorkspacePanel({
     id: "mcp-connections",
@@ -86,7 +89,11 @@ export default function contribute(client: PluginClientContext) {
       openSurface("mcp");
     },
   });
-  return registerHealthPills(client);
+  const removePills = registerHealthPills(client);
+  return () => {
+    removePills();
+    registerSurfaceOpener(null);
+  };
 }
 
 // ------------------------------------------------------------------ pill

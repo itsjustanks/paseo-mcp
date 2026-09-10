@@ -3,7 +3,10 @@ import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { McpAgentPanel } from "../../client/agent";
 import { McpSurface, McpWorkspacePanel } from "../../client/mcp";
+import { registerSurfaceOpener } from "../../client/navigate";
 import { HealthSettingsScreen, InjectionSettingsScreen } from "../../client/settings";
+// Panels open the surface through the entry's opener; here it just records the request.
+registerSurfaceOpener((id) => { (window as any).__opened = [...((window as any).__opened ?? []), id]; console.info("[open-surface]", id); });
 const queryClient = new QueryClient();
 const params = new URLSearchParams(location.search);
 const light = !params.has("dark");

@@ -48,14 +48,16 @@ function AgentIntro({ agentId }: { agentId: string }) {
 
 export function McpAgentPanel(props: PluginAgentPanelProps) {
   const t = useUi(props.theme, props.layout.compact);
+  const provider = useAgent(props.agentId, ({ provider }) => provider);
   return (
     <TokensProvider value={t}>
       <WorkspaceBody
         key={`${props.workspaceId}:${props.agentId}`}
         host={props.host}
         workspaceId={props.workspaceId}
-        caption="MCP servers available to this agent's workspace"
+        caption="MCP servers this agent loads"
         intro={<AgentIntro agentId={props.agentId} />}
+        providerId={provider ?? undefined}
       />
     </TokensProvider>
   );
