@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.6.0 — 2026-09-10
+
+### Tools each server exposes
+- New **Tools** section on the MCP surface, and a **Tools** card on every server's page: what each server would hand an agent, listed the way Claude Code's `/mcp` view lists it. Each tool shows its name, title, description, and the arguments it takes (required ones starred). Per server: the tool count, `serverInfo.name`/`version` and the protocol version from the handshake.
+- The host asks every HTTP server with the same two requests a client sends, `initialize` then `tools/list`, six servers at a time, reading both plain JSON and SSE-framed answers, and echoing `mcp-session-id` when the server issues one. The result is cached on the host (one in-flight pass shared by concurrent callers, refreshed on a timer at six times the health interval), read cheaply through the new `paseo-mcp.tools-cached` RPC; **Refresh** forces a real pass through `paseo-mcp.tools`.
+- Honest about what cannot be listed, and never invents a list. An OAuth server answers an anonymous probe with 401: shown calmly as **sign in to list** (18 of 42 servers on one real host). A stdio server would have to be run to be asked, and the plugin does not spawn anything: shown as **runs on demand** with the command name (7 of 42). A URL that lands on a web page is **not listed** with a path hint (1 of 42). The remaining 16 listed 501 tools between them.
+- Tool names and descriptions are server-controlled text: flattened to one line, stripped of control characters, capped, and rendered on a single line. Notes go through the same redaction as health notes. `McpTool` carries `name`, `arguments` and `required` and `ToolRow` has an empty trailing slot, so a per-tool allow/deny/ask control can be added later without reshaping the data or the row.
+- Logic lives in `shared/tools.ts` with the fetch injectable; `tests/tools.test.ts` covers shaping, both framings, session echo, 401, HTML-at-200, refused `tools/list`, no-tools capability, timeout, redaction, the concurrency limiter and the chip label. 45 tests.
+
+### Always-on composer chip
+- The break-only **MCP issue** pill from 0.4.0 is now one always-on chip per live agent. It reads the server count and the one thing worth knowing: `12 MCP · 2 issues` when something needs attention, `12 MCP · 3 need sign-in` otherwise, `12 MCP · 340 tools` when all is well. One chip, not two: a second permanent chip next to a problem-only pill would have been noise, and a chip whose text shifts to the problem is the same signal in one slot. Pressing it opens MCP management.
+- Gated by the existing **Composer chip** setting (formerly "Composer pill", same key, default on), so a 0.4 settings file still applies.
+
+### Protocol
+- The `initialize` probe now declares protocol version `2025-06-18` and identifies as `paseo-mcp`.
+
 ## 0.5.1 — 2026-09-10
 
 ### Fixed: health checks used the wrong protocol and over-reported problems

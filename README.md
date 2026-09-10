@@ -24,6 +24,7 @@ paseo plugin update paseo-mcp
 - Shows each Paseo workspace's project-level `.mcp.json` servers in an **MCP connections** tab, available in both the workspace view and the Projects/Explorer view.
 - Tells each workspace what an agent started there loads (project, local and user-level servers), what it costs in child processes and memory, and warns when the count is heavy enough to exhaust the agent's context.
 - Checks every server's health in the background and flags problems per agent, per project, and per user config.
+- Lists the tools each server exposes, the way Claude Code's `/mcp` view does, and keeps an always-on chip on every agent's composer with the server count and status.
 - Syncs MCP definitions and Claude project trust to discovered account directories without copying OAuth grants.
 - Keeps backups before config writes and preserves destination-specific credentials.
 
@@ -64,7 +65,7 @@ fresh probe. Configure it under **Settings → Plugins → Paseo MCP → Health 
 | --- | --- | --- |
 | Check servers in the background | on | Probe on a timer, not only when Refresh is pressed |
 | Interval | 10 minutes | Time between background checks (1 to 1440 minutes) |
-| Composer pill | on | Show a pill on each agent's composer while a server needs attention |
+| Composer chip | on | Show an always-on MCP chip on each agent's composer |
 
 Settings live on the host at `$PASEO_HOME/plugin-settings/paseo-mcp/health.json`; an unreadable or
 invalid file means the defaults apply. The daemon log shows `health check: N servers, M need attention, K OAuth`
@@ -83,12 +84,34 @@ Health notes never contain a URL, query string, token, or header value; the verd
 before it is cached, shown, or logged. Missing sign-ins are reported per account on the Accounts tab,
 which reads each editor's own grant list.
 
-### Composer pill
+### Composer chip
 
-While any server is down, missing its binary, or answering with an error, every live agent's composer
-shows an **MCP issue** pill with the count (and how many of those are defined by the agent's own
-project). Press it to open MCP management. When everything is healthy there is no pill at all; it
-appears when something breaks and goes away once it is fixed.
+Every live agent's composer carries one **MCP** chip, always on. It reads the server count and the
+one thing worth knowing about them, in this order: `12 MCP · 2 issues` while a server is down,
+missing its binary, or answering with an error; `12 MCP · 3 need sign-in` while OAuth servers are
+waiting on a grant; `12 MCP · 340 tools` when everything is healthy. Press it to open MCP
+management, where the Tools section lives. Turn it off with the **Composer chip** setting.
+
+## Tools each server exposes
+
+The **Tools** section of MCP management, and the **Tools** card on each server's page, show what a
+server would hand an agent: every tool's name, title, description and the arguments it takes
+(required ones starred), plus the server's own name and version from the handshake. The host asks
+each HTTP server with the same two requests a client sends, `initialize` then `tools/list`, a few
+servers at a time, and caches the answer; the section reads the cache, and **Refresh** asks again.
+
+Nothing is guessed. A server that cannot be asked says why:
+
+| Shown as | Meaning |
+| --- | --- |
+| `N tools` | The server answered `tools/list`; expand the row to read them |
+| `sign in to list` | An OAuth server: it answers an anonymous request with 401 and lists its tools only to a signed-in editor |
+| `runs on demand` | A stdio (command) server: its tools are only knowable while an agent has it running, and the plugin does not start processes |
+| `not listed` | The endpoint answered but not with MCP (a web page at the URL, a JSON-RPC error, a timeout), with the redacted reason |
+
+Tool descriptions are text the server controls; they are flattened to one capped line before they
+are stored or shown. The data carries each tool's name and argument list so a per-tool policy
+control can be added alongside it later.
 
 ### Project level vs user level
 

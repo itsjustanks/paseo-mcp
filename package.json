@@ -2,7 +2,7 @@
   "name": "paseo-mcp",
   "private": true,
   "type": "module",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "node --import tsx --test tests/*.test.ts",
