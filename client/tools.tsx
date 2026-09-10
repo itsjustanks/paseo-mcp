@@ -75,8 +75,8 @@ export function toolsWord(entry: McpServerTools): string {
 /**
  * Always-on composer chip body: the server count and the one thing worth
  * knowing about them (an issue count, a sign-in count, or the tool total).
- * Pressing it opens the MCP surface. Colour is never the only channel: the
- * icon changes with the tone too.
+ * Pressing it opens the agent's MCP panel. Colour is never the only channel:
+ * the icon changes with the tone too.
  */
 export function McpChip({ theme }: PluginComposerPillProps) {
   const health = useHealth();
@@ -179,7 +179,7 @@ export function ServerTools({ entry, open = false }: { entry: McpServerTools; op
 function reasonText(entry: McpServerTools): string {
   switch (entry.kind) {
     case "auth-required":
-      return "This server needs a sign-in before it will list its tools. Your editor holds the grant; connect it under Accounts and the list appears in the editor.";
+      return "This server needs a sign-in before it will list its tools. Your editor holds the grant; connect it from this server's sign-in rows and the list appears in the editor.";
     case "stdio":
       return `Command server: ${entry.note}. The plugin does not start processes, so nothing is listed here rather than guessed.`;
     default:

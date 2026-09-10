@@ -51,10 +51,12 @@ const accounts = [
   { provider: "claude", email: "work@example.com", dir: `${HOME}/.agent-link/claude/work`, isPrimary: false, definedServers: 4, needsAuth: [], authStatus: { linear: "connected" } },
 ];
 const projectServers = [
-  { project: "data-glue", name: "supabase" },
-  { project: "investorkit-context", name: "Attio Docs" },
-  { project: "investorkit-context", name: "azure-devops" },
-  { project: "unfold-mobile", name: "expo" },
+  { project: "data-glue", name: "supabase", path: `${HOME}/projects/data-glue/.mcp.json` },
+  { project: "data-glue", name: "jam", path: `${HOME}/projects/data-glue/.mcp.json` },
+  { project: "investorkit-context", name: "Attio Docs", path: `${HOME}/projects/investorkit-context/.mcp.json` },
+  { project: "investorkit-context", name: "azure-devops", path: `${HOME}/projects/investorkit-context/.mcp.json` },
+  { project: "unfold-mobile", name: "expo", path: `${HOME}/projects/unfold-mobile/.mcp.json` },
+  { project: "unfold-mobile", name: "jam", path: `${HOME}/projects/unfold-mobile/.mcp.json` },
 ];
 // ?heavy makes the primary Claude config carry 25 user-level servers, the
 // configuration that produced "Prompt is too long" on a real host.
@@ -123,6 +125,35 @@ async function call(contract: any, input: any) {
     case "export": return { text: JSON.stringify({ mcpServers: Object.fromEntries(servers.map((s) => [s.name, definition(s.name)])) }, null, 2), filename: input.scope === "all" ? "mcp-export.json" : `${input.name}.json`, containsSecrets: Boolean(input.reveal) };
     case "export-file": return { ok: true, path: `${HOME}/Downloads/${input.filename}`, message: `Saved to ${HOME}/Downloads/${input.filename}.` };
     case "workspace": return { workspace: { id: "ws-1", name: "data-glue", directory: `${HOME}/projects/data-glue`, projectRootPath: `${HOME}/projects/data-glue` }, configPath: `${HOME}/projects/data-glue/.mcp.json`, servers: [{ name: "supabase", transport: "stdio", detail: "npx -y @supabase/mcp-server", authStyle: "inline-credentials" }, { name: "jam", transport: "http", detail: "https://mcp.jam.dev/mcp", authStyle: "oauth-or-none" }], accounts, profile, injection: { injectWorkspaceServers: !params.has("inject-off"), providers: ["codex"], skipInlineCredentialServers: true }, processes };
+    case "agent-servers": {
+      const provider = params.get("provider") ?? "codex";
+      const claudeP = provider !== "codex";
+      const disabledHere = (window as any).__disabled ??= new Set<string>(params.has("off") ? ["posthog"] : []);
+      const verdict = (scope: string, name: string) => {
+        const off = disabledHere.has(name);
+        if (claudeP) {
+          if (scope === "project") return { state: off ? "disabled" : "enabled", writable: true, lever: "mcpjsonServers", reason: "Governed by this directory's .mcp.json approval list in ~/.claude.json." };
+          if (scope === "local") return { state: off ? "disabled" : "enabled", writable: true, lever: "disabledMcpServers", reason: "Claude Code's per-directory (local) server for this workspace." };
+          return { state: off ? "disabled" : "enabled", writable: true, lever: "disabledMcpServers", reason: off ? "Off for this workspace only. The user-level definition is untouched and other workspaces still load it." : "User-level server, loaded in every workspace. Turn it off here to skip it for this workspace only." };
+        }
+        if (scope === "project") return { state: off ? "disabled" : "enabled", writable: true, lever: "injection", reason: off ? "Left out of injection for this workspace only. The .mcp.json entry is untouched; other workspaces are not affected." : "Added from this workspace's .mcp.json by injection when an agent starts. Turn it off to leave it out here only." };
+        return { state: "enabled", writable: false, lever: "none", reason: "Codex reads config.toml on top of what Paseo passes it, so nothing per workspace can turn this off: enabled = false in config.toml turns it off everywhere. Use Servers to remove it, or edit config.toml." };
+      };
+      const scopeId = claudeP ? claude : codex;
+      const userList = servers.filter((s) => s.presentIn.includes(scopeId));
+      const rows = [
+        ...(claudeP ? [{ name: "zapier", transport: "http", detail: "https://mcp.zapier.com/api/mcp/…", scope: "local", configPath: scopeId, inlineCredentials: true }] : []),
+        { name: "supabase", transport: "stdio", detail: "npx -y @supabase/mcp-server", scope: "project", configPath: profile.projectConfigPath, inlineCredentials: true },
+        { name: "jam", transport: "http", detail: "https://mcp.jam.dev/mcp", scope: "project", configPath: profile.projectConfigPath, inlineCredentials: false },
+        ...userList.filter((s) => !["jam", "supabase"].includes(s.name)).map((s) => ({ name: s.name, transport: s.transport, detail: s.detail, scope: "user", configPath: scopeId, inlineCredentials: s.inlineCredentialsIn.includes(scopeId) })),
+      ].map((row) => ({ ...row, enabled: verdict(row.scope, row.name) }));
+      return { directory: `${HOME}/projects/data-glue`, scope: { id: scopeId, label: destinations.find((d) => d.id === scopeId)!.label, provider: claudeP ? "claude" : "codex", providerId: provider, configPath: scopeId }, projectIncluded: true, projectNote: "", servers: rows, account: accounts.find((a) => a.provider === (claudeP ? "claude" : "codex")) ?? null };
+    }
+    case "set-enabled": {
+      const disabledHere = (window as any).__disabled ??= new Set<string>();
+      if (input.enabled) disabledHere.delete(input.name); else disabledHere.add(input.name);
+      return { ok: true, state: input.enabled ? "enabled" : "disabled", message: `${input.name} ${input.enabled ? "on" : "off"} for this workspace only (backup saved). Takes effect when a new agent session starts; a running agent keeps the servers it started with.` };
+    }
     case "sync": return { ok: true, log: "Copied 6 server definitions into 1 AgentLink slot.\nTrusted projects: 3 copied.\nOAuth grants: untouched." };
     case "login": return { ok: true, session: { ...sessions[0], server: input.server, account: input.account, provider: input.provider, workspaceId: input.workspaceId ?? "" }, message: `Sign-in started for ${input.server}.` };
     case "login-complete": return { ok: true, message: "Connection finished." };
@@ -130,7 +161,10 @@ async function call(contract: any, input: any) {
     case "logout": return { ok: true, message: `Signed out of ${input.server}.` };
     case "add": return { ok: true, message: `Added ${input.name} to ${input.targets.length} editors.` };
     case "apply": return { ok: true, message: `Copied ${input.name} to ${input.targets.length} editors.` };
-    case "remove": return { ok: true, message: `Removed ${input.name} from ${input.targets.length} editors.` };
+    case "remove": {
+      const removed = [...(input.targets ?? []).map((id: string) => destinations.find((d) => d.id === id)?.label ?? id), ...(input.projectFiles ?? [])];
+      return { ok: removed.length > 0, message: `removed '${input.name}' from: ${removed.join(", ")} (backups saved).`, removed, skipped: [] };
+    }
     case "rename": return { ok: true, message: `Renamed ${input.name} to ${input.newName}.` };
     case "edit-one": return { ok: true, message: `Saved ${input.name}.` };
     default: throw new Error(`Fixture has no answer for ${name}`);

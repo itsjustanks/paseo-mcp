@@ -609,6 +609,52 @@ export function Button({
   );
 }
 
+/** An on/off switch with its state in a word as well as a position, so colour is never the only channel. */
+export function Toggle({
+  value,
+  onChange,
+  disabled,
+  loading,
+  label,
+}: {
+  value: boolean;
+  onChange: (next: boolean) => void;
+  disabled?: boolean;
+  loading?: boolean;
+  label: string;
+}) {
+  const t = useTokens();
+  const off = Boolean(disabled) || Boolean(loading);
+  const color = value ? t.color.success : t.color.muted;
+  return (
+    <Pressable
+      accessibilityRole="switch"
+      accessibilityLabel={label}
+      accessibilityState={{ checked: value, disabled: off, busy: Boolean(loading) }}
+      // react-native-web maps accessibilityState.checked inconsistently across versions; say it plainly too.
+      {...({ "aria-checked": value } as object)}
+      disabled={off}
+      hitSlop={t.control.hit}
+      onPress={() => onChange(!value)}
+      style={{ flexDirection: "row", alignItems: "center", gap: 6, minHeight: t.control.min, opacity: off ? 0.6 : 1 }}
+    >
+      <View
+        style={{
+          width: 32,
+          height: 18,
+          borderRadius: 9,
+          padding: 2,
+          backgroundColor: value ? alpha(t.color.success, 0.35) : alpha(t.color.muted, 0.25),
+          alignItems: value ? "flex-end" : "flex-start",
+        }}
+      >
+        <View style={{ width: 14, height: 14, borderRadius: 7, backgroundColor: color }} />
+      </View>
+      {loading ? <ActivityIndicator size="small" color={t.color.muted} /> : <Text style={[t.text.caption, { color, fontWeight: "600" }]}>{value ? "on" : "off"}</Text>}
+    </Pressable>
+  );
+}
+
 /** A destructive action asks once, in place, rather than through a dialog. */
 export function ConfirmButton({
   label,

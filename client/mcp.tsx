@@ -9,6 +9,7 @@ import { z } from "zod";
 import {
   healthNeedsAttention,
   mcpAdd,
+  mcpAgentServers,
   mcpApply,
   mcpAuth,
   mcpDefAll,
@@ -16,14 +17,20 @@ import {
   mcpMatrix,
   mcpRemove,
   mcpRename,
+  mcpSetEnabled,
   mcpSync,
   mcpWorkspace,
+  type AgentServer,
   type Destination,
   type McpAuthAccount,
   type McpDefRow,
+  type McpServerTools,
   type ProjectMcpServer,
   type McpServerRow,
 } from "../shared/contracts";
+import { SWITCH_EFFECT_NOTE } from "../shared/enabled";
+import { accountsNeedingSignIn, projectFilesFor, removePlan, serverMatches, signInState, type RemovePlan, type RemoveScope, type ServerFilter } from "../shared/servers";
+import { summarizeTools } from "../shared/tools";
 import {
   ParsedServerSchema,
   mcpExport,
@@ -43,8 +50,8 @@ import {
 } from "../shared/mcpjson";
 import { WorkspaceContext, pickLoad } from "./budget";
 import { HealthSummary, ServerHealthTag, healthStatus, healthWord, splitIssues, useHealth } from "./health";
-import { takePendingServer } from "./navigate";
-import { ServerTools, ToolsSection, toolsStatus, toolsWord, useTools } from "./tools";
+import { canOpenMcp, openMcp, takePendingServer } from "./navigate";
+import { ServerTools, toolsStatus, toolsWord, useTools } from "./tools";
 import {
   Button,
   Card,
@@ -70,6 +77,7 @@ import {
   StatusPill,
   Step,
   Tag,
+  Toggle,
   Toolbar,
   TokensProvider,
   copyToClipboard,
@@ -668,27 +676,216 @@ function AuthRows({
   );
 }
 
+// --------------------------------------------------------------- switches
+
+function scopeWord(scope: AgentServer["scope"]): string {
+  return scope === "user" ? "user-level" : scope === "project" ? "this project's .mcp.json" : "local";
+}
+
+/**
+ * What one agent loads here, one row per server, with the per-workspace switch
+ * its editor actually has. Claude: `disabledMcpServers` for user and local
+ * servers, the `.mcp.json` approval lists for project ones. Codex: only the
+ * servers the hook injects can be left out. Anything else shows its state and
+ * says why there is no switch. State is read from the config on every call, so
+ * a `/mcp disable` in a terminal shows up on the next refresh.
+ */
+function AgentServers({
+  data,
+  loading,
+  error,
+  providerLabel,
+  onToggle,
+  toggling,
+  toolsByName,
+  signIn,
+}: {
+  data: z.output<typeof mcpAgentServers.output> | undefined;
+  loading: boolean;
+  error: unknown;
+  providerLabel: string;
+  onToggle: (name: string, enabled: boolean) => void;
+  toggling: string | null;
+  toolsByName: Map<string, McpServerTools> | null;
+  signIn: (server: AgentServer) => React.ReactNode;
+}) {
+  const t = useTokens();
+  if (loading && !data) return <Loading label="Reading what this agent loads…" />;
+  if (error && !data) return <ErrorText>{errorText(error)}</ErrorText>;
+  if (!data) return null;
+  const anySwitch = data.servers.some((entry) => entry.enabled.writable);
+  const offCount = data.servers.filter((entry) => entry.enabled.state === "disabled").length;
+  return (
+    <Section
+      title={`Servers for a ${providerLabel} agent here`}
+      trailing={canOpenMcp() ? <Button label="Manage all servers" variant="ghost" onPress={() => openMcp()} /> : undefined}
+    >
+      <View style={{ gap: t.space.sm }}>
+        <Facts
+          items={[
+            { value: plural(data.servers.length, "server") },
+            offCount > 0 ? { value: `${offCount} off for this workspace`, tone: "attention" } : null,
+            data.scope ? { value: data.scope.label } : { value: "no editor config wired to this provider" },
+          ]}
+        />
+        <Text style={t.text.caption}>
+          {anySwitch
+            ? `A switch changes what an agent started in ${data.directory} loads. ${SWITCH_EFFECT_NOTE}`
+            : data.scope?.provider === "codex"
+              ? "Codex reads its config.toml on top of what Paseo passes it, so only servers this plugin injects from .mcp.json can be switched off per workspace. User-level Codex servers show their state; remove them from Servers to stop loading them."
+              : "This editor has no per-workspace switch; servers show their state only."}
+        </Text>
+        {!data.projectIncluded && data.projectNote ? <Text style={t.text.caption}>{data.projectNote}.</Text> : null}
+        <Card padded={false}>
+          {data.servers.length === 0 ? <EmptyState title="Nothing loads here" body="No editor config wired to this provider defines an MCP server for this workspace." /> : null}
+          {data.servers.map((entry, index) => {
+            const tools = toolsByName?.get(entry.name);
+            const off = entry.enabled.state === "disabled";
+            return (
+              <Row
+                key={entry.name}
+                first={index === 0}
+                tone={off ? "neutral" : undefined}
+                title={
+                  <View style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: t.space.sm, minWidth: 0 }}>
+                    <Text numberOfLines={1} style={[t.text.bodyStrong, { flexShrink: 1, opacity: off ? 0.6 : 1 }]}>{entry.name}</Text>
+                    <Tag label={entry.transport} />
+                    <Tag label={scopeWord(entry.scope)} tone={entry.scope === "user" ? undefined : "ok"} />
+                    {entry.enabled.state === "undecided" ? <Tag label="asks at launch" tone="attention" /> : null}
+                    {tools ? <Tag label={toolsWord(tools)} tone={toolsStatus(tools.kind)} /> : null}
+                  </View>
+                }
+                subtitle={entry.detail || undefined}
+                meta={<Text style={t.text.caption}>{entry.enabled.reason}</Text>}
+                trailing={
+                  entry.enabled.writable ? (
+                    <Toggle
+                      label={`${entry.name} ${off ? "off" : "on"} for this workspace`}
+                      value={!off}
+                      loading={toggling === entry.name}
+                      disabled={toggling !== null}
+                      onChange={(next) => onToggle(entry.name, next)}
+                    />
+                  ) : (
+                    <Tag label={off ? "off here" : "on"} tone={off ? undefined : "ok"} />
+                  )
+                }
+                expanded={
+                  <View style={{ gap: t.space.sm }}>
+                    {signIn(entry)}
+                    {tools && tools.kind === "listed" && tools.tools.length > 0 ? (
+                      <Disclosure title={`Tools · ${toolsWord(tools)}`}>
+                        <ServerTools entry={tools} open />
+                      </Disclosure>
+                    ) : null}
+                  </View>
+                }
+              />
+            );
+          })}
+        </Card>
+      </View>
+    </Section>
+  );
+}
+
+// ------------------------------------------------------------------- removal
+
+/**
+ * Delete with three honest scopes, two steps each, never inside an editor.
+ * Step one picks the scope; step two reads the plan (files, counts, what is
+ * lost) and confirms. Scope `everywhere` is the only one after which the server
+ * stays gone, since Claude Code reads a project's `.mcp.json` straight back.
+ */
+function RemovePanel({
+  server,
+  destinations,
+  projectFiles,
+  armed,
+  onArm,
+  pending,
+  result,
+  onRemove,
+}: {
+  server: McpServerRow;
+  destinations: Destination[];
+  projectFiles: { project: string; path: string }[];
+  armed: { scope: RemoveScope; destId?: string } | null;
+  onArm: (next: { scope: RemoveScope; destId?: string } | null) => void;
+  pending: boolean;
+  result: { ok: boolean; removed: string[]; skipped: string[] } | null;
+  onRemove: (plan: RemovePlan) => void;
+}) {
+  const t = useTokens();
+  const present = destinations.filter((dest) => server.presentIn.includes(dest.id));
+  const [destId, setDestId] = useState<string>(present[0]?.id ?? "");
+  const plan = armed ? removePlan(server, destinations, armed.scope, armed.destId ?? destId, projectFiles) : null;
+  const everywhereCount = present.length + projectFiles.length;
+  if (present.length === 0 && projectFiles.length === 0) return null;
+  return (
+    <View style={{ gap: t.space.sm }}>
+      {!armed ? (
+        <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: t.space.sm }}>
+          <Text style={t.text.caption}>Remove from</Text>
+          {present.length > 0 ? <Button label="this editor…" variant="danger" disabled={pending} onPress={() => onArm({ scope: "one" })} /> : null}
+          {present.length > 1 ? <Button label={`all ${plural(present.length, "editor")}`} variant="danger" disabled={pending} onPress={() => onArm({ scope: "all" })} /> : null}
+          <Button label={`everywhere (${everywhereCount})`} variant="danger" disabled={pending} onPress={() => onArm({ scope: "everywhere" })} />
+        </View>
+      ) : null}
+      {armed?.scope === "one" && present.length > 1 ? (
+        <Segmented value={destId} onChange={setDestId} options={present.map((dest) => ({ value: dest.id, label: dest.label }))} />
+      ) : null}
+      {armed && plan ? (
+        <Notice tone="error">
+          <View style={{ gap: t.space.sm }}>
+            <Text style={t.text.bodyStrong}>{plan.title}</Text>
+            {plan.lines.map((line, index) => (
+              <Text key={index} style={t.text.caption}>{line}</Text>
+            ))}
+            <View style={{ flexDirection: "row", flexWrap: "wrap", gap: t.space.sm }}>
+              <Button label={plan.confirmLabel} variant="danger" loading={pending} onPress={() => onRemove(plan)} />
+              <Button label="Cancel" variant="ghost" onPress={() => onArm(null)} />
+            </View>
+          </View>
+        </Notice>
+      ) : armed ? (
+        <Text style={t.text.caption}>Nothing to remove for that scope.</Text>
+      ) : null}
+      {result && result.skipped.length > 0 ? (
+        <Notice tone={result.ok ? "attention" : "error"}>
+          <View style={{ gap: t.space.xs }}>
+            <Text style={t.text.bodyStrong}>{result.ok ? `Removed from ${result.removed.length}; ${plural(result.skipped.length, "target")} skipped` : "Nothing removed"}</Text>
+            <Lines items={result.skipped} />
+          </View>
+        </Notice>
+      ) : null}
+    </View>
+  );
+}
+
 // -------------------------------------------------------------------- surface
 
-type SectionId = "overview" | "servers" | "tools" | "accounts" | "projects" | "transfer" | "guide";
-type Filter = "all" | "gaps" | "issues";
+// Since 0.7.0 the Servers section is the one place for a server: its
+// definitions, health, tools and sign-in state live on its card. The separate
+// Tools and Accounts tabs folded into it; their totals sit in the strip above
+// the cards, and "Sync accounts" moved to Overview.
+type SectionId = "overview" | "servers" | "projects" | "transfer" | "guide";
+type Filter = ServerFilter;
 
 const SECTIONS: ChoiceItem<SectionId>[] = [
   { id: "overview", label: "Overview", icon: "LayoutDashboard", description: "Your next step" },
-  { id: "servers", label: "Servers", icon: "Server", description: "Definitions across editors" },
-  { id: "tools", label: "Tools", icon: "Wrench", description: "What each server exposes" },
-  { id: "accounts", label: "Accounts", icon: "KeyRound", description: "Sign-in and OAuth grants" },
+  { id: "servers", label: "Servers", icon: "Server", description: "Definitions, tools, sign-in" },
   { id: "projects", label: "Projects", icon: "FolderCode", description: "Per-project .mcp.json" },
   { id: "transfer", label: "Import & Export", icon: "ArrowLeftRight", description: "Paste JSON, back up" },
   { id: "guide", label: "Guide & Setup", icon: "BookOpen", description: "How this works" },
 ];
 
-const GUIDE_STEPS: { title: string; detail: string; label: string; section: SectionId }[] = [
+const GUIDE_STEPS: { title: string; detail: string; label: string; section: SectionId; filter?: Filter }[] = [
   { title: "Add or import servers", detail: "Type a URL or command, or paste the JSON block straight out of a README. Fences, comments and the mcpServers wrapper are handled.", label: "Open Import & Export", section: "transfer" },
   { title: "Apply to every editor", detail: "A server defined in one editor can be copied to the others. Codex and Grok store TOML; the translation happens for you and anything dropped is reported.", label: "Review servers", section: "servers" },
-  { title: "See what each server exposes", detail: "Every HTTP server is asked for its tool list the way an agent would ask. OAuth servers list after sign-in; command servers only while they run.", label: "Browse tools", section: "tools" },
-  { title: "Sign in per account", detail: "HTTP servers that use OAuth need a grant for each account. Connect opens the server's own sign-in on the daemon host.", label: "Open accounts", section: "accounts" },
-  { title: "Project servers", detail: "A workspace's .mcp.json is read-only here. Open MCP connections from that workspace to connect its accounts.", label: "See projects", section: "projects" },
+  { title: "See what each server exposes", detail: "Every HTTP server is asked for its tool list the way an agent would ask. Expand Tools on a server's card. OAuth servers list after sign-in; command servers only while they run.", label: "Browse servers", section: "servers" },
+  { title: "Sign in per account", detail: "HTTP servers that use OAuth need a grant for each account. Each server's card shows who is connected; Connect opens the server's own sign-in on the daemon host.", label: "Show servers needing sign-in", section: "servers", filter: "sign-in" },
+  { title: "Project servers", detail: "A workspace's .mcp.json is read-only here. Open MCP connections from that workspace to connect its accounts, or toggle what an agent there loads.", label: "See projects", section: "projects" },
 ];
 
 function providerName(provider: string): string {
@@ -891,6 +1088,8 @@ function McpBody({ layout, host }: PluginSurfaceProps) {
     setEditing(null);
     setRevealed(false);
     setRenameTo("");
+    setArmedRemove(null);
+    setRemoveResult(null);
   };
   // A panel's problem row can open this surface asking for one server.
   useEffect(() => {
@@ -942,10 +1141,17 @@ function McpBody({ layout, host }: PluginSurfaceProps) {
     onSuccess: report,
   });
   const removeMutation = useMutation({
-    mutationFn: (input: { name: string; targets: string[] }) => callRemove(input),
+    mutationFn: (input: { name: string; targets: string[]; projectFiles: string[] }) => callRemove(input),
     onError: fail,
-    onSuccess: report,
+    onSuccess: (result) => {
+      // Partial failure stays visible: the toast is one line, the skipped
+      // targets are reported in full under the server.
+      report(result);
+      setRemoveResult(result);
+    },
   });
+  const [removeResult, setRemoveResult] = useState<{ ok: boolean; removed: string[]; skipped: string[] } | null>(null);
+  const [armedRemove, setArmedRemove] = useState<{ scope: RemoveScope; destId?: string } | null>(null);
   // Export is two steps on purpose: the first produces the text (masked unless
   // secrets are revealed), the second writes it where the user can find it.
   const exportMutation = useMutation({
@@ -1073,18 +1279,19 @@ function McpBody({ layout, host }: PluginSurfaceProps) {
   );
   const coveredEditors = destinations.filter((dest) => servers.every((server) => server.presentIn.includes(dest.id))).length;
   const inlineServers = servers.filter((server) => server.inlineCredentialsIn.length > 0);
-  const projectGroups = [...(authQuery.data?.projectServers ?? []).reduce((groups, entry) => {
+  const projectServers = authQuery.data?.projectServers ?? [];
+  const projectGroups = [...projectServers.reduce((groups, entry) => {
     const names = groups.get(entry.project) ?? [];
     names.push(entry.name);
     groups.set(entry.project, names);
     return groups;
   }, new Map<string, string[]>()).entries()];
-  const shown = servers.filter((server) => {
-    if (query && !server.name.toLowerCase().includes(query)) return false;
-    if (filter === "gaps" && server.presentIn.length >= destinations.length) return false;
-    if (filter === "issues" && !isIssue(server)) return false;
-    return true;
-  });
+  const signInOf = (server: McpServerRow) => signInState(server.name, accounts);
+  const signInServers = servers.filter((server) => signInOf(server) === "needs");
+  const shown = servers.filter((server) =>
+    serverMatches(server, { filter, query, destinationCount: destinations.length, health: health?.get(server.name), signIn: signInOf(server) }),
+  );
+  const toolTotals = toolsQuery.data ? summarizeTools(toolsQuery.data.servers) : null;
 
   const server = selected ? servers.find((entry) => entry.name === selected) : undefined;
   const serverHealth = server ? health?.get(server.name) : undefined;
@@ -1128,7 +1335,7 @@ function McpBody({ layout, host }: PluginSurfaceProps) {
       : gapServers.length > 0
         ? { title: `Apply ${plural(gapServers.length, "server")} to the editors missing them`, detail: "A server defined in one editor is not yet in the others. Open a server and choose Add to missing to copy its definition across.", label: "Review gaps", onPress: () => go("servers", { server: null, filter: "gaps" }) }
         : needsAuthNames.length > 0
-          ? { title: `Sign in to ${plural(needsAuthNames.length, "server")}`, detail: "OAuth grants are per account. Connect each one once; the browser sign-in runs on the daemon host.", label: "Open Accounts", onPress: () => go("accounts") }
+          ? { title: `Sign in to ${plural(needsAuthNames.length, "server")}`, detail: "OAuth grants are per account. Connect each one once from the server's card; the browser sign-in runs on the daemon host.", label: "Show servers needing sign-in", onPress: () => go("servers", { server: null, filter: "sign-in" }) }
           : brokenServers.length > 0
             ? { title: `Fix ${plural(brokenServers.length, "unhealthy server")}`, detail: "A server is down or its binary is missing. Open it to read the health note and edit its definition.", label: "Show issues", onPress: () => go("servers", { server: null, filter: "issues" }) }
             : { title: "Ready", detail: `${plural(servers.length, "server")} defined in every editor, with every account connected. Add another server or export a backup whenever you like.`, label: "Browse servers", onPress: () => go("servers", { server: null, filter: "all" }) };
@@ -1155,6 +1362,31 @@ function McpBody({ layout, host }: PluginSurfaceProps) {
 
   // ---------------------------------------------------------------- sections
 
+  const syncCard = (
+    <Card>
+      <Step index={0} title="Sync accounts" />
+      <Text style={t.text.body}>
+        Copies server definitions, trusted projects and preferences from the primary account into every AgentLink slot. OAuth grants are never copied — each account still connects on its own.
+      </Text>
+      {authQuery.data ? (
+        <Facts items={accounts.map((account) => ({ value: `${providerName(account.provider)} · ${account.email || "no account"} · ${account.isPrimary ? "primary" : "slot"}` }))} />
+      ) : null}
+      {authQuery.error ? <ErrorText>{errorText(authQuery.error)}</ErrorText> : null}
+      <View style={{ flexDirection: "row", flexWrap: "wrap", gap: t.space.sm }}>
+        {syncMutation.isPending ? (
+          <Button label="Syncing…" loading onPress={() => undefined} />
+        ) : (
+          <ConfirmButton label="Sync accounts" confirmLabel="Overwrite slot definitions" variant="secondary" onConfirm={() => syncMutation.mutate()} />
+        )}
+      </View>
+      {syncLog ? (
+        <Disclosure title="Last sync log">
+          <CodeBlock>{clampLines(syncLog, 30)}</CodeBlock>
+        </Disclosure>
+      ) : null}
+    </Card>
+  );
+
   const overview = (
     <View style={{ gap: t.space.lg }}>
       <Intro
@@ -1177,11 +1409,12 @@ function McpBody({ layout, host }: PluginSurfaceProps) {
         <Text style={t.text.body}>{nextStep.detail}</Text>
         <View style={{ flexDirection: "row", flexWrap: "wrap", gap: t.space.sm }}>
           <Button label={nextStep.label} variant="primary" onPress={nextStep.onPress} />
-          <Button label="Browse tools" onPress={() => go("tools")} />
+          <Button label="Browse servers" onPress={() => go("servers", { server: null, filter: "all" })} />
           <Button label="Read the walkthrough" onPress={() => go("guide")} />
           <Button label="Refresh" variant="ghost" loading={matrixQuery.isFetching || healthQuery.isFetching} onPress={refreshAll} />
         </View>
       </Card>
+      {syncCard}
       {attention.length > 0 ? (
         <Card>
           <Step index={0} title="Needs attention" />
@@ -1213,67 +1446,162 @@ function McpBody({ layout, host }: PluginSurfaceProps) {
           { value: "all", label: `All ${servers.length}` },
           { value: "gaps", label: `Gaps ${gapServers.length}` },
           { value: "issues", label: `Issues ${issueServers.length}`, disabled: !health },
+          { value: "sign-in", label: `Need sign-in ${signInServers.length}`, disabled: !authQuery.data },
         ]}
       />
     </View>
   );
 
+  // The strip above the cards: what used to be the Tools and Accounts tabs'
+  // headline numbers, in one line.
+  const summaryStrip = (
+    <Facts
+      items={[
+        { value: `${plural(servers.length, "server")} across ${plural(destinations.length, "editor")}` },
+        toolTotals ? { value: `${toolTotals.tools} tools listed by ${toolTotals.listed} of ${toolTotals.servers}`, tone: toolTotals.tools > 0 ? "ok" : undefined } : { value: "tools not listed yet" },
+        authQuery.data ? { value: `${signInServers.length} need sign-in`, tone: signInServers.length > 0 ? "attention" : undefined } : null,
+        authQuery.data ? { value: plural(accounts.length, "account") } : null,
+        health ? { value: `${issueServers.length} ${issueServers.length === 1 ? "issue" : "issues"}`, tone: issueServers.length > 0 ? "attention" : "ok" } : null,
+        { value: `${gapServers.length} ${gapServers.length === 1 ? "gap" : "gaps"}` },
+        healthQuery.data?.checkedAt ? { value: `checked ${new Date(healthQuery.data.checkedAt).toLocaleString()}` } : null,
+      ]}
+    />
+  );
+
+  const removePanel = (entry: McpServerRow) => (
+    <RemovePanel
+      server={entry}
+      destinations={destinations}
+      projectFiles={projectFilesFor(entry.name, projectServers)}
+      armed={armedRemove}
+      onArm={setArmedRemove}
+      pending={removeMutation.isPending}
+      result={removeResult}
+      onRemove={(plan) => {
+        setArmedRemove(null);
+        removeMutation.mutate({ name: entry.name, targets: plan.targets, projectFiles: plan.projectFiles });
+      }}
+    />
+  );
+
+  const signInRows = (entry: McpServerRow) =>
+    entry.transport === "http" && entry.inlineCredentialsIn.length < entry.presentIn.length ? (
+      <AuthRows
+        server={entry.name}
+        accounts={accounts}
+        destinations={destinations}
+        presentIn={entry.presentIn}
+        sessions={sessions}
+        oauthCapable
+        daemonIsLocal={daemonIsLocal}
+        daemonHostname={daemonHostname}
+        pendingAccount={
+          loginMutation.isPending && loginMutation.variables
+            ? `${loginMutation.variables.provider}|${loginMutation.variables.account}`
+            : null
+        }
+        onAuthorise={(account) =>
+          loginMutation.mutate({
+            provider: account.provider,
+            accountDir: account.isPrimary ? "" : account.dir,
+            account: account.email,
+            server: entry.name,
+          })
+        }
+        onCancel={(key) => loginCancelMutation.mutate(key)}
+        onSignOut={(account) =>
+          logoutMutation.mutate({
+            provider: account.provider,
+            accountDir: account.isPrimary ? "" : account.dir,
+            server: entry.name,
+          })
+        }
+        onComplete={(key, redirectUrl) => loginCompleteMutation.mutate({ key, redirectUrl })}
+        onCopied={(ok) =>
+          ok
+            ? toast.show("Sign-in link copied.", { variant: "success" })
+            : toast.show("No clipboard here — the link above is selectable.", { variant: "warning" })
+        }
+      />
+    ) : null;
+
   const list = (
-    <Card padded={false}>
+    <View style={{ gap: t.space.md }}>
       {matrixQuery.isLoading ? <Loading label="Reading configs…" /> : null}
-      {healthQuery.error ? (
-        <View style={{ padding: t.space.md }}>
-          <ErrorText>{`Automatic health check failed: ${errorText(healthQuery.error)}`}</ErrorText>
-        </View>
-      ) : null}
+      {healthQuery.error ? <ErrorText>{`Automatic health check failed: ${errorText(healthQuery.error)}`}</ErrorText> : null}
       {!matrixQuery.isLoading && shown.length === 0 ? (
-        <EmptyState
-          title="Nothing here"
-          body={
-            servers.length === 0
-              ? "No MCP server is defined in any editor yet."
-              : "No server matches this search and filter."
-          }
-          action={servers.length === 0 ? <Button label="Add or import a server" variant="primary" onPress={() => go("transfer")} /> : undefined}
-        />
+        <Card>
+          <EmptyState
+            title="Nothing here"
+            body={servers.length === 0 ? "No MCP server is defined in any editor yet." : "No server matches this search and filter."}
+            action={servers.length === 0 ? <Button label="Add or import a server" variant="primary" onPress={() => go("transfer")} /> : undefined}
+          />
+        </Card>
       ) : null}
       {[...shown]
         .sort((a, b) => a.name.localeCompare(b.name))
-        .map((entry, index) => {
+        .map((entry) => {
           const entryHealth = health?.get(entry.name);
+          const entryTools = toolsByName?.get(entry.name);
+          const signIn = signInOf(entry);
+          const waiting = accountsNeedingSignIn(entry.name, accounts);
+          const missingHere = destinations.filter((dest) => !entry.presentIn.includes(dest.id));
+          const projectFiles = projectFilesFor(entry.name, projectServers);
           return (
-            <Row
-              key={entry.name}
-              first={index === 0}
-              selected={selected === entry.name}
-              onPress={() => selectServer(entry.name)}
-              title={
-                <View style={{ flexDirection: "row", alignItems: "center", gap: t.space.sm, minWidth: 0 }}>
-                  <Text numberOfLines={1} style={[t.text.bodyStrong, { flexShrink: 1 }]}>{entry.name}</Text>
-                  <Tag label={entry.transport} />
-                </View>
-              }
-              meta={
-                <View style={{ gap: t.space.xs, paddingTop: 2 }}>
-                  <Coverage
-                    present={entry.presentIn.length}
-                    total={destinations.length}
-                    label={`${entry.presentIn.length} of ${plural(destinations.length, "editor")}`}
-                  />
-                  <Facts items={editorFacts(entry.presentIn, destinations).map((value) => ({ value }))} />
-                </View>
-              }
-              trailing={
-                healthQuery.isFetching && !entryHealth ? (
+            <Card key={entry.name} tone={entryHealth && healthNeedsAttention(entryHealth.status) ? healthStatus(entryHealth.status) : undefined}>
+              <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: t.space.sm }}>
+                <Text numberOfLines={1} style={[t.text.heading, { flexShrink: 1 }]}>{entry.name}</Text>
+                <Tag label={entry.transport} />
+                {entry.inlineCredentialsIn.length > 0 ? <Tag label={`credentials in ${entry.inlineCredentialsIn.length}`} /> : null}
+                <View style={{ flexGrow: 1 }} />
+                {healthQuery.isFetching && !entryHealth ? (
                   <StatusPill status="busy" label="checking" />
                 ) : entryHealth ? (
                   <StatusPill status={healthStatus(entryHealth.status)} label={healthWord(entryHealth.status)} />
-                ) : undefined
-              }
-            />
+                ) : null}
+                {entryTools ? <Tag label={toolsWord(entryTools)} tone={toolsStatus(entryTools.kind)} /> : null}
+                {signIn === "needs" ? (
+                  <StatusPill status="attention" label={`${plural(waiting.length, "account")} need${waiting.length === 1 ? "s" : ""} sign-in`} />
+                ) : signIn === "connected" ? (
+                  <StatusPill status="ok" label="signed in" />
+                ) : null}
+              </View>
+              <View style={{ flexDirection: t.compact ? "column" : "row", gap: t.space.md, alignItems: t.compact ? "stretch" : "center" }}>
+                <Coverage
+                  present={entry.presentIn.length}
+                  total={destinations.length}
+                  label={`${entry.presentIn.length} of ${plural(destinations.length, "editor")}${missingHere.length > 0 ? ` · missing in ${editorFacts(missingHere.map((dest) => dest.id), destinations).join(", ")}` : ""}`}
+                />
+                <Facts
+                  items={[
+                    ...editorFacts(entry.presentIn, destinations).map((value) => ({ value })),
+                    projectFiles.length > 0 ? { value: `${plural(projectFiles.length, "project .mcp.json file")}` } : null,
+                    entry.detail ? { value: entry.detail } : null,
+                  ]}
+                />
+              </View>
+              {entryHealth && entryHealth.status !== "ok" && entryHealth.note ? <Text style={t.text.caption}>{entryHealth.note}</Text> : null}
+              {entryTools ? (
+                <Disclosure title={`Tools · ${toolsWord(entryTools)}`}>
+                  <ServerTools entry={entryTools} open />
+                </Disclosure>
+              ) : null}
+              {signInRows(entry)}
+              <View style={{ flexDirection: "row", flexWrap: "wrap", gap: t.space.sm }}>
+                <Button label="Open" variant="secondary" onPress={() => selectServer(entry.name)} />
+                {missingHere.length > 0 ? (
+                  <Button
+                    label={`Add to ${missingHere.length} missing`}
+                    loading={applyMutation.isPending && applyMutation.variables?.name === entry.name}
+                    onPress={() => applyMutation.mutate({ name: entry.name, targets: missingHere.map((dest) => dest.id) })}
+                  />
+                ) : null}
+              </View>
+              {removePanel(entry)}
+            </Card>
           );
         })}
-    </Card>
+    </View>
   );
 
   const back = (
@@ -1384,6 +1712,7 @@ function McpBody({ layout, host }: PluginSurfaceProps) {
             onPress={() => renameMutation.mutate({ name: server.name, newName: renameTo.trim() })}
           />
         </Disclosure>
+        {removePanel(server)}
       </Card>
 
       <Section
@@ -1530,11 +1859,6 @@ function McpBody({ layout, host }: PluginSurfaceProps) {
                         }
                         onClose={closeEditor}
                       />
-                      <ConfirmButton
-                        label="Remove from this editor"
-                        confirmLabel="Remove from here"
-                        onConfirm={() => removeMutation.mutate({ name: server.name, targets: [dest.id] })}
-                      />
                     </View>
                   ) : undefined
                 }
@@ -1549,166 +1873,25 @@ function McpBody({ layout, host }: PluginSurfaceProps) {
   const serversSection = server ? serverPane : (
     <View style={{ gap: t.space.lg }}>
       <Toolbar
-        title={`${plural(servers.length, "server")} across ${plural(destinations.length, "editor")}`}
-        subtitle="Open a server to manage definitions, check reachability, and connect each account."
+        title="Servers"
+        subtitle="One card per server: where it is defined, its health, its tools, and who is signed in. Open a server to edit a definition."
         actions={
           <>
             <Button label="Add server" variant="primary" onPress={() => go("transfer", { mode: "add" })} />
             <Button label="Import" onPress={() => go("transfer", { mode: "import" })} />
+            <Button label="Refresh tools" variant="ghost" loading={toolsQuery.isFetching} onPress={() => void toolsQuery.refetch()} />
             <Button
               label="Refresh"
               variant="ghost"
-              loading={matrixQuery.isFetching || healthQuery.isFetching}
+              loading={matrixQuery.isFetching || healthQuery.isFetching || authQuery.isFetching}
               onPress={refreshAll}
             />
           </>
         }
-        below={healthQuery.data?.checkedAt ? <Text style={t.text.caption}>Last checked {new Date(healthQuery.data.checkedAt).toLocaleString()}</Text> : undefined}
+        below={summaryStrip}
       />
       {filters}
       {list}
-    </View>
-  );
-
-  const accountCard = (account: McpAuthAccount, index: number) => {
-    const connectedNames = Object.entries(account.authStatus).filter(([, state]) => state === "connected").map(([name]) => name);
-    const needs = account.needsAuth.filter((name) => servers.some((server) => server.name === name));
-    const rowsFor = (name: string) => {
-      const entry = servers.find((candidate) => candidate.name === name);
-      return (
-        <AuthRows
-          key={`${account.provider}-${account.dir}-${name}`}
-          server={name}
-          accounts={accounts}
-          destinations={destinations}
-          presentIn={entry?.presentIn ?? []}
-          sessions={sessions}
-          oauthCapable
-          daemonIsLocal={daemonIsLocal}
-          daemonHostname={daemonHostname}
-          pendingAccount={
-            loginMutation.isPending && loginMutation.variables
-              ? `${loginMutation.variables.provider}|${loginMutation.variables.account}`
-              : null
-          }
-          forceDefined
-          onAuthorise={(target) =>
-            loginMutation.mutate({
-              provider: target.provider,
-              accountDir: target.isPrimary ? "" : target.dir,
-              account: target.email,
-              server: name,
-            })
-          }
-          onCancel={(key) => loginCancelMutation.mutate(key)}
-          onSignOut={(target) =>
-            logoutMutation.mutate({
-              provider: target.provider,
-              accountDir: target.isPrimary ? "" : target.dir,
-              server: name,
-            })
-          }
-          onComplete={(key, redirectUrl) => loginCompleteMutation.mutate({ key, redirectUrl })}
-          onCopied={(ok) =>
-            ok ? toast.show("Sign-in link copied.", { variant: "success" }) : toast.show("No clipboard here — the link above is selectable.", { variant: "warning" })
-          }
-          bare
-          onlyAccount={{ provider: account.provider, email: account.email }}
-        />
-      );
-    };
-    return (
-      <Card key={`${account.provider}-${account.dir}-${index}`}>
-        <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: t.space.sm }}>
-          <Text style={[t.text.heading, { flexShrink: 1 }]} numberOfLines={1}>
-            {`${providerName(account.provider)} · ${account.email || "no account"}`}
-          </Text>
-          <Tag label={account.isPrimary ? "primary" : "AgentLink slot"} />
-          <View style={{ flexGrow: 1 }} />
-          <StatusPill
-            status={needs.length > 0 ? "attention" : connectedNames.length > 0 ? "ok" : "neutral"}
-            label={needs.length > 0 ? `${needs.length} need sign-in` : `${connectedNames.length} connected`}
-          />
-        </View>
-        <Facts
-          items={[
-            { value: plural(account.definedServers, "server") },
-            { value: `${connectedNames.length} connected`, tone: connectedNames.length > 0 ? "ok" : undefined },
-            { value: account.dir },
-          ]}
-        />
-        {needs.length > 0 ? (
-          <View style={{ gap: t.space.sm }}>
-            {needs.map((name) => (
-              <View key={name} style={{ gap: t.space.xs }}>
-                <View style={{ flexDirection: "row", alignItems: "center", gap: t.space.sm }}>
-                  <Text style={t.text.bodyStrong}>{name}</Text>
-                  <Button label="Open server" variant="ghost" onPress={() => selectServer(name)} />
-                </View>
-                <Card level={2} padded={false}>{rowsFor(name)}</Card>
-              </View>
-            ))}
-          </View>
-        ) : (
-          <Text style={t.text.caption}>Nothing waits on this account.</Text>
-        )}
-        {connectedNames.length > 0 ? (
-          <Disclosure title={`Connected: ${connectedNames.join(", ")}`}>
-            {connectedNames.map((name) => (
-              <View key={name} style={{ gap: t.space.xs }}>
-                <Text style={t.text.bodyStrong}>{name}</Text>
-                <Card level={2} padded={false}>{rowsFor(name)}</Card>
-              </View>
-            ))}
-          </Disclosure>
-        ) : null}
-      </Card>
-    );
-  };
-
-  const accountsSection = (
-    <View style={{ gap: t.space.lg }}>
-      <Toolbar
-        title="One grant per account, per server."
-        subtitle="Definitions can be copied between editors. OAuth grants cannot, so each Claude or Codex account signs in to a server once."
-        actions={<Button label="Refresh account status" loading={authQuery.isFetching || loginQuery.isFetching} onPress={() => { void authQuery.refetch(); refreshLogins(); }} />}
-      />
-      {authQuery.isLoading ? <Loading label="Reading accounts…" /> : null}
-      {authQuery.error ? (
-        <Notice tone="error">
-          <View style={{ gap: t.space.sm }}>
-            <Text style={t.text.body}>{errorText(authQuery.error)}</Text>
-            <View style={{ flexDirection: "row" }}>
-              <Button label="Retry" onPress={() => void authQuery.refetch()} />
-            </View>
-          </View>
-        </Notice>
-      ) : null}
-      {loginQuery.error ? <ErrorText>{errorText(loginQuery.error)}</ErrorText> : null}
-      {authQuery.data && accounts.length === 0 ? (
-        <Card>
-          <EmptyState title="No Claude or Codex account found" body="Sign in to Claude Code or Codex on this host once. Their config directories are discovered automatically." />
-        </Card>
-      ) : null}
-      {accounts.map(accountCard)}
-      <Card>
-        <Step index={0} title="Sync accounts" />
-        <Text style={t.text.body}>
-          Copies server definitions, trusted projects and preferences from the primary account into every AgentLink slot. OAuth grants are never copied — each account still connects on its own.
-        </Text>
-        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: t.space.sm }}>
-          {syncMutation.isPending ? (
-            <Button label="Syncing…" loading onPress={() => undefined} />
-          ) : (
-            <ConfirmButton label="Sync accounts" confirmLabel="Overwrite slot definitions" variant="secondary" onConfirm={() => syncMutation.mutate()} />
-          )}
-        </View>
-        {syncLog ? (
-          <Disclosure title="Last sync log">
-            <CodeBlock>{clampLines(syncLog, 30)}</CodeBlock>
-          </Disclosure>
-        ) : null}
-      </Card>
     </View>
   );
 
@@ -1982,7 +2165,7 @@ function McpBody({ layout, host }: PluginSurfaceProps) {
             <Step index={index + 1} title={step.title} />
             <Text style={t.text.body}>{step.detail}</Text>
             <View style={{ flexDirection: "row" }}>
-              <Button label={step.label} onPress={() => go(step.section, step.section === "servers" ? { server: null } : {})} />
+              <Button label={step.label} onPress={() => go(step.section, step.section === "servers" ? { server: null, filter: step.filter ?? "all" } : {})} />
             </View>
           </Card>
         ))}
@@ -2002,7 +2185,7 @@ function McpBody({ layout, host }: PluginSurfaceProps) {
           A server marked "no binary" needs its command installed on {host.label}. A server marked "down" answered with an error; open it to read the note and check its URL or headers.
         </Text>
         <View style={{ flexDirection: "row", flexWrap: "wrap", gap: t.space.sm }}>
-          <Button label="Open accounts" onPress={() => go("accounts")} />
+          <Button label="Show servers needing sign-in" onPress={() => go("servers", { server: null, filter: "sign-in" })} />
           <Button label="Show issues" onPress={() => go("servers", { server: null, filter: "issues" })} />
         </View>
       </Card>
@@ -2013,10 +2196,6 @@ function McpBody({ layout, host }: PluginSurfaceProps) {
     ? overview
     : section === "servers"
       ? serversSection
-      : section === "tools"
-        ? <ToolsSection onOpenServer={selectServer} />
-      : section === "accounts"
-        ? accountsSection
         : section === "projects"
           ? projectsSection
           : section === "transfer"
@@ -2083,6 +2262,13 @@ export function WorkspaceBody({
   const callLoginCancel = useRpc(mcpLoginCancel);
   const callLoginComplete = useRpc(mcpLoginComplete);
   const callLogout = useRpc(mcpLogout);
+  const callAgentServers = useRpc(mcpAgentServers);
+  const callSetEnabled = useRpc(mcpSetEnabled);
+  const toolsQuery = useTools();
+  const toolsByName = useMemo(
+    () => toolsQuery.data ? new Map(toolsQuery.data.servers.map((entry) => [entry.name, entry])) : null,
+    [toolsQuery.data],
+  );
   const [selected, setSelected] = useState<string | null>(null);
   const [liveLogin, setLiveLogin] = useState(false);
 
@@ -2091,6 +2277,17 @@ export function WorkspaceBody({
     queryFn: () => callWorkspace({ workspaceId }),
     enabled: Boolean(workspace),
   });
+  // The workspace panel has no agent; it shows the switches for the heaviest
+  // wired editor, the same one its count leads with.
+  const switchProvider = providerId ?? (workspaceQuery.data ? pickLoad(workspaceQuery.data)?.providerId || "" : "");
+  const agentServersQuery = useQuery({
+    queryKey: ["paseo-mcp", "agent-servers", workspaceId, switchProvider],
+    queryFn: () => callAgentServers({ workspaceId, providerId: switchProvider }),
+    enabled: Boolean(workspace) && switchProvider !== "",
+    // Read fresh on every visit: a /mcp disable in a terminal must show here.
+    staleTime: 0,
+  });
+
   const loginQuery = useQuery({
     queryKey: ["paseo-mcp", "login-status"],
     queryFn: () => callLoginStatus({}),
@@ -2115,6 +2312,14 @@ export function WorkspaceBody({
     else toast.error(firstLine(result.message, "Refused."));
   };
   const refreshLogins = () => void loginQuery.refetch();
+  const setEnabledMutation = useMutation({
+    mutationFn: (input: { name: string; enabled: boolean }) => callSetEnabled({ workspaceId, providerId: switchProvider, ...input }),
+    onError: fail,
+    onSuccess: (result) => {
+      notify(result);
+      void agentServersQuery.refetch();
+    },
+  });
   const loginMutation = useMutation({
     mutationFn: (input: {
       provider: "claude" | "codex";
@@ -2183,9 +2388,42 @@ export function WorkspaceBody({
     : [];
   const refresh = () => {
     void workspaceQuery.refetch();
+    void agentServersQuery.refetch();
     void healthQuery.refetch();
     refreshLogins();
   };
+  const authFor = (server: string, account: McpAuthAccount | null, inlineCredentials: boolean, transport: string) =>
+    account && transport === "http" && !inlineCredentials && oauthState(account, server).known ? (
+      <AuthRows
+        server={server}
+        accounts={[account]}
+        destinations={[]}
+        presentIn={[]}
+        sessions={sessions}
+        oauthCapable
+        daemonIsLocal={loginQuery.data?.daemonIsLocal ?? true}
+        daemonHostname={loginQuery.data?.hostname ?? host.label}
+        pendingAccount={
+          loginMutation.isPending && loginMutation.variables
+            ? `${loginMutation.variables.provider}|${loginMutation.variables.account}`
+            : null
+        }
+        forceDefined
+        workspaceId={workspaceId}
+        workspaceDirectory={workspaceQuery.data?.workspace.directory ?? ""}
+        onAuthorise={(target) =>
+          loginMutation.mutate({ provider: target.provider, accountDir: target.isPrimary ? "" : target.dir, account: target.email, server, workspaceId })
+        }
+        onCancel={(key) => cancelMutation.mutate(key)}
+        onSignOut={(target) => logoutMutation.mutate({ provider: target.provider, accountDir: target.isPrimary ? "" : target.dir, server, workspaceId })}
+        onComplete={(key, redirectUrl) => completeMutation.mutate({ key, redirectUrl })}
+        onCopied={(ok) =>
+          ok ? toast.show("Sign-in link copied.", { variant: "success" }) : toast.show("No clipboard here — the link above is selectable.", { variant: "warning" })
+        }
+        bare
+        onlyAccount={{ provider: account.provider, email: account.email }}
+      />
+    ) : null;
   const pill = !workspace
     ? { status: "error" as Status, label: "Workspace unavailable" }
     : workspaceQuery.isError
@@ -2273,7 +2511,20 @@ export function WorkspaceBody({
       />
     </View>
   ) : data ? (
-    <View style={{ gap: t.space.md }}>
+    <View style={{ gap: t.space.lg }}>
+      {switchProvider ? (
+        <AgentServers
+          data={agentServersQuery.data}
+          loading={agentServersQuery.isLoading}
+          error={agentServersQuery.error}
+          providerLabel={providerName(agentServersQuery.data?.scope?.provider ?? switchProvider)}
+          onToggle={(name, enabled) => setEnabledMutation.mutate({ name, enabled })}
+          toggling={setEnabledMutation.isPending ? setEnabledMutation.variables?.name ?? null : null}
+          toolsByName={toolsByName}
+          signIn={(entry) => authFor(entry.name, agentServersQuery.data?.account ?? null, entry.inlineCredentials, entry.transport)}
+        />
+      ) : null}
+      <Section title="This workspace's .mcp.json">
       <Facts
         items={[
           { value: data.configPath || "No .mcp.json" },
@@ -2303,6 +2554,7 @@ export function WorkspaceBody({
           />
         ))}
       </Card>
+      </Section>
     </View>
   ) : null;
 
