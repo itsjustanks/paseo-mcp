@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.7.0 — 2026-09-10
+
+Navigation changed: the **Tools** and **Accounts** sections are gone. Everything they showed is on the server's card under **Servers**.
+
+### One Servers section, one card per server
+- Sections are now Overview · Servers · Projects · Import & Export · Guide & Setup. Each server is a card with its transport, health pill, tool count, sign-in pill, coverage bar with the editors missing it, which project `.mcp.json` files define it, its tool list (a collapsed disclosure, expanded shows name, description and arguments), its per-account sign-in rows with Connect OAuth / Reconnect / Sign out, **Open**, **Add to N missing**, and the removal controls.
+- What moved where: the Tools tab's totals (tools listed, servers answering) and its Refresh button are in the strip and toolbar above the cards; its per-server rows are the Tools disclosure on each card. The Accounts tab's per-account sign-in rows are the card's sign-in rows; its "need sign-in" count is in the strip and the new **Need sign-in** filter; its account list and **Sync accounts** card are on Overview. Every former `go("tools")` / `go("accounts")` (Overview next step, Guide buttons) now lands on Servers with the right filter.
+- Filters: All, Gaps, Issues, Need sign-in. Pure filter and sign-in logic lives in `shared/servers.ts`.
+
+### Delete with three scopes
+- Every card and server page: **Remove from this editor…** (pick the editor when it is in several), **all N editors**, **everywhere (N)**. Each is a two-step confirm that names the files and counts: "Remove jam from everywhere? 2 editor definitions will be deleted: … 2 project .mcp.json files will lose it too: /path/a/.mcp.json, /path/b/.mcp.json. Those files are usually version-controlled, so the change shows up in git status." It says when a definition carries inline credentials (lost with it), that files are backed up, that OAuth grants are untouched, and that there is no undo (Export first).
+- **Everywhere** is new: `paseo-mcp.remove` takes `projectFiles` (absolute paths of registered projects' `.mcp.json`, validated against the project list) beside editor `targets`. Each file is backed up, rewritten atomically, read back and must parse; an emptied file is left as `{"mcpServers":{}}`. The RPC returns `removed` / `skipped` per target so partial failure is visible under the card. The other two scopes say which projects still define the server, since Claude Code reads those back.
+- The only delete in 0.6.0 sat under the expanded JSON editor of one destination row; it is gone from there.
+
+### Per-workspace switches
+- The workspace panel and the agent panel list the servers an agent there loads, each tagged user-level / this project's .mcp.json / local, with a switch where the editor has one and the reason when it has none. New RPCs `paseo-mcp.agent-servers` (state read fresh from the config every call) and `paseo-mcp.set-enabled`.
+- Claude: user-level and local servers go through `projects["<workspace directory>"].disabledMcpServers` in `~/.claude.json`, the list `/mcp disable` writes; off there means off for that workspace only. Project servers go through `enabledMcpjsonServers` / `disabledMcpjsonServers`, never the wrong family. The project key is the workspace directory, so a worktree gets its own entry; a missing entry is created with only the one list. The write refuses unless the file parses, refuses if anything outside that one entry would change (checked before writing, `assertUnrelatedKeysKept`), backs up, writes temp-file-then-rename, and reads back to verify.
+- Codex: the servers the hook injects from `.mcp.json` can be left out per workspace; the set lives in the plugin's own `$PASEO_HOME/plugin-settings/paseo-mcp/workspace-disabled.json` and the `agent.create` hook skips them (`skipped … (off for this workspace)`). User-level Codex servers have no switch: Codex layers `config.toml` on top of the `mcp_servers` Paseo passes in `thread/start`, so dropping one from the record would not stop it loading, and `enabled = false` in `config.toml` is global. The row says so instead of drawing a dead switch. Kimi and Grok: no switch.
+- Copy says "Takes effect when a new agent session starts; a running agent keeps the servers it started with."
+
+### Chip opens the agent panel
+- Pressing the composer chip opens `mcp-agent` for that workspace and agent (`openPanel`) instead of the global surface; **Manage all servers** inside the panel opens the surface. A panel over a modal because the panel already exists, stays docked beside the conversation while the user signs in, and its per-agent scope is exactly the chip's.
+
+### Agent panel is actionable
+- Per-workspace switches, Connect / Sign out for OAuth servers through the existing login flow, scoped to that agent's own provider and account, and the tools each server lists from the 0.6.0 cache.
+
+### Not in this release
+- No per-tool permissions, no `agent.permission_requested` hook, no `~/.claude/settings.json`. Per-server only.
+
+### Tests
+- 76 tests: `tests/servers.test.ts` (sign-in state, filters, all three removal plans), `tests/remove.test.ts` (project file rewrite), `tests/enabled.test.ts` and `tests/enabled-write.test.ts` (levers, every-other-key preservation against a copy in a temp dir, worktree entry), `tests/injection-disabled.test.ts` (hook skip and store). No test touches the real `~/.claude.json`.
+
 ## 0.6.0 — 2026-09-10
 
 ### Tools each server exposes

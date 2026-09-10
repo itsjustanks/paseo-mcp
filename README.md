@@ -18,8 +18,9 @@ paseo plugin update paseo-mcp
 
 ## What it does
 
-- Shows user-level MCP servers across Claude Code, Codex, Kimi Code, and Grok.
-- Adds, edits, renames, removes, imports, and exports definitions with masked secrets.
+- Shows user-level MCP servers across Claude Code, Codex, Kimi Code, and Grok, one card per server with its editors, health, tools and sign-in state.
+- Adds, edits, renames, imports, and exports definitions with masked secrets; removes a server from one editor, all editors, or everywhere including project `.mcp.json` files.
+- Turns servers on or off per workspace from the workspace and agent panels, where the editor has such a switch.
 - Starts Claude or Codex OAuth in the computer's default browser and shows the fallback URL.
 - Shows each Paseo workspace's project-level `.mcp.json` servers in an **MCP connections** tab, available in both the workspace view and the Projects/Explorer view.
 - Tells each workspace what an agent started there loads (project, local and user-level servers), what it costs in child processes and memory, and warns when the count is heavy enough to exhaust the agent's context.
@@ -51,6 +52,54 @@ Settings live on the host at `$PASEO_HOME/plugin-settings/paseo-mcp/injection.js
 (`~/.paseo` by default). The hook reads that file directly; if it is missing or invalid, injection
 stays off.
 
+## The MCP surface
+
+Five sections: **Overview**, **Servers**, **Projects**, **Import & Export**, **Guide & Setup**. Since
+0.7.0 the old Tools and Accounts tabs are part of **Servers**: every server is one card showing its
+transport, which editors define it and which are missing it, its health, its tool list (collapsed; some
+servers list 77), and a sign-in row per account with Connect / Sign out. The strip above the cards
+carries the totals those tabs used to lead with (servers, tools listed, accounts, sign-ins needed,
+issues, gaps). Filters: all, gaps, issues, need sign-in. **Sync accounts** moved to Overview.
+
+### Removing a server
+
+Each card and each server page offers three scopes, each a two-step confirm that names the files:
+
+| Scope | What is written |
+| --- | --- |
+| this editor | One editor config (pick which when the server is in several) |
+| all editors | Every editor config that defines it |
+| everywhere | All editors plus every registered project's `.mcp.json` that defines it |
+
+Only **everywhere** keeps the server gone: Claude Code reads a project's `.mcp.json` straight back, so
+the other two scopes say which projects still define it. Project files are backed up first, rewritten
+atomically, read back and must parse, and an emptied file is left as `{"mcpServers":{}}` rather than
+deleted. The confirm warns that those files are usually version-controlled (the change shows in
+`git status`) and that inline credentials in a deleted definition are lost; export first if in doubt.
+The result is reported per target, so a partial failure is visible.
+
+## Per-workspace switches
+
+The **MCP connections** workspace panel and each agent's **MCP** panel list the servers an agent there
+loads, each tagged with its origin (user-level, this project's `.mcp.json`, local) and with a switch
+where the editor has one. A switch takes effect when a new agent session starts; a running agent keeps
+the servers it started with. State is read from the config on every refresh, so a `/mcp disable` done in
+a terminal shows up here.
+
+| Provider | Server origin | Lever |
+| --- | --- | --- |
+| Claude Code | user-level, local | `projects["<workspace dir>"].disabledMcpServers` in `~/.claude.json` — off for this workspace only, the definition is untouched. Same list `/mcp disable` writes. |
+| Claude Code | this project's `.mcp.json` | `enabledMcpjsonServers` / `disabledMcpjsonServers` for that directory (the approval lists). "Asks at launch" means neither list names it yet. |
+| Codex | this project's `.mcp.json` (injected) | The plugin's own `$PASEO_HOME/plugin-settings/paseo-mcp/workspace-disabled.json`; the `agent.create` hook leaves the server out for that directory. |
+| Codex | user-level | No switch. Codex layers `config.toml` on top of what Paseo passes it, and `enabled = false` there is global. The row shows its state and says so. |
+| Kimi, Grok | any | No switch. |
+
+The project entry is keyed by the workspace's own directory, so a worktree workspace gets its own entry
+rather than sharing the project root's. Writing `~/.claude.json` is guarded: the file must parse, the new
+document may differ only inside that one project entry (checked before the write), the write is a temp
+file plus rename, a backup is taken first, and the result is read back and must hold the state just
+written. Any failure refuses the write and reports why.
+
 ## Health checks
 
 On by default. The host probes every MCP server on a timer: HTTP endpoints get the same JSON-RPC
@@ -81,7 +130,7 @@ after each pass.
 | `unknown` | No readable definition | no |
 
 Health notes never contain a URL, query string, token, or header value; the verdict is redacted
-before it is cached, shown, or logged. Missing sign-ins are reported per account on the Accounts tab,
+before it is cached, shown, or logged. Missing sign-ins are reported per account on each server's card,
 which reads each editor's own grant list.
 
 ### Composer chip
@@ -89,13 +138,14 @@ which reads each editor's own grant list.
 Every live agent's composer carries one **MCP** chip, always on. It reads the server count and the
 one thing worth knowing about them, in this order: `12 MCP · 2 issues` while a server is down,
 missing its binary, or answering with an error; `12 MCP · 3 need sign-in` while OAuth servers are
-waiting on a grant; `12 MCP · 340 tools` when everything is healthy. Press it to open MCP
-management, where the Tools section lives. Turn it off with the **Composer chip** setting.
+waiting on a grant; `12 MCP · 340 tools` when everything is healthy. Press it to open that agent's
+**MCP** panel: the servers it loads with their switches, sign-in, and tools, plus a **Manage all servers**
+button to the full surface. Turn it off with the **Composer chip** setting.
 
 ## Tools each server exposes
 
-The **Tools** section of MCP management, and the **Tools** card on each server's page, show what a
-server would hand an agent: every tool's name, title, description and the arguments it takes
+Each server's card on the Servers section (the **Tools** disclosure) and the **Tools** card on its page
+show what a server would hand an agent: every tool's name, title, description and the arguments it takes
 (required ones starred), plus the server's own name and version from the handshake. The host asks
 each HTTP server with the same two requests a client sends, `initialize` then `tools/list`, a few
 servers at a time, and caches the answer; the section reads the cache, and **Refresh** asks again.
@@ -104,7 +154,7 @@ Nothing is guessed. A server that cannot be asked says why:
 
 | Shown as | Meaning |
 | --- | --- |
-| `N tools` | The server answered `tools/list`; expand the row to read them |
+| `N tools` | The server answered `tools/list`; expand Tools on the card to read them |
 | `sign in to list` | An OAuth server: it answers an anonymous request with 401 and lists its tools only to a signed-in editor |
 | `runs on demand` | A stdio (command) server: its tools are only knowable while an agent has it running, and the plugin does not start processes |
 | `not listed` | The endpoint answered but not with MCP (a web page at the URL, a JSON-RPC error, a timeout), with the redacted reason |
