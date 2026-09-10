@@ -52,8 +52,9 @@ stays off.
 
 ## Health checks
 
-On by default. The host probes every MCP server on a timer: HTTP endpoints are fetched (a 401/403
-reads as "sign-in"), stdio commands are looked up on the login shell's PATH. The most recent result
+On by default. The host probes every MCP server on a timer: HTTP endpoints get the same JSON-RPC
+`initialize` POST an MCP client opens a session with (configured headers and URL sent intact, so a
+token in the query string counts), stdio commands are looked up on the login shell's PATH. The most recent result
 is cached on the host, and every panel, pill, and the MCP surface reads that cached verdict, so
 opening ten agents never probes your servers ten times. **Refresh** and **Check now** still run a
 fresh probe. Configure it under **Settings → Plugins → Paseo MCP → Health checks**, or run the
@@ -66,12 +67,25 @@ fresh probe. Configure it under **Settings → Plugins → Paseo MCP → Health 
 | Composer pill | on | Show a pill on each agent's composer while a server needs attention |
 
 Settings live on the host at `$PASEO_HOME/plugin-settings/paseo-mcp/health.json`; an unreadable or
-invalid file means the defaults apply. The daemon log shows `health check: N servers, M need attention`
+invalid file means the defaults apply. The daemon log shows `health check: N servers, M need attention, K OAuth`
 after each pass.
+
+| Status | Meaning | Needs attention |
+| --- | --- | --- |
+| `ok` | The endpoint answered `initialize`, or is alive and rejected the anonymous request the way the protocol says to (400, 405, 406, a redirect) | no |
+| `auth-required` | 401 or 403: an OAuth server. This is how a working server answers a probe with no grant; the editor holds the sign-in. Shown as informational | no |
+| `warn` | 404 (wrong path, or an inactive n8n workflow) or a 5xx from the server | yes |
+| `down` | Connection refused or reset, DNS failure, TLS rejected, or no answer in 5 seconds | yes |
+| `binary-missing` | A stdio command not found on PATH | yes |
+| `unknown` | No readable definition | no |
+
+Health notes never contain a URL, query string, token, or header value; the verdict is redacted
+before it is cached, shown, or logged. Missing sign-ins are reported per account on the Accounts tab,
+which reads each editor's own grant list.
 
 ### Composer pill
 
-While any server is down, missing its binary, or waiting on a sign-in, every live agent's composer
+While any server is down, missing its binary, or answering with an error, every live agent's composer
 shows an **MCP issue** pill with the count (and how many of those are defined by the agent's own
 project). Press it to open MCP management. When everything is healthy there is no pill at all; it
 appears when something breaks and goes away once it is fixed.

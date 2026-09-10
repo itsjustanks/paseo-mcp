@@ -29,8 +29,8 @@ const userScope = { level: "user", label: "Claude · demo@example.com (primary)"
 const projectScope = { level: "project", label: "data-glue", configPath: `${HOME}/projects/data-glue/.mcp.json` };
 const health = [
   { name: "heroui-pro", status: "ok", note: "", scopes: [userScope] },
-  { name: "jam", status: "auth-required", note: "Server answered 401; an OAuth grant is needed.", scopes: [userScope, projectScope] },
-  { name: "posthog", status: "auth-required", note: "Server answered 401; an OAuth grant is needed.", scopes: [userScope] },
+  { name: "jam", status: "auth-required", note: "HTTP 401 — OAuth server; sign in through your editor", scopes: [userScope, projectScope] },
+  { name: "posthog", status: "auth-required", note: "HTTP 401 — OAuth server; sign in through your editor", scopes: [userScope] },
   { name: "playwright", status: "ok", note: "", scopes: [userScope] },
   { name: "supabase", status: "binary-missing", note: "npx could not resolve @supabase/mcp-server.", scopes: [projectScope] },
   { name: "linear", status: "ok", note: "", scopes: [userScope] },

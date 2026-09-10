@@ -4,6 +4,7 @@ import { copyFileSync, existsSync, readFileSync, readdirSync, renameSync, rmSync
 import { homedir } from "node:os";
 import { basename, delimiter, dirname, join } from "node:path";
 import type { Destination } from "../shared/contracts";
+import { probeMcp } from "../shared/health";
 import { onStart } from "./lifecycle";
 import type { Dialect } from "../shared/mcpjson";
 
@@ -974,22 +975,14 @@ export function binaryOnPath(command: string): boolean {
   return searchPath().some((dir) => existsSync(join(dir, command)));
 }
 
+/**
+ * Health-check a remote server the way an MCP client would: a JSON-RPC
+ * `initialize` POST with the configured headers, the URL sent intact (a token
+ * in its query string is how some servers authenticate). Classification and
+ * note redaction live in shared/health.ts so they are unit-testable.
+ */
 export async function probeHttp(url: string, headers: Record<string, string> | undefined) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 5000);
-  try {
-    const response = await fetch(url, { method: "GET", headers, signal: controller.signal, redirect: "manual" });
-    const code = response.status;
-    if (code === 401 || code === 403) return { status: "auth-required" as const, note: `HTTP ${code} — authentication needed` };
-    if (code >= 200 && code < 400) return { status: "ok" as const, note: `HTTP ${code}` };
-    if (code === 404 || code === 405 || code === 406) return { status: "ok" as const, note: `reachable (HTTP ${code})` };
-    return { status: "warn" as const, note: `HTTP ${code}` };
-  } catch (error) {
-    const reason = error instanceof Error ? error.message : String(error);
-    return { status: "down" as const, note: reason.includes("abort") ? "timeout after 5s" : reason.slice(0, 80) };
-  } finally {
-    clearTimeout(timer);
-  }
+  return probeMcp(url, headers);
 }
 
 // Only MCP definitions and Claude project trust are shared between accounts.

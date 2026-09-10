@@ -1,7 +1,7 @@
 import type { PluginHandlerContext } from "@getpaseo/plugin/server";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import type { McpHealth, McpHealthReport, McpHealthScope } from "../shared/contracts";
+import { healthIsSignIn, healthNeedsAttention, type McpHealth, type McpHealthReport, type McpHealthScope } from "../shared/contracts";
 import { HEALTH_DEFAULTS, healthSettings, type HealthSettings } from "../shared/settings";
 import {
   binaryOnPath,
@@ -124,8 +124,9 @@ function beat(): void {
   }
   void refreshHealth(null)
     .then((report) => {
-      const issues = report.results.filter((entry) => entry.status !== "ok" && entry.status !== "unknown").length;
-      console.log(`${TAG} health check: ${report.results.length} servers, ${issues} need attention`);
+      const issues = report.results.filter((entry) => healthNeedsAttention(entry.status)).length;
+      const signIn = report.results.filter((entry) => healthIsSignIn(entry.status)).length;
+      console.log(`${TAG} health check: ${report.results.length} servers, ${issues} need attention, ${signIn} OAuth`);
     })
     .catch((error) => {
       console.error(`${TAG} health check failed:`, error instanceof Error ? error.message : error);

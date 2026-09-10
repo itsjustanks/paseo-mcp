@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.1 — 2026-09-10
+
+### Fixed: health checks used the wrong protocol and over-reported problems
+- HTTP servers were health-checked with a bare `GET`. Streamable-HTTP MCP servers speak JSON-RPC over `POST`, so a correctly working server answers a `GET` with 400 or 405, and an OAuth server answers anything unauthenticated with 401. A 400 was filed as a warning, and a 401 was counted as a problem needing attention, so on one real host 16 of 44 healthy servers were flagged, including every server with a token in its URL query string.
+- The probe now sends the same JSON-RPC `initialize` request an MCP client opens a session with (`content-type: application/json`, `accept: application/json, text/event-stream`, the configured headers, the configured URL intact), follows redirects, and keeps the 5 second timeout. Same host, same 44 servers: 2 need attention (one stdio binary not on PATH, one endpoint answering 404), 18 are OAuth servers answering 401 as they should, the rest are healthy.
+- Reclassified honestly: a JSON-RPC result is `ok`; 400/405/406 and redirects are `ok` (reachable); 404 and 5xx are `warn`; refused, reset, DNS failure, TLS rejection and timeout are `down`. 401/403 stay `auth-required` but no longer count as needing attention: `healthNeedsAttention` excludes it, so the composer pill, the panel counts, the Issues filter, and the daemon log line (`N servers, M need attention, K OAuth`) treat a sign-in state as informational. The tag reads "OAuth" in a neutral tone. Missing sign-ins are still reported per account on the Accounts tab, which reads each editor's own grant list.
+- Health notes are redacted before they are cached, rendered or logged: never the URL, its query string, a query value, a header value, or a JWT-looking run. Several real definitions carry tokens in the URL, and an error message can echo the whole request.
+- Classification, redaction and the probe itself live in `shared/health.ts` with the fetch injectable; `tests/health.test.ts` covers 200 JSON-RPC result (plain and SSE-framed), 401, 403, 405, 400, 301/307, 404, 500, timeout, DNS failure, the request shape, and a token-bearing URL never reaching a note. 28 tests.
+
 ## 0.5.0 — 2026-09-10
 
 ### Workspace context

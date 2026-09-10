@@ -258,9 +258,21 @@ export const mcpHealthCached = defineRpc({
   }),
 });
 
-/** Statuses a user has to act on; `ok` and `unknown` are not problems. */
+/**
+ * Statuses a user has to act on. `ok` and `unknown` are not problems, and
+ * neither is `auth-required`: an OAuth server answers every anonymous probe
+ * with 401 whether or not the editor holds a grant, so it is the resting state
+ * of a working server, shown as informational rather than as an issue. The
+ * Accounts tab, which reads each editor's own grant list, is where a missing
+ * sign-in is reported.
+ */
 export function healthNeedsAttention(status: McpHealthStatus): boolean {
-  return status !== "ok" && status !== "unknown";
+  return status !== "ok" && status !== "unknown" && status !== "auth-required";
+}
+
+/** Sign-in state: the server is up but this probe carried no grant. */
+export function healthIsSignIn(status: McpHealthStatus): boolean {
+  return status === "auth-required";
 }
 
 /** True when one of the result's project scopes is the `.mcp.json` of `directory` or one of its parents. */

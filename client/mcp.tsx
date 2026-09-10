@@ -1047,7 +1047,7 @@ function McpBody({ layout, host }: PluginSurfaceProps) {
   const gapServers = servers.filter((server) => server.presentIn.length < destinations.length);
   const isIssue = (server: McpServerRow) => {
     const entry = health?.get(server.name);
-    return Boolean(entry && entry.status !== "ok" && entry.status !== "unknown");
+    return Boolean(entry && healthNeedsAttention(entry.status));
   };
   const issueServers = health ? servers.filter(isIssue) : [];
   const brokenServers = issueServers.filter((server) => {
@@ -1124,7 +1124,7 @@ function McpBody({ layout, host }: PluginSurfaceProps) {
       return {
         key: `health-${entry.name}`,
         title: `${entry.name} — ${healthWord(item.status)}`,
-        detail: item.note || (item.status === "auth-required" ? "Needs an OAuth grant." : "Health check did not pass."),
+        detail: item.note || "Health check did not pass.",
         tone: healthStatus(item.status),
         server: entry.name,
       };

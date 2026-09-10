@@ -59,8 +59,9 @@ export function useHealth() {
 
 export function healthStatus(status: McpHealth["status"]): Status {
   if (status === "ok") return "ok";
-  if (status === "auth-required" || status === "warn") return "attention";
-  if (status === "unknown") return "neutral";
+  if (status === "warn") return "attention";
+  // 401 is how a working OAuth server answers an anonymous probe; informational.
+  if (status === "unknown" || status === "auth-required") return "neutral";
   return "error";
 }
 
@@ -69,7 +70,7 @@ export function healthWord(status: McpHealth["status"]): string {
     case "ok":
       return "healthy";
     case "auth-required":
-      return "sign-in";
+      return "OAuth";
     case "warn":
       return "warning";
     case "binary-missing":
