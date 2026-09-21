@@ -1,10 +1,10 @@
-import type { PluginClientContext } from "@getpaseo/plugin/client";
+import type { PluginButtonRegistration, PluginClientContext } from "@getpaseo/plugin/client";
 import { McpAgentPanel } from "./client/agent";
 import { McpSurface, McpWorkspacePanel } from "./client/mcp";
 import { registerSurfaceOpener } from "./client/navigate";
 import { HealthSettingsScreen, InjectionSettingsScreen } from "./client/settings";
-import { McpChip } from "./client/tools";
-import { mcpHealthCached } from "./shared/contracts";
+import { McpChipIconAttention, McpChipIconCalm } from "./client/tools";
+import { chipLabel, mcpHealthCached, mcpToolsCached } from "./shared/contracts";
 
 export default function contribute(client: PluginClientContext) {
   // Panels have no openSurface of their own; lend them this one.
@@ -102,19 +102,22 @@ export default function contribute(client: PluginClientContext) {
  * One always-on chip per live agent while the setting is on. It replaces the
  * 0.4 break-only pill: the same slot now reads "12 MCP · 340 tools" on a calm
  * host and shifts to "12 MCP · 2 issues" when something breaks, so there is one
- * chip to look at, not two. The chip body (client/tools.tsx) reads the cached
- * health and tool reports; this registry only decides whether a chip exists.
+ * chip to look at, not two. This registry polls the same cached reports the
+ * chip used to read via hooks (client/tools.tsx has the icons) and pushes
+ * updates into each pill; it also decides whether a pill exists at all.
  * Pressing it opens that agent's MCP panel (0.7.0; it used to open the surface).
  */
-const CHIP_SETTINGS_POLL_MS = 60_000;
+const CHIP_POLL_MS = 3_000;
 
 function registerMcpChips(client: PluginClientContext): () => void {
   const agents = new Map<string, string>(); // agentId -> workspaceId
-  const pills = new Map<string, () => void>();
+  const pills = new Map<string, PluginButtonRegistration>();
   // Assume on until the host says otherwise: the setting defaults to on, and a
   // chip that appears a minute late reads worse than one that blinks off.
   let wanted = true;
   let stopped = false;
+  let label = "MCP";
+  let icon = McpChipIconCalm;
 
   const reconcile = () => {
     if (stopped) return;
@@ -124,35 +127,42 @@ function registerMcpChips(client: PluginClientContext): () => void {
           agentId,
           client.addComposerPill({
             id: "mcp-chip",
-            title: "MCP for this agent",
             workspaceId,
             agentId,
-            Component: McpChip,
-            onPress() {
-              // The panel, not the surface: the chip belongs to one agent, and
-              // the agent's MCP panel shows what that agent loads with its
-              // per-workspace switches and sign-in. "Manage all servers" inside
-              // it is the door to the full surface.
-              client.openPanel("mcp-agent", { workspaceId, agentId });
+            button: {
+              title: "MCP for this agent",
+              icon,
+              label,
+              behavior: {
+                kind: "action",
+                onPress() {
+                  // The panel, not the surface: it's this agent's own MCP view.
+                  client.openPanel("mcp-agent", { workspaceId, agentId });
+                },
+              },
             },
           }),
         );
       } else if (!wanted && pills.has(agentId)) {
-        pills.get(agentId)?.();
+        pills.get(agentId)?.remove();
         pills.delete(agentId);
       }
     }
     for (const agentId of [...pills.keys()]) {
       if (agents.has(agentId)) continue;
-      pills.get(agentId)?.();
+      pills.get(agentId)?.remove();
       pills.delete(agentId);
     }
   };
 
   const poll = async () => {
     try {
-      const cached = await client.rpc(mcpHealthCached, {});
-      wanted = cached.showComposerPill;
+      const [health, tools] = await Promise.all([client.rpc(mcpHealthCached, {}), client.rpc(mcpToolsCached, {})]);
+      wanted = health.showComposerPill;
+      const chip = chipLabel(health.report, tools.report);
+      label = chip.label;
+      icon = chip.tone === "attention" ? McpChipIconAttention : McpChipIconCalm;
+      for (const registration of pills.values()) registration.update({ label, icon });
     } catch {
       // Host unreachable: keep whatever the last poll decided.
     }
@@ -170,13 +180,13 @@ function registerMcpChips(client: PluginClientContext): () => void {
     reconcile();
   });
   void poll();
-  const timer = setInterval(() => void poll(), CHIP_SETTINGS_POLL_MS);
+  const timer = setInterval(() => void poll(), CHIP_POLL_MS);
 
   return () => {
     stopped = true;
     clearInterval(timer);
     unsubscribe();
-    for (const remove of pills.values()) remove();
+    for (const registration of pills.values()) registration.remove();
     pills.clear();
   };
 }
