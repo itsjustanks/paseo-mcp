@@ -1,13 +1,12 @@
 /** Cached MCP tool lists, shared by the composer chip and the surface. */
-import type { PluginComposerPillProps } from "@getpaseo/plugin/client";
+import type { PluginButtonIconProps } from "@getpaseo/plugin/client";
 import { useRpc } from "@getpaseo/plugin/client";
 import { Icon } from "@getpaseo/plugin/client/react-native";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import React, { useCallback, useState } from "react";
+import React, { useCallback, useState, type ComponentType } from "react";
 import { Text, View } from "react-native";
-import { chipLabel, mcpTools, mcpToolsCached, type McpServerTools, type McpTool, type McpToolsReport } from "../shared/contracts";
+import { mcpTools, mcpToolsCached, type McpServerTools, type McpTool, type McpToolsReport } from "../shared/contracts";
 import { summarizeTools } from "../shared/tools";
-import { useHealth } from "./health";
 import { Button, Card, Disclosure, EmptyState, Facts, Row, Tag, useTokens, type Status } from "./ui";
 
 export const TOOLS_QUERY_KEY = ["paseo-mcp", "tools"] as const;
@@ -72,26 +71,15 @@ export function toolsWord(entry: McpServerTools): string {
 
 // ------------------------------------------------------------------- chip
 
-/**
- * Always-on composer chip body: the server count and the one thing worth
- * knowing about them (an issue count, a sign-in count, or the tool total).
- * Pressing it opens the agent's MCP panel. Colour is never the only channel:
- * the icon changes with the tone too.
- */
-export function McpChip({ theme }: PluginComposerPillProps) {
-  const health = useHealth();
-  const tools = useTools();
-  const { label, tone } = chipLabel(health.data, tools.data);
-  const color = tone === "attention" ? theme.colors.statusWarning : theme.colors.foregroundMuted;
-  return (
-    <>
-      <Icon name={tone === "attention" ? "TriangleAlert" : "Plug"} size={14} color={color} />
-      <Text numberOfLines={1} style={{ color, flexShrink: 1 }}>
-        {label}
-      </Text>
-    </>
-  );
+/** Calm or attention icon for the composer pill; index.client.tsx polls and swaps between them. */
+function pillIcon(tone: "calm" | "attention"): ComponentType<PluginButtonIconProps> {
+  return function McpChipIcon({ theme, size }: PluginButtonIconProps) {
+    const color = tone === "attention" ? theme.colors.statusWarning : theme.colors.foregroundMuted;
+    return <Icon name={tone === "attention" ? "TriangleAlert" : "Plug"} size={size} color={color} />;
+  };
 }
+export const McpChipIconCalm = pillIcon("calm");
+export const McpChipIconAttention = pillIcon("attention");
 
 // ------------------------------------------------------------------- rows
 
