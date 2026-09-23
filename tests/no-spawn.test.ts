@@ -57,11 +57,20 @@ const { handleMcpAgentServers } = await import("../server/enabled");
 const { handleMcpHealthCached } = await import("../server/health");
 const { handleMcpToolsCached } = await import("../server/tools");
 const { handleMcpSiblings } = await import("../server/siblings");
+const { handleMcpPaseoTools, handleMcpSetPaseoTools } = await import("../server/paseo-tools");
 const { codexChecksSettled } = await import("../server/codex-auth");
 const { injectWorkspaceServers } = await import("../server/hooks");
 
+let daemonConfig: Record<string, unknown> = { mcp: { injectIntoAgents: true }, browserTools: { enabled: true }, providers: {} };
 const paseo = {
-  config: { get: async () => ({ config: { providers: {} } }) },
+  config: {
+    get: async () => ({ config: structuredClone(daemonConfig) }),
+    // Enough of the daemon's merge for the one patch shape the plugin sends.
+    patch: async (patch: Record<string, unknown>) => {
+      daemonConfig = { ...daemonConfig, ...patch };
+      return { config: structuredClone(daemonConfig) };
+    },
+  },
   workspaces: { list: async () => ({ entries: [{ id: "ws", name: "demo", workspaceDirectory: project, projectRootPath: project }] }) },
   projects: { list: async () => ({ entries: [{ name: "demo", path: project }] }) },
 } as never;
@@ -80,6 +89,7 @@ test("panel reads start no process at all", async () => {
     await handleMcpHealthCached({} as never, context);
     await handleMcpToolsCached({} as never, context);
     handleMcpSiblings();
+    await handleMcpPaseoTools({}, context);
   }
   await codexChecksSettled();
   assert.equal(codexRuns(), 0, "no codex from the workspace panel, the Claude agent panel, the matrix, the cached reads or the AI Router card");
@@ -112,6 +122,20 @@ test("Refresh asks Codex again, once per account", async () => {
   await handleMcpAuth({ refresh: true }, context);
   await codexChecksSettled();
   assert.equal(codexRuns() - before, 3, "a second press while the first check runs does not queue another");
+});
+
+test("Paseo tools read and write start no process", async () => {
+  spawned.length = 0;
+  for (let round = 0; round < 5; round += 1) {
+    await handleMcpPaseoTools({ refresh: true }, context);
+    const off = await handleMcpSetPaseoTools({ browserTools: false }, context);
+    assert.equal(off.ok, true, off.message);
+    const on = await handleMcpSetPaseoTools({ browserTools: true }, context);
+    assert.equal(on.ok, true, on.message);
+  }
+  const workspace = await handleMcpWorkspace({ workspaceId: "ws" }, context);
+  assert.equal(workspace.paseoTools?.tools.claude, 61, "the workspace load counts Paseo tools");
+  assert.deepEqual(spawned.filter((name) => name !== "ps" && name !== "lsof"), [], `unexpected processes: ${spawned.join(", ")}`);
 });
 
 test("creating an agent reads .mcp.json without starting git", async () => {

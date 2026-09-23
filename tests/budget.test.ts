@@ -63,7 +63,7 @@ test("a Claude agent loads local, project and user servers once each, local winn
   );
   assert.equal(load.projectIncluded, true);
   const cost = costProfile(load);
-  assert.deepEqual({ ...cost }, { total: 5, stdio: 2, http: 3, unknown: 0, project: 2, local: 1, user: 2, tier: "ok" });
+  assert.deepEqual({ ...cost }, { total: 5, builtIn: 0, paseoTools: 0, tools: 25, stdio: 2, http: 3, unknown: 0, project: 2, local: 1, user: 2, tier: "ok" });
 });
 
 test("a Codex agent skips .mcp.json unless injection targets it", () => {

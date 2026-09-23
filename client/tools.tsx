@@ -1,6 +1,6 @@
 /** Cached MCP tool lists, shared by the composer chip and the surface. */
 import type { PluginComposerPillProps } from "@getpaseo/plugin/client";
-import { useRpc } from "@getpaseo/plugin/client";
+import { useAgent, useRpc } from "@getpaseo/plugin/client";
 import { Icon } from "@getpaseo/plugin/client/react-native";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import React, { useCallback } from "react";
@@ -8,6 +8,7 @@ import { Text, View } from "react-native";
 import { chipLabel, mcpTools, mcpToolsCached, type McpServerTools, type McpTool, type McpToolsReport } from "../shared/contracts";
 import { backoffMs, clockTime } from "../shared/schedule";
 import { useHealth } from "./health";
+import { paseoToolsFor, usePaseoTools } from "./paseo-tools";
 import { Card, Disclosure, Facts, Row, useTokens, type Status } from "./ui";
 
 export const TOOLS_QUERY_KEY = ["paseo-mcp", "tools"] as const;
@@ -79,10 +80,13 @@ export function toolsWord(entry: McpServerTools): string {
  * Pressing it opens the agent's MCP panel. Colour is never the only channel:
  * the icon changes with the tone too.
  */
-export function McpChip({ theme }: PluginComposerPillProps) {
+export function McpChip({ theme, agentId }: PluginComposerPillProps) {
   const health = useHealth();
   const tools = useTools();
-  const { label, tone } = chipLabel(health.data, tools.data);
+  // Paseo's built-in server counts when this agent's provider gets it.
+  const provider = useAgent(agentId, (agent) => agent.provider);
+  const paseo = usePaseoTools();
+  const { label, tone } = chipLabel(health.data, tools.data, paseoToolsFor(paseo.data, provider));
   const color = tone === "attention" ? theme.colors.statusWarning : theme.colors.foregroundMuted;
   return (
     <>

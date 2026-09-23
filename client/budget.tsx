@@ -5,6 +5,7 @@ import { z } from "zod";
 import {
   BUDGET_ATTENTION,
   BUDGET_PROBLEM,
+  BUDGET_TOOLS_ATTENTION,
   costProfile,
   loadFor,
   loadsForWorkspace,
@@ -13,6 +14,7 @@ import {
   type WorkspaceLoad,
 } from "../shared/budget";
 import type { mcpWorkspace } from "../shared/contracts";
+import { PASEO_TOOLS_LABEL } from "../shared/paseo-tools";
 import { formatMemory } from "../shared/processes";
 import { canOpenMcp, openMcp } from "./navigate";
 import { Button, Card, Disclosure, Facts, Notice, Tag, useTokens, type Status } from "./ui";
@@ -35,11 +37,12 @@ function tierStatus(tier: "ok" | "attention" | "problem"): Status {
 export function pickLoad(data: WorkspaceData, providerId?: string): WorkspaceLoad | null {
   if (!data.profile) return null;
   const injection = data.injection ?? null;
+  const paseo = data.paseoTools ?? null;
   if (providerId) {
     const scope = scopeForProvider(data.profile, providerId);
-    if (scope) return loadFor(data.profile, scope, injection);
+    if (scope) return loadFor(data.profile, scope, injection, paseo);
   }
-  return loadsForWorkspace(data.profile, injection)[0] ?? null;
+  return loadsForWorkspace(data.profile, injection, paseo)[0] ?? null;
 }
 
 // -------------------------------------------------------------- context budget
@@ -56,14 +59,19 @@ function ContextBudget({ load, providerId }: { load: WorkspaceLoad; providerId?:
       <View style={{ gap: t.space.sm }}>
         <Text style={t.text.bodyStrong}>
           {severe
-            ? `${who} loads ${plural(cost.total, "MCP server")} — enough to exhaust its context before it starts`
-            : `${who} loads ${plural(cost.total, "MCP server")} — a real share of its context goes to tool definitions`}
+            ? `${who} loads ${plural(cost.total, "MCP server")}${cost.builtIn ? ` and about ${cost.tools} tools` : ""} — enough to exhaust its context before it starts`
+            : `${who} loads ${plural(cost.total, "MCP server")}${cost.builtIn ? ` and about ${cost.tools} tools` : ""} — a real share of its context goes to tool definitions`}
         </Text>
         <Text style={t.text.body}>
           Every server's tool definitions are sent with the first prompt. Claude Code defers them past 10% of the
           window; Cursor stops at 40 tools. Past {BUDGET_ATTENTION} servers the cost shows, past {BUDGET_PROBLEM} agents
           can fail with "Prompt is too long" before their first tool call.
         </Text>
+        {cost.builtIn ? (
+          <Text style={t.text.body}>
+            {`${cost.paseoTools} of those tools are Paseo's own (counted exactly; other servers at five each). ${cost.paseoTools >= BUDGET_TOOLS_ATTENTION ? `That alone reaches the ${BUDGET_TOOLS_ATTENTION}-tool line. ` : ""}Groups agents here do not use can be turned off under Servers → Paseo tools (browser is the largest); that applies to every workspace.`}
+          </Text>
+        ) : null}
         {userNames.length > 0 ? (
           <>
             <Text style={t.text.body}>
@@ -157,6 +165,7 @@ export function WorkspaceContext({
           items={[
             { value: `${cost.project} from this project's .mcp.json${scope}` },
             { value: `${cost.user} from user-level config` },
+            cost.builtIn ? { value: `${PASEO_TOOLS_LABEL}: ${cost.paseoTools} tools` } : null,
             attention
               ? attention.here > 0
                 ? { value: `${attention.here} need attention here`, tone: "attention" }

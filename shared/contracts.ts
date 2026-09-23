@@ -140,6 +140,20 @@ export const WorkspaceProfileSchema = z.object({
   scopes: z.array(ProfileScopeSchema),
 });
 
+// ------------------------------------------------------------- paseo tools
+
+/**
+ * Paseo's built-in tools for one load: how many a new agent of each provider
+ * gets (0 or absent: none), and when none do daemon-wide, why. Rides on the
+ * workspace and agent RPCs as an optional field (0.10.0). See shared/paseo-tools.ts.
+ */
+export const PaseoToolsLoadSchema = z.object({
+  tools: z.record(z.string(), z.number()),
+  blocker: z.enum(["", "mcp-off", "inject-off"]),
+  asOf: z.string(),
+});
+export type PaseoToolsLoad = z.infer<typeof PaseoToolsLoadSchema>;
+
 // ------------------------------------------------------------ agent servers
 
 export const LoadScopeSchema = z.enum(["project", "local", "user"]);
@@ -183,6 +197,8 @@ export const mcpAgentServers = defineRpc({
     servers: z.array(AgentServerSchema),
     /** The account whose grants the sign-in rows read, when the scope has one. */
     account: McpAuthAccountSchema.nullable(),
+    /** Paseo's built-in tools for this provider (0.10.0; absent from older hosts or when the daemon config could not be read). */
+    paseoTools: z.object({ tools: z.number(), blocker: z.enum(["", "mcp-off", "inject-off"]), asOf: z.string() }).optional(),
   }),
 });
 
@@ -238,6 +254,8 @@ export const mcpWorkspace = defineRpc({
       })
       .optional(),
     processes: ProcessObservationSchema.optional(),
+    // 0.10.0: Paseo's built-in tools per provider, counted into the load.
+    paseoTools: PaseoToolsLoadSchema.optional(),
   }),
 });
 
@@ -413,15 +431,22 @@ export const mcpToolsCached = defineRpc({
 export function chipLabel(
   health: McpHealthReport | null | undefined,
   tools: McpToolsReport | null | undefined,
+  // 0.10.0: tools the agent gets from Paseo's built-in server (0: none). It
+  // counts as one more server and adds its tools; 0 leaves the label as it was.
+  paseoTools = 0,
 ): { label: string; tone: "calm" | "attention" } {
+  const builtIn = paseoTools > 0 ? 1 : 0;
   const results = health?.results ?? [];
-  if (results.length === 0) return { label: tools?.servers.length ? `${tools.servers.length} MCP` : "MCP", tone: "calm" };
+  if (results.length === 0) {
+    const count = (tools?.servers.length ?? 0) + builtIn;
+    return { label: count ? `${count} MCP` : "MCP", tone: "calm" };
+  }
   const issues = results.filter((entry) => healthNeedsAttention(entry.status)).length;
   const signIn = results.filter((entry) => healthIsSignIn(entry.status)).length;
-  const head = `${results.length} MCP`;
+  const head = `${results.length + builtIn} MCP`;
   if (issues > 0) return { label: `${head} · ${issues} ${issues === 1 ? "issue" : "issues"}`, tone: "attention" };
   if (signIn > 0) return { label: `${head} · ${signIn} need sign-in`, tone: "calm" };
-  const toolCount = (tools?.servers ?? []).reduce((sum, entry) => sum + entry.tools.length, 0);
+  const toolCount = (tools?.servers ?? []).reduce((sum, entry) => sum + entry.tools.length, 0) + paseoTools;
   if (toolCount > 0) return { label: `${head} · ${toolCount} tools`, tone: "calm" };
   return { label: `${head} · healthy`, tone: "calm" };
 }
@@ -449,6 +474,69 @@ export function scopedToDirectory(scope: McpHealthScope, directory: string): boo
   const root = scope.configPath.replace(/[\\/]\.mcp\.json$/, "");
   return directory === root || directory.startsWith(`${root}/`) || directory.startsWith(`${root}\\`);
 }
+
+// ---- paseo tools ------------------------------------------------------------
+
+export const PaseoProviderStateSchema = z.object({
+  id: z.string(),
+  /** Has an entry in the daemon config; a built-in provider runs without one. */
+  configured: z.boolean(),
+  enabled: z.boolean(),
+  disabledTools: z.array(z.string()),
+  tools: z.number(),
+});
+
+export const PaseoToolStateSchema = z.object({
+  name: z.string(),
+  title: z.string(),
+  description: z.string(),
+  group: z.enum(["agents", "terminals", "schedules", "workspaces", "browser"]),
+  onFor: z.array(z.string()),
+});
+
+export const PaseoToolsStateSchema = z.object({
+  injected: z.boolean(),
+  mcpEnabled: z.boolean(),
+  injectIntoAgents: z.boolean(),
+  blocker: z.enum(["", "mcp-off", "inject-off"]),
+  browserTools: z.boolean(),
+  providers: z.array(PaseoProviderStateSchema),
+  tools: z.array(PaseoToolStateSchema),
+  /** Tools a provider not listed here gets (no `paseoTools` entry): the count for any other provider id. */
+  defaultTools: z.number(),
+  /** The Paseo release the tool catalogue matches. */
+  asOf: z.string(),
+  checkedAt: z.string(),
+});
+export type PaseoToolsStateReport = z.infer<typeof PaseoToolsStateSchema>;
+
+/**
+ * Paseo's built-in MCP tools on this host: whether the daemon adds them to
+ * agents, per provider, and per tool. Read from the daemon config (cached a
+ * few seconds; `refresh` reads it again).
+ */
+export const mcpPaseoTools = defineRpc({
+  name: "paseo-mcp.paseo-tools",
+  input: z.object({ refresh: z.boolean().optional() }),
+  output: PaseoToolsStateSchema,
+});
+
+/**
+ * Change them, through the daemon's config API only. Each field is optional;
+ * only what differs is written, `disabledTools` is merged with the current
+ * list, and `state` is the config read back afterwards.
+ */
+export const mcpSetPaseoTools = defineRpc({
+  name: "paseo-mcp.set-paseo-tools",
+  input: z.object({
+    injectIntoAgents: z.boolean().optional(),
+    browserTools: z.boolean().optional(),
+    providers: z
+      .array(z.object({ id: z.string().min(1), enabled: z.boolean().optional(), tools: z.record(z.string(), z.boolean()).optional() }))
+      .optional(),
+  }),
+  output: z.object({ ok: z.boolean(), message: z.string(), state: PaseoToolsStateSchema.optional() }),
+});
 
 // ---- sibling plugins -----------------------------------------------------------
 

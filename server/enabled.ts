@@ -31,6 +31,7 @@ import {
   writeJsonAtomic,
   type McpDef,
 } from "./handlers";
+import { paseoToolsLoad } from "./paseo-tools";
 import { withDeadline } from "./run";
 import { settingsPath } from "./settings";
 import { buildProfile, claudeLocalServers, readInjection } from "./workspace";
@@ -124,7 +125,8 @@ export async function handleMcpAgentServers(
   const destinations = await buildDestinations(paseo);
   const { profile } = buildProfile(destinations, projectDefs, projectConfigPath, candidates);
   const scope = scopeForProvider(profile, providerId);
-  const load = loadFor(profile, scope, readInjection());
+  const paseoTools = await paseoToolsLoad(paseo, providerId ? [providerId] : []);
+  const load = loadFor(profile, scope, readInjection(), paseoTools ?? null);
   const dest = scope ? destinations.find((entry) => entry.id === scope.id) : undefined;
   const entry = scope?.provider === "claude" ? projectEntry(scope.configPath, directory) : undefined;
   const injectionDisabled = injectionDisabledFor(readInjectionStore(), directory);
@@ -165,6 +167,9 @@ export async function handleMcpAgentServers(
     projectNote: load.projectNote,
     servers,
     account,
+    // Paseo's built-in server is not an editor definition, so it has no switch
+    // row here; it rides alongside with its count and why it is off, if it is.
+    ...(paseoTools && providerId ? { paseoTools: { tools: paseoTools.tools[providerId] ?? 0, blocker: paseoTools.blocker, asOf: paseoTools.asOf } } : {}),
   };
 }
 

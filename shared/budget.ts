@@ -1,3 +1,6 @@
+/** Paseo's built-in tools per provider, as the workspace RPC reports them (shared/contracts.ts `PaseoToolsLoad`). */
+export type PaseoToolsLike = { tools: Record<string, number> };
+
 /** The two injection fields the count depends on; accepts the RPC's string-typed copy as well as the settings document. */
 export type InjectionLike = { injectWorkspaceServers: boolean; providers: readonly string[] };
 
@@ -54,6 +57,12 @@ export type WorkspaceLoad = {
   /** Whether the project `.mcp.json` counts for this provider, and why not if it does not. */
   projectIncluded: boolean;
   projectNote: string;
+  /**
+   * Tools this provider's agents get from Paseo's own server, "Paseo tools
+   * (built in)": one more server in the count, with a known tool count. 0 when
+   * the daemon does not add it for this provider, or the host did not say.
+   */
+  paseoTools: number;
 };
 
 // ------------------------------------------------------------------ thresholds
@@ -83,6 +92,30 @@ export function budgetTier(count: number): BudgetTier {
   return "ok";
 }
 
+/**
+ * The same two lines in tools, for when a real tool count is known. The server
+ * thresholds assume five tools per server; Paseo's built-in server alone hands
+ * an agent 39 tools, 61 with browser tools, so counting it as "one server"
+ * would hide most of its cost. 40 is Cursor's cap and 80 the line sixteen
+ * servers stand for above. For a load without Paseo tools the estimate is five
+ * per server, so this tier always equals the server tier and nothing changes.
+ */
+export const TOOLS_PER_SERVER_GUESS = 5;
+export const BUDGET_TOOLS_ATTENTION = BUDGET_ATTENTION * TOOLS_PER_SERVER_GUESS;
+export const BUDGET_TOOLS_PROBLEM = BUDGET_PROBLEM * TOOLS_PER_SERVER_GUESS;
+
+export function toolBudgetTier(tools: number): BudgetTier {
+  if (tools >= BUDGET_TOOLS_PROBLEM) return "problem";
+  if (tools >= BUDGET_TOOLS_ATTENTION) return "attention";
+  return "ok";
+}
+
+const TIER_RANK: Record<BudgetTier, number> = { ok: 0, attention: 1, problem: 2 };
+
+function worseTier(a: BudgetTier, b: BudgetTier): BudgetTier {
+  return TIER_RANK[a] >= TIER_RANK[b] ? a : b;
+}
+
 // ------------------------------------------------------------------ resolution
 
 /** Whether the base CLI reads the project's `.mcp.json` on its own. Codex, Kimi and Grok do not. */
@@ -97,7 +130,12 @@ function readsProjectConfig(provider: string): boolean {
  * levels loads once; Claude resolves local over project over user, so that is
  * the order kept here.
  */
-export function loadFor(profile: WorkspaceProfile, scope: ProfileScope | null, injection: InjectionLike | null): WorkspaceLoad {
+export function loadFor(
+  profile: WorkspaceProfile,
+  scope: ProfileScope | null,
+  injection: InjectionLike | null,
+  paseo: PaseoToolsLike | null = null,
+): WorkspaceLoad {
   const provider = scope?.provider ?? "";
   const providerId = scope?.providerId ?? "";
   const native = readsProjectConfig(provider);
@@ -121,7 +159,8 @@ export function loadFor(profile: WorkspaceProfile, scope: ProfileScope | null, i
   if (scope) add(scope.local, "local", scope.configPath);
   if (projectIncluded) add(profile.project, "project", profile.projectConfigPath);
   if (scope) add(scope.servers, "user", scope.configPath);
-  return { providerId, provider, label: scope?.label ?? "", servers, projectIncluded, projectNote };
+  const paseoTools = providerId ? paseo?.tools[providerId] ?? 0 : 0;
+  return { providerId, provider, label: scope?.label ?? "", servers, projectIncluded, projectNote, paseoTools };
 }
 
 /** Scopes an agent can actually run as: a destination wired to a Paseo provider id. */
@@ -143,16 +182,28 @@ export function scopeForProvider(profile: WorkspaceProfile, providerId: string):
 }
 
 /** One load per wired editor, heaviest first, so a workspace panel can lead with the worst case. */
-export function loadsForWorkspace(profile: WorkspaceProfile, injection: InjectionLike | null): WorkspaceLoad[] {
+export function loadsForWorkspace(
+  profile: WorkspaceProfile,
+  injection: InjectionLike | null,
+  paseo: PaseoToolsLike | null = null,
+): WorkspaceLoad[] {
   const scopes = wiredScopes(profile);
-  if (scopes.length === 0) return [loadFor(profile, null, injection)];
-  return scopes.map((scope) => loadFor(profile, scope, injection)).sort((a, b) => b.servers.length - a.servers.length);
+  if (scopes.length === 0) return [loadFor(profile, null, injection, paseo)];
+  const weight = (load: WorkspaceLoad) => load.servers.length + (load.paseoTools > 0 ? 1 : 0);
+  return scopes.map((scope) => loadFor(profile, scope, injection, paseo)).sort((a, b) => weight(b) - weight(a));
 }
 
 // ------------------------------------------------------------------ cost profile
 
 export type CostProfile = {
+  /** Every server the agent loads, Paseo's built-in one included. */
   total: number;
+  /** 1 when Paseo tools are part of the load. */
+  builtIn: number;
+  /** Tools from Paseo's built-in server, a real count. */
+  paseoTools: number;
+  /** Tool estimate the tier reads: five per MCP server plus the real Paseo count. */
+  tools: number;
   stdio: number;
   http: number;
   unknown: number;
@@ -165,15 +216,20 @@ export type CostProfile = {
 /** Counts by transport and by where the definition lives. */
 export function costProfile(load: WorkspaceLoad): CostProfile {
   const count = (predicate: (entry: LoadedServer) => boolean) => load.servers.filter(predicate).length;
+  const builtIn = load.paseoTools > 0 ? 1 : 0;
+  const tools = load.servers.length * TOOLS_PER_SERVER_GUESS + load.paseoTools;
   return {
-    total: load.servers.length,
+    total: load.servers.length + builtIn,
+    builtIn,
+    paseoTools: load.paseoTools,
+    tools,
     stdio: count((entry) => entry.transport === "stdio"),
     http: count((entry) => entry.transport === "http"),
     unknown: count((entry) => entry.transport === "unknown"),
     project: count((entry) => entry.scope === "project"),
     local: count((entry) => entry.scope === "local"),
     user: count((entry) => entry.scope === "user"),
-    tier: budgetTier(load.servers.length),
+    tier: worseTier(budgetTier(load.servers.length), toolBudgetTier(tools)),
   };
 }
 

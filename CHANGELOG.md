@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.10.0 — 2026-09-24
+
+Paseo's own tools, the `mcp__paseo__*` set every daemon adds to its agents, are now shown, counted and switchable. Before this the plugin did not know they existed: an agent's load, the context-budget warning and the chip all left out 61 tools.
+
+### What the daemon does (read from @getpaseo/server 0.9.1)
+- The built-in server registers 39 tools for agents, terminals, schedules, heartbeats and workspaces, and 22 `browser_*` tools when `browserTools.enabled` is on (`speak` only exists for voice sessions).
+- An agent gets it when `mcp.enabled` and `mcp.injectIntoAgents` are both on. `providers.<id>.paseoTools.enabled: false` turns it off for one provider (absent means on). `disabledTools` takes bare names (`list_agents`).
+- Six providers are built in: `claude`, `codex`, `copilot`, `opencode`, `pi`, `omp`. Each is on and gets the tools with no config entry at all. Missing `injectIntoAgents` counts as off.
+- The policy is copied into an agent when it starts, so changes apply to new agents.
+- `/mcp/agents` needs a per-run token only agents get when a daemon password is set, so the plugin cannot ask it for `tools/list`. The tool list is a catalogue in `shared/paseo-tools.ts`, marked "as of Paseo 0.9.1" wherever it is shown.
+
+### Servers
+- A **Paseo tools** card at the top of Servers. It has the host-wide switch (the app's "Enable Paseo tools"), with a two-step confirm because it changes every agent on the host, and a switch per provider. The tool list is grouped into Agents, Terminals, Schedules and heartbeats, Workspaces and Browser. Each tool has a switch, for all providers at once or one picked provider, and **Turn off browser tools** for the group.
+- Writes go through `paseo.config.patch()` only. The patch holds just the changed fields, `disabledTools` is merged with the current list (unknown names kept), and a provider patch carries only `paseoTools`. The config is read back and checked, and the card shows the state saved. A tool name the catalogue does not know is refused before anything is sent. If another client changed the same provider's list at the same moment, the result says so and shows the list now saved.
+- The card lists every provider that can run an agent: the six built-ins and every enabled config entry. **All providers** writes each of them, built-ins with no entry included. Built-ins with no settings yet sit in a quieter row. An editor found on disk that Paseo has no provider for (`~/.kimi-code`, `~/.grok`) gets no Paseo tools unless the config declares it.
+
+### Counted
+- The workspace and agent panels list **Paseo tools (built in)** among what an agent loads, for the providers that actually get it, with its tool count.
+- The context budget gets a tool check next to the server check (`shared/budget.ts`: 40 and 80 tools, the lines 8 and 16 servers stand for at five each). Paseo tools count at their real number; other servers stay at five each. The worse check wins. A load without Paseo tools gets the same numbers as before.
+- The composer chip counts Paseo tools as one more server, with their tools, when the agent's own provider gets them.
+- Overview: a **Paseo tools** line, "on · 61 tools for claude, codex", with a link to the card.
+
+### Contracts
+Additive only: new RPCs `paseo-mcp.paseo-tools` and `paseo-mcp.set-paseo-tools`. Optional `paseoTools` on `paseo-mcp.workspace` and `paseo-mcp.agent-servers`, and optional fields on the cost profile. No settings document changed. Reads share one daemon config read for 5 s, never one taken before a write, and nothing on the path starts a process. Panels re-read every minute, so a change made in the Paseo app shows within a minute.
+
+### Tests
+138 tests (was 114): the catalogue by name, the config reader, every combination of the four settings, the patch builder (merge, keep, no-op, several providers, unknown names), the provider list (built-ins, config entries, editors Paseo cannot run), the write handler against a fake daemon (fields kept, read-back, refusal, a read-back that disagrees or fails, a racing client), budget and chip counts with and without Paseo tools (`tests/paseo-tools.test.ts`). The no-spawn test also calls both new RPCs. The UI preview answers them and takes `?paseo-off` and `?no-browser`; `PREVIEW_PORT` picks another port.
+
 ## 0.9.0 — 2026-09-23
 
 The MCP page gets AI Router's navigation: one row of tabs with icons, a line under it saying what the tab is for, and an Overview that answers "is everything OK, and what do I do next" before anything else.

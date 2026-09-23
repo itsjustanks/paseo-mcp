@@ -26,6 +26,7 @@ paseo plugin update paseo-mcp
 - Tells each workspace what an agent started there loads (project, local and user-level servers), what it costs in child processes and memory, and warns when the count is heavy enough to exhaust the agent's context.
 - Checks every server's health in the background and flags problems per agent, per project, and per user config.
 - Lists the tools each server exposes, the way Claude Code's `/mcp` view does, and keeps an always-on chip on every agent's composer with the server count and status.
+- Shows and switches Paseo's own built-in tools (the `mcp__paseo__*` tools the daemon adds to agents): for the whole host, per provider, and per tool.
 - Syncs MCP definitions and Claude project trust to discovered account directories without copying OAuth grants.
 - Keeps backups before config writes and preserves destination-specific credentials.
 
@@ -173,6 +174,40 @@ Tool descriptions are text the server controls; they are flattened to one capped
 are stored or shown. The data carries each tool's name and argument list so a per-tool policy
 control can be added alongside it later.
 
+## Paseo tools
+
+Every Paseo daemon runs its own MCP server, `paseo`, and with `daemon.mcp.injectIntoAgents` on it
+adds that server to every agent it starts. It hands each agent 39 tools for agents, terminals,
+schedules, heartbeats and workspaces, plus 22 `browser_*` tools when browser tools are on: 61 in all
+(Paseo 0.9.1). The **Paseo tools** card at the top of **Servers** shows and changes what agents get:
+
+| Control | Daemon setting | Default |
+| --- | --- | --- |
+| Add to every agent on this host | `mcp.injectIntoAgents`, the app's Settings → Orchestration → Enable Paseo tools | off when unset in `config.json` |
+| Per provider | `providers.<id>.paseoTools.enabled` | on (absent means on) |
+| Per tool | `providers.<id>.paseoTools.disabledTools`, bare names such as `list_agents` | none |
+| Turn off browser tools | `browserTools.enabled` | off |
+
+The host-wide switch changes every agent on the host, so it asks twice. The tool switches write to
+every provider at once under **All providers**, or to one provider when one is picked. A tool that is
+off for only some providers says which. `mcp.enabled` (the `--no-mcp` flag) turns the server off
+altogether; the config API cannot change it, so the card only says so when it is off.
+
+Every change goes through the daemon's config API (`paseo.config.patch`), never by editing
+`config.json`. Only the fields that change are sent. `disabledTools` starts from the current list,
+so names the plugin does not know are kept, and a provider patch carries only `paseoTools`, so
+`extends`, `env` and every other field stay as they are. The config is read back after the write
+and the card shows what was saved. The daemon copies the policy into an agent when it starts, so
+**a change applies to agents started after it**; a running agent keeps the tools it started with.
+
+The tool list is a catalogue in `shared/paseo-tools.ts` copied from Paseo 0.9.1, and the card says
+so. The daemon cannot be asked for it: `/mcp/agents` wants a per-run token that only agents get
+when the daemon has a password.
+
+The same count feeds everything else: the Overview has a **Paseo tools** line, the workspace and
+agent panels list **Paseo tools (built in)** among what an agent loads, and the composer chip counts
+it as one more server with its tools, for the agent's own provider only.
+
 ### Project level vs user level
 
 Each health result carries the configs that define the server: an editor's global config
@@ -212,6 +247,11 @@ tokens before any work, the range where Paseo-launched agents fail with "Prompt 
 warning lists the user-level servers the agent loads, since those are the ones that can be moved into
 one project's `.mcp.json` or removed from the editor config, with a button to MCP management. The
 thresholds live in `shared/budget.ts`.
+
+The server lines assume five tools per server. Paseo's built-in server is counted by its real
+number of tools (61, or 39 without browser tools), so a second check counts tools: about 40 is
+"getting heavy" and 80 "over budget", the same lines as 8 and 16 servers at five each. The worse of
+the two checks wins. Without Paseo tools both checks always agree, so the numbers are unchanged.
 
 Health issues under the count are split the same way: servers this workspace loads first, each with
 an **Open** button that lands on that server in MCP management, and problems elsewhere folded away.

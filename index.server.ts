@@ -29,6 +29,7 @@ import {
   handleMcpRawGet,
   handleMcpRawPut,
 } from "./server/mcpjson";
+import { handleMcpPaseoTools, handleMcpSetPaseoTools } from "./server/paseo-tools";
 import { markClientSeen } from "./server/presence";
 import { handleMcpSiblings } from "./server/siblings";
 import { handleMcpTools, handleMcpToolsCached } from "./server/tools";
@@ -43,9 +44,11 @@ import {
   mcpHealth,
   mcpHealthCached,
   mcpMatrix,
+  mcpPaseoTools,
   mcpRemove,
   mcpRename,
   mcpSetEnabled,
+  mcpSetPaseoTools,
   mcpSiblings,
   mcpSync,
   mcpTools,
@@ -121,6 +124,8 @@ export default function contribute(server: PluginServerContext) {
   handle(mcpLoginCancel, handleMcpLoginCancel);
   handle(mcpLogout, handleMcpLogout);
   handle(mcpSiblings, handleMcpSiblings);
+  handle(mcpPaseoTools, handleMcpPaseoTools);
+  handle(mcpSetPaseoTools, handleMcpSetPaseoTools);
 
   runStart();
   return runShutdown;

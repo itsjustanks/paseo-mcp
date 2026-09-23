@@ -55,6 +55,7 @@ import { WorkspaceContext, pickLoad } from "./budget";
 import { HealthSummary, ServerHealthTag, healthStatus, healthWord, splitIssues, useHealth } from "./health";
 import { canOpenMcp, openMcp, takePendingServer } from "./navigate";
 import { SectionHeading, TabBar, type SectionId } from "./navigation";
+import { PaseoToolsAgentRow, PaseoToolsCard, PaseoToolsLine } from "./paseo-tools";
 import { AiRouterCard } from "./promo";
 import { ServerTools, toolsStatus, toolsWord, useTools } from "./tools";
 import {
@@ -744,7 +745,7 @@ function AgentServers({
       <View style={{ gap: t.space.sm }}>
         <Facts
           items={[
-            { value: plural(data.servers.length, "server") },
+            { value: plural(data.servers.length + (data.paseoTools && data.paseoTools.tools > 0 ? 1 : 0), "server") },
             offCount > 0 ? { value: `${offCount} off for this workspace`, tone: "attention" } : null,
             data.scope ? { value: data.scope.label } : { value: "no editor config wired to this provider" },
           ]}
@@ -758,14 +759,15 @@ function AgentServers({
         </Text>
         {!data.projectIncluded && data.projectNote ? <Text style={t.text.caption}>{data.projectNote}.</Text> : null}
         <Card padded={false}>
-          {data.servers.length === 0 ? <EmptyState title="Nothing loads here" body="No editor config wired to this provider defines an MCP server for this workspace." /> : null}
+          {data.servers.length === 0 && !data.paseoTools ? <EmptyState title="Nothing loads here" body="No editor config wired to this provider defines an MCP server for this workspace." /> : null}
+          {data.paseoTools ? <PaseoToolsAgentRow info={data.paseoTools} providerLabel={providerLabel} first /> : null}
           {data.servers.map((entry, index) => {
             const tools = toolsByName?.get(entry.name);
             const off = entry.enabled.state === "disabled";
             return (
               <Row
                 key={entry.name}
-                first={index === 0}
+                first={index === 0 && !data.paseoTools}
                 tone={off ? "neutral" : undefined}
                 title={
                   <View style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: t.space.sm, minWidth: 0 }}>
@@ -1468,6 +1470,7 @@ function McpBody({ layout, host }: PluginSurfaceProps) {
           ? { value: plural(toolTotals.tools, "tool"), status: (toolTotals.tools > 0 ? "ok" : "neutral") as Status, hint: `listed by ${toolTotals.listed} of ${plural(toolTotals.servers, "server")}`, action: { label: "Servers", onPress: toServers("all") } }
           : { value: toolsQuery.isFetching ? "listing" : "not listed yet", status: (toolsQuery.isFetching ? "busy" : "neutral") as Status })}
       />
+      <PaseoToolsLine onOpen={toServers("all")} />
       <StatusLine
         label="Projects"
         {...(authQuery.data
@@ -2002,6 +2005,7 @@ function McpBody({ layout, host }: PluginSurfaceProps) {
         }
         below={summaryStrip}
       />
+      {filter === "all" && !search ? <PaseoToolsCard hostLabel={host.label} /> : null}
       {filters}
       {list}
     </View>

@@ -10,5 +10,6 @@ export default defineConfig({
     { find: "@getpaseo/plugin", replacement: here("./plugin.tsx") },
     { find: "react-native", replacement: "react-native-web" },
   ] },
-  server: { host: "127.0.0.1", port: 43199, strictPort: true },
+  // PREVIEW_PORT picks another port when 43199 is taken.
+  server: { host: "127.0.0.1", port: Number(process.env.PREVIEW_PORT ?? 43199), strictPort: true },
 });

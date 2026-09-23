@@ -14,6 +14,7 @@ import {
   redactDetail,
   type McpDef,
 } from "./handlers";
+import { paseoToolsLoad } from "./paseo-tools";
 import { observeWorkspaceProcesses } from "./processes";
 import { withDeadline } from "./run";
 import { readSettingsDocument } from "./settings";
@@ -120,6 +121,7 @@ export async function handleMcpWorkspace(
   const accounts = collectAccounts({ askCodex: false });
   const destinations = await buildDestinations(paseo);
   const { profile, defs } = buildProfile(destinations, definitions, configPath, candidates);
+  const paseoTools = await paseoToolsLoad(paseo, destinations.map((dest) => dest.providerId));
   let processes: ProcessObservation;
   try {
     processes = await observeWorkspaceProcesses(directory, defs);
@@ -140,5 +142,6 @@ export async function handleMcpWorkspace(
     profile,
     injection: readInjection(),
     processes,
+    ...(paseoTools ? { paseoTools } : {}),
   };
 }

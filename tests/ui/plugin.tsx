@@ -1,6 +1,7 @@
 /** Browser stand-in for @getpaseo/plugin: every MCP contract answered from fixtures. */
 import React, { useCallback } from "react";
 import { Text, View } from "react-native";
+import { buildPaseoToolsPatch, paseoToolProviders, readDaemonToolsConfig, resolvePaseoTools } from "../../shared/paseo-tools";
 export function defineRpc<T>(contract: T) { return contract; }
 export function defineSettings<T>(definition: T) { return definition; }
 const params = new URLSearchParams(location.search);
@@ -89,6 +90,18 @@ const toml = (name: string, def: any) => def.url
   : `[mcp_servers.${name}]\ncommand = "${def.command}"\nargs = ${JSON.stringify(def.args)}`;
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+// Paseo's built-in tools. ?paseo-off: "Enable Paseo tools" off for the host;
+// ?no-browser: browser tools off. The daemon config is held here and patched
+// the way the daemon merges (records deep, arrays replaced).
+const paseoConfig: any = (window as any).__paseoConfig ??= {
+  mcp: { enabled: true, injectIntoAgents: !params.has("paseo-off") },
+  browserTools: { enabled: !params.has("no-browser") },
+  providers: { claude: { enabled: true }, codex: { enabled: true, paseoTools: { disabledTools: ["kill_agent", "archive_workspace"] } }, "claude-work": { extends: "claude", enabled: true }, pi: { enabled: false } },
+};
+const merge = (a: any, b: any): any => Object.fromEntries([...new Set([...Object.keys(a ?? {}), ...Object.keys(b)])].map((k) => [k, b[k] && typeof b[k] === "object" && !Array.isArray(b[k]) && a?.[k] && typeof a[k] === "object" ? merge(a[k], b[k]) : k in b ? b[k] : a[k]]));
+const paseoState = () => ({ ...resolvePaseoTools(readDaemonToolsConfig(paseoConfig), paseoToolProviders(readDaemonToolsConfig(paseoConfig))), checkedAt: new Date().toISOString() });
+const paseoLoad = () => { const state = paseoState(); return { tools: Object.fromEntries(state.providers.map((p) => [p.id, p.tools])), blocker: state.blocker, asOf: state.asOf }; };
+
 async function call(contract: any, input: any) {
   const name = String(contract.name).replace("paseo-mcp.", "");
   calls.push(name);
@@ -124,7 +137,7 @@ async function call(contract: any, input: any) {
     case "import-apply": return { ok: true, written: input.servers.map((s: any) => `${s.name} → ${input.targets.length} editors`), skipped: [], issues: [], message: `Imported ${input.servers.length} servers.` };
     case "export": return { text: JSON.stringify({ mcpServers: Object.fromEntries(servers.map((s) => [s.name, definition(s.name)])) }, null, 2), filename: input.scope === "all" ? "mcp-export.json" : `${input.name}.json`, containsSecrets: Boolean(input.reveal) };
     case "export-file": return { ok: true, path: `${HOME}/Downloads/${input.filename}`, message: `Saved to ${HOME}/Downloads/${input.filename}.` };
-    case "workspace": return { workspace: { id: "ws-1", name: "data-glue", directory: `${HOME}/projects/data-glue`, projectRootPath: `${HOME}/projects/data-glue` }, configPath: `${HOME}/projects/data-glue/.mcp.json`, servers: [{ name: "supabase", transport: "stdio", detail: "npx -y @supabase/mcp-server", authStyle: "inline-credentials" }, { name: "jam", transport: "http", detail: "https://mcp.jam.dev/mcp", authStyle: "oauth-or-none" }], accounts, profile, injection: { injectWorkspaceServers: !params.has("inject-off"), providers: ["codex"], skipInlineCredentialServers: true }, processes };
+    case "workspace": return { workspace: { id: "ws-1", name: "data-glue", directory: `${HOME}/projects/data-glue`, projectRootPath: `${HOME}/projects/data-glue` }, configPath: `${HOME}/projects/data-glue/.mcp.json`, servers: [{ name: "supabase", transport: "stdio", detail: "npx -y @supabase/mcp-server", authStyle: "inline-credentials" }, { name: "jam", transport: "http", detail: "https://mcp.jam.dev/mcp", authStyle: "oauth-or-none" }], accounts, profile, injection: { injectWorkspaceServers: !params.has("inject-off"), providers: ["codex"], skipInlineCredentialServers: true }, processes, paseoTools: paseoLoad() };
     case "agent-servers": {
       const provider = params.get("provider") ?? "codex";
       const claudeP = provider !== "codex";
@@ -147,7 +160,7 @@ async function call(contract: any, input: any) {
         { name: "jam", transport: "http", detail: "https://mcp.jam.dev/mcp", scope: "project", configPath: profile.projectConfigPath, inlineCredentials: false },
         ...userList.filter((s) => !["jam", "supabase"].includes(s.name)).map((s) => ({ name: s.name, transport: s.transport, detail: s.detail, scope: "user", configPath: scopeId, inlineCredentials: s.inlineCredentialsIn.includes(scopeId) })),
       ].map((row) => ({ ...row, enabled: verdict(row.scope, row.name) }));
-      return { directory: `${HOME}/projects/data-glue`, scope: { id: scopeId, label: destinations.find((d) => d.id === scopeId)!.label, provider: claudeP ? "claude" : "codex", providerId: provider, configPath: scopeId }, projectIncluded: true, projectNote: "", servers: rows, account: accounts.find((a) => a.provider === (claudeP ? "claude" : "codex")) ?? null };
+      return { directory: `${HOME}/projects/data-glue`, scope: { id: scopeId, label: destinations.find((d) => d.id === scopeId)!.label, provider: claudeP ? "claude" : "codex", providerId: provider, configPath: scopeId }, projectIncluded: true, projectNote: "", servers: rows, account: accounts.find((a) => a.provider === (claudeP ? "claude" : "codex")) ?? null, paseoTools: (() => { const load = paseoLoad(); return { tools: load.tools[provider] ?? 0, blocker: load.blocker, asOf: load.asOf }; })() };
     }
     case "set-enabled": {
       const disabledHere = (window as any).__disabled ??= new Set<string>();
@@ -169,6 +182,12 @@ async function call(contract: any, input: any) {
     case "edit-one": return { ok: true, message: `Saved ${input.name}.` };
     // ?ai-router: the daemon already has AI Router, so the Overview card shows "Installed".
     case "siblings": return { aiRouter: { installed: params.has("ai-router") } };
+    case "paseo-tools": return paseoState();
+    case "set-paseo-tools": {
+      const patch = buildPaseoToolsPatch(readDaemonToolsConfig(paseoConfig), input);
+      if (patch) Object.assign(paseoConfig, merge(paseoConfig, patch));
+      return { ok: true, message: patch ? "Saved. Agents started from now on get it; a running agent keeps the tools it started with." : "Already set that way; nothing was written.", state: paseoState() };
+    }
     default: throw new Error(`Fixture has no answer for ${name}`);
   }
 }
