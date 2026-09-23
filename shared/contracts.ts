@@ -151,8 +151,21 @@ export const PaseoToolsLoadSchema = z.object({
   tools: z.record(z.string(), z.number()),
   blocker: z.enum(["", "mcp-off", "inject-off"]),
   asOf: z.string(),
+  /** 0.11.0: "live" when the list came from the daemon's own `tools/list`; absent or "catalogue" otherwise. */
+  source: z.enum(["catalogue", "live"]).optional(),
 });
 export type PaseoToolsLoad = z.infer<typeof PaseoToolsLoadSchema>;
+
+/**
+ * Whether a provider's CLI defers MCP tool definitions (0.11.0). `reason`
+ * names the deciding fact; `cli` is the base CLI it was judged for. See
+ * shared/tool-search.ts.
+ */
+export const ToolSearchVerdictSchema = z.object({
+  state: z.enum(["on", "off", "unknown"]),
+  reason: z.string(),
+  cli: z.string(),
+});
 
 // ------------------------------------------------------------ agent servers
 
@@ -198,7 +211,9 @@ export const mcpAgentServers = defineRpc({
     /** The account whose grants the sign-in rows read, when the scope has one. */
     account: McpAuthAccountSchema.nullable(),
     /** Paseo's built-in tools for this provider (0.10.0; absent from older hosts or when the daemon config could not be read). */
-    paseoTools: z.object({ tools: z.number(), blocker: z.enum(["", "mcp-off", "inject-off"]), asOf: z.string() }).optional(),
+    paseoTools: z.object({ tools: z.number(), blocker: z.enum(["", "mcp-off", "inject-off"]), asOf: z.string(), source: z.enum(["catalogue", "live"]).optional() }).optional(),
+    /** 0.11.0: whether this provider's CLI defers tool definitions; absent from older hosts. */
+    toolSearch: ToolSearchVerdictSchema.optional(),
   }),
 });
 
@@ -256,6 +271,8 @@ export const mcpWorkspace = defineRpc({
     processes: ProcessObservationSchema.optional(),
     // 0.10.0: Paseo's built-in tools per provider, counted into the load.
     paseoTools: PaseoToolsLoadSchema.optional(),
+    // 0.11.0: per provider id, whether its CLI defers tool definitions.
+    toolSearch: z.record(z.string(), ToolSearchVerdictSchema).optional(),
   }),
 });
 
@@ -507,6 +524,12 @@ export const PaseoToolsStateSchema = z.object({
   /** The Paseo release the tool catalogue matches. */
   asOf: z.string(),
   checkedAt: z.string(),
+  /** 0.11.0: where the tool list came from: the daemon's own `tools/list` ("live") or the catalogue. */
+  source: z.enum(["catalogue", "live"]).optional(),
+  /** 0.11.0: the Paseo version this host runs, when the plugin can tell. */
+  hostVersion: z.string().optional(),
+  /** 0.11.0: why the list is not live, in a sentence ("" when it is). */
+  liveNote: z.string().optional(),
 });
 export type PaseoToolsStateReport = z.infer<typeof PaseoToolsStateSchema>;
 

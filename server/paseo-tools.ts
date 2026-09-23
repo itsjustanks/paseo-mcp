@@ -3,8 +3,10 @@ import type { PaseoToolsLoad } from "../shared/contracts";
 import { plainError } from "../shared/errors";
 import {
   PASEO_TOOLS_AS_OF,
+  PASEO_TOOL_CATALOG,
   buildPaseoToolsPatch,
   concurrentListChanges,
+  liveCatalog,
   paseoToolProviders,
   patchMismatch,
   readDaemonToolsConfig,
@@ -15,6 +17,9 @@ import {
   type PaseoToolsPatch,
   type PaseoToolsState,
 } from "../shared/paseo-tools";
+import { readProviderLaunch, type ProviderLaunch } from "../shared/tool-search";
+import { liveSnapshot, refreshLive } from "./paseo-live";
+import { runningPaseoVersion } from "./paseo-version";
 import { withDeadline } from "./run";
 
 /**
@@ -26,38 +31,52 @@ import { withDeadline } from "./run";
  * Every write bumps `generation`. A read is cached, and shared with later
  * callers, only while no write has started since it began, so an answer read
  * before a write can never be served after it.
+ *
+ * The same read carries each provider entry's `extends` and `env`, which the
+ * tool-search verdict needs (server/tool-search.ts), so that costs no second read.
  */
 
 type Paseo = PluginHandlerContext["paseo"];
 
 const CACHE_MS = 5_000;
 
+type DaemonRead = { config: DaemonToolsConfig; launch: ProviderLaunch };
+
 let generation = 0;
-let cached: { at: number; config: DaemonToolsConfig } | null = null;
-let inFlight: { generation: number; read: Promise<DaemonToolsConfig> } | null = null;
+let cached: ({ at: number } & DaemonRead) | null = null;
+let inFlight: { generation: number; read: Promise<DaemonRead> } | null = null;
 
 /** Keep a read only if no write started after it did. */
-function remember(config: DaemonToolsConfig, startedAt: number): DaemonToolsConfig {
-  if (startedAt === generation) cached = { at: Date.now(), config };
-  return config;
+function remember(read: DaemonRead, startedAt: number): DaemonRead {
+  if (startedAt === generation) cached = { at: Date.now(), ...read };
+  return read;
+}
+
+async function readDaemonFresh(paseo: Paseo): Promise<DaemonRead> {
+  const startedAt = generation;
+  const { config } = await withDeadline(paseo.config.get(), "its daemon settings");
+  return remember({ config: readDaemonToolsConfig(config), launch: readProviderLaunch(config) }, startedAt);
 }
 
 async function readFresh(paseo: Paseo): Promise<DaemonToolsConfig> {
-  const startedAt = generation;
-  const { config } = await withDeadline(paseo.config.get(), "its daemon settings");
-  return remember(readDaemonToolsConfig(config), startedAt);
+  return (await readDaemonFresh(paseo)).config;
 }
 
-/** The daemon's Paseo-tools settings, from the last few seconds' read when there is one. */
-export function readToolsConfig(paseo: Paseo, fresh = false): Promise<DaemonToolsConfig> {
-  if (!fresh && cached && Date.now() - cached.at < CACHE_MS) return Promise.resolve(cached.config);
+/** The daemon settings this plugin reads, from the last few seconds' read when there is one. */
+export function readDaemon(paseo: Paseo, fresh = false): Promise<DaemonRead> {
+  if (!fresh && cached && Date.now() - cached.at < CACHE_MS) return Promise.resolve(cached);
   if (inFlight?.generation === generation) return inFlight.read;
-  const entry = { generation, read: readFresh(paseo) };
+  const entry = { generation, read: readDaemonFresh(paseo) };
   inFlight = entry;
   void entry.read.finally(() => {
     if (inFlight === entry) inFlight = null;
   }).catch(() => undefined);
   return entry.read;
+}
+
+/** The daemon's Paseo-tools settings, from the last few seconds' read when there is one. */
+export async function readToolsConfig(paseo: Paseo, fresh = false): Promise<DaemonToolsConfig> {
+  return (await readDaemon(paseo, fresh)).config;
 }
 
 /** A write is starting: whatever was read before it is out of date. */
@@ -73,15 +92,35 @@ export function resetPaseoToolsCache(): void {
   inFlight = null;
 }
 
-function report(config: DaemonToolsConfig, known: readonly string[] = []) {
-  return { ...resolvePaseoTools(config, paseoToolProviders(config, known)), checkedAt: new Date().toISOString() };
+/**
+ * The tool list in use: the daemon's own answer when there is one
+ * (server/paseo-live.ts), else the catalogue. Asking again happens in the
+ * background, at most every ten minutes, so no read waits on it.
+ */
+function catalogInUse(config: DaemonToolsConfig) {
+  void refreshLive(config.mcpEnabled);
+  const live = liveSnapshot();
+  return live.tools ? { catalog: liveCatalog(live.tools), source: "live" as const, liveNote: "" } : { catalog: PASEO_TOOL_CATALOG, source: "catalogue" as const, liveNote: live.note };
 }
 
-export function toolsLoad(state: PaseoToolsState): PaseoToolsLoad {
+function report(config: DaemonToolsConfig, known: readonly string[] = []) {
+  const { catalog, source, liveNote } = catalogInUse(config);
+  const hostVersion = runningPaseoVersion();
+  return {
+    ...resolvePaseoTools(config, paseoToolProviders(config, known), catalog),
+    checkedAt: new Date().toISOString(),
+    source,
+    liveNote,
+    ...(hostVersion ? { hostVersion } : {}),
+  };
+}
+
+export function toolsLoad(state: PaseoToolsState & { source?: "catalogue" | "live" }): PaseoToolsLoad {
   return {
     tools: Object.fromEntries(state.providers.map((entry) => [entry.id, entry.tools])),
     blocker: state.blocker,
     asOf: state.asOf,
+    ...(state.source ? { source: state.source } : {}),
   };
 }
 
@@ -100,7 +139,10 @@ export async function paseoToolsLoad(paseo: Paseo, known: readonly string[] = []
 }
 
 export async function handleMcpPaseoTools({ refresh }: { refresh?: boolean }, { paseo }: PluginHandlerContext) {
-  return report(await readToolsConfig(paseo, Boolean(refresh)));
+  const config = await readToolsConfig(paseo, Boolean(refresh));
+  // Refresh is the one path that waits for the daemon's own list (5 s at most).
+  if (refresh) await refreshLive(config.mcpEnabled, true);
+  return report(config);
 }
 
 const APPLIES = "Agents started from now on get it; a running agent keeps the tools it started with.";
@@ -136,9 +178,11 @@ export function describePatch(patch: PaseoToolsPatch, before: DaemonToolsConfig)
  * sentence, with the state as last read so the card never shows a guess.
  */
 export async function handleMcpSetPaseoTools(change: PaseoToolsChange, { paseo }: PluginHandlerContext) {
-  const unknown = unknownTools(change);
+  const live = liveSnapshot().tools;
+  const unknown = unknownTools(change, (live ?? []).map((entry) => entry.name));
   if (unknown.length > 0) {
-    return { ok: false, message: `Not a Paseo tool as of Paseo ${PASEO_TOOLS_AS_OF}: ${unknown.join(", ")}. Nothing was changed.` };
+    const where = live ? "on this host" : `as of Paseo ${PASEO_TOOLS_AS_OF}`;
+    return { ok: false, message: `Not a Paseo tool ${where}: ${unknown.join(", ")}. Nothing was changed.` };
   }
   let before: DaemonToolsConfig;
   try {

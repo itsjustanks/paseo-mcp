@@ -1,5 +1,11 @@
+import { ADD_PROJECT_SERVERS } from "./settings";
+import type { ToolSearchVerdict } from "./tool-search";
+
 /** Paseo's built-in tools per provider, as the workspace RPC reports them (shared/contracts.ts `PaseoToolsLoad`). */
 export type PaseoToolsLike = { tools: Record<string, number> };
+
+/** Tool-search verdicts per provider id, as the workspace RPC reports them (0.11.0). See shared/tool-search.ts. */
+export type ToolSearchLike = Record<string, ToolSearchVerdict>;
 
 /** The two injection fields the count depends on; accepts the RPC's string-typed copy as well as the settings document. */
 export type InjectionLike = { injectWorkspaceServers: boolean; providers: readonly string[] };
@@ -63,6 +69,8 @@ export type WorkspaceLoad = {
    * the daemon does not add it for this provider, or the host did not say.
    */
   paseoTools: number;
+  /** Whether this provider's CLI defers tool definitions; absent when the host did not say (0.11.0). */
+  toolSearch?: ToolSearchVerdict;
 };
 
 // ------------------------------------------------------------------ thresholds
@@ -104,6 +112,12 @@ export const TOOLS_PER_SERVER_GUESS = 5;
 export const BUDGET_TOOLS_ATTENTION = BUDGET_ATTENTION * TOOLS_PER_SERVER_GUESS;
 export const BUDGET_TOOLS_PROBLEM = BUDGET_PROBLEM * TOOLS_PER_SERVER_GUESS;
 
+/**
+ * With tool search on (shared/tool-search.ts) the CLI sends tool names only and
+ * loads definitions when needed, so the tool check does not raise the tier.
+ * The server check still does: each stdio server is a process and each server
+ * a connection per agent session, deferred or not.
+ */
 export function toolBudgetTier(tools: number): BudgetTier {
   if (tools >= BUDGET_TOOLS_PROBLEM) return "problem";
   if (tools >= BUDGET_TOOLS_ATTENTION) return "attention";
@@ -135,6 +149,7 @@ export function loadFor(
   scope: ProfileScope | null,
   injection: InjectionLike | null,
   paseo: PaseoToolsLike | null = null,
+  search: ToolSearchLike | null = null,
 ): WorkspaceLoad {
   const provider = scope?.provider ?? "";
   const providerId = scope?.providerId ?? "";
@@ -144,8 +159,8 @@ export function loadFor(
   const projectNote = projectIncluded
     ? ""
     : injection?.injectWorkspaceServers
-      ? `Injection is on but not for ${providerId}; its agents do not read .mcp.json`
-      : `${provider} agents do not read .mcp.json; turn on injection to add it`;
+      ? `"${ADD_PROJECT_SERVERS}" is on but not for ${providerId}; its agents do not read .mcp.json`
+      : `${provider} agents do not read .mcp.json; turn on "${ADD_PROJECT_SERVERS}" to add it`;
 
   const servers: LoadedServer[] = [];
   const seen = new Set<string>();
@@ -160,7 +175,8 @@ export function loadFor(
   if (projectIncluded) add(profile.project, "project", profile.projectConfigPath);
   if (scope) add(scope.servers, "user", scope.configPath);
   const paseoTools = providerId ? paseo?.tools[providerId] ?? 0 : 0;
-  return { providerId, provider, label: scope?.label ?? "", servers, projectIncluded, projectNote, paseoTools };
+  const toolSearch = providerId ? search?.[providerId] : undefined;
+  return { providerId, provider, label: scope?.label ?? "", servers, projectIncluded, projectNote, paseoTools, ...(toolSearch ? { toolSearch } : {}) };
 }
 
 /** Scopes an agent can actually run as: a destination wired to a Paseo provider id. */
@@ -186,11 +202,12 @@ export function loadsForWorkspace(
   profile: WorkspaceProfile,
   injection: InjectionLike | null,
   paseo: PaseoToolsLike | null = null,
+  search: ToolSearchLike | null = null,
 ): WorkspaceLoad[] {
   const scopes = wiredScopes(profile);
-  if (scopes.length === 0) return [loadFor(profile, null, injection, paseo)];
+  if (scopes.length === 0) return [loadFor(profile, null, injection, paseo, search)];
   const weight = (load: WorkspaceLoad) => load.servers.length + (load.paseoTools > 0 ? 1 : 0);
-  return scopes.map((scope) => loadFor(profile, scope, injection, paseo)).sort((a, b) => weight(b) - weight(a));
+  return scopes.map((scope) => loadFor(profile, scope, injection, paseo, search)).sort((a, b) => weight(b) - weight(a));
 }
 
 // ------------------------------------------------------------------ cost profile
@@ -204,6 +221,12 @@ export type CostProfile = {
   paseoTools: number;
   /** Tool estimate the tier reads: five per MCP server plus the real Paseo count. */
   tools: number;
+  /**
+   * True when tool search is on, so `tools` did not count towards the tier.
+   * Present only when the load carries a verdict (0.11.0), so a load without
+   * one gives exactly the 0.10.0 profile.
+   */
+  deferred?: boolean;
   stdio: number;
   http: number;
   unknown: number;
@@ -218,18 +241,21 @@ export function costProfile(load: WorkspaceLoad): CostProfile {
   const count = (predicate: (entry: LoadedServer) => boolean) => load.servers.filter(predicate).length;
   const builtIn = load.paseoTools > 0 ? 1 : 0;
   const tools = load.servers.length * TOOLS_PER_SERVER_GUESS + load.paseoTools;
+  const deferred = load.toolSearch?.state === "on";
+  const serverTier = budgetTier(load.servers.length);
   return {
     total: load.servers.length + builtIn,
     builtIn,
     paseoTools: load.paseoTools,
     tools,
+    ...(load.toolSearch ? { deferred } : {}),
     stdio: count((entry) => entry.transport === "stdio"),
     http: count((entry) => entry.transport === "http"),
     unknown: count((entry) => entry.transport === "unknown"),
     project: count((entry) => entry.scope === "project"),
     local: count((entry) => entry.scope === "local"),
     user: count((entry) => entry.scope === "user"),
-    tier: worseTier(budgetTier(load.servers.length), toolBudgetTier(tools)),
+    tier: deferred ? serverTier : worseTier(serverTier, toolBudgetTier(tools)),
   };
 }
 

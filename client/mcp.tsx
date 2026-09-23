@@ -754,7 +754,7 @@ function AgentServers({
           {anySwitch
             ? `A switch changes what an agent started in ${data.directory} loads. ${SWITCH_EFFECT_NOTE}`
             : data.scope?.provider === "codex"
-              ? "Codex reads its config.toml on top of what Paseo passes it, so only servers this plugin injects from .mcp.json can be switched off per workspace. User-level Codex servers show their state; remove them from Servers to stop loading them."
+              ? "Codex reads its config.toml on top of what Paseo passes it, so only servers this plugin adds from .mcp.json can be switched off per workspace. User-level Codex servers show their state; remove them from Servers to stop loading them."
               : "This editor has no per-workspace switch; servers show their state only."}
         </Text>
         {!data.projectIncluded && data.projectNote ? <Text style={t.text.caption}>{data.projectNote}.</Text> : null}

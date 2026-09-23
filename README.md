@@ -30,15 +30,17 @@ paseo plugin update paseo-mcp
 - Syncs MCP definitions and Claude project trust to discovered account directories without copying OAuth grants.
 - Keeps backups before config writes and preserves destination-specific credentials.
 
-## Inject servers into agents
+## Add project servers to agents
 
-Off by default. Turn it on under **Settings → Plugins → Paseo MCP → Injection**, or run the
-**Configure MCP injection** command.
+Off by default. Turn it on under **Settings → Plugins → Paseo MCP → Project servers**, or run the
+**Add project servers to agents** command. This is the plugin's own setting and is mainly for Codex,
+which does not read `.mcp.json`. It is not Paseo's **Enable Paseo tools** (`mcp.injectIntoAgents`),
+which adds Paseo's own `mcp__paseo__*` tools; that one is on the [Paseo tools](#paseo-tools) card.
 
 | Setting | Default | Meaning |
 | --- | --- | --- |
-| Inject workspace servers | off | Add the workspace's `.mcp.json` servers to every new agent |
-| Providers | Codex | Inject for Codex, Claude Code, or both |
+| Add project servers to agents | off | Add the workspace's `.mcp.json` servers to every new agent |
+| Providers | Codex | Codex, Claude Code, or both |
 | Skip inline-credential servers | on | Leave out entries carrying tokens in `env`, `headers`, `args`, or the URL |
 
 When an agent is created for a chosen provider, the plugin reads `.mcp.json` from the agent's
@@ -47,11 +49,11 @@ the agent already defines are kept as-is. Nothing is written to any config file,
 read leaves the agent unchanged. The daemon log shows `injected N servers into <provider> agent`.
 
 Each agent also gets an **MCP** tab (and the **MCP for this agent** command) listing the workspace's
-project servers, with a line showing the agent's provider and whether injection applies to it.
+project servers, with a line showing the agent's provider and whether project servers are added for it.
 
 Settings live on the host at `$PASEO_HOME/plugin-settings/paseo-mcp/injection.json`
-(`~/.paseo` by default). The hook reads that file directly; if it is missing or invalid, injection
-stays off.
+(`~/.paseo` by default; the file and its keys kept their 0.10 names). The hook reads that file
+directly; if it is missing or invalid, the setting stays off.
 
 ## The MCP surface
 
@@ -91,7 +93,7 @@ a terminal shows up here.
 | --- | --- | --- |
 | Claude Code | user-level, local | `projects["<workspace dir>"].disabledMcpServers` in `~/.claude.json` — off for this workspace only, the definition is untouched. Same list `/mcp disable` writes. |
 | Claude Code | this project's `.mcp.json` | `enabledMcpjsonServers` / `disabledMcpjsonServers` for that directory (the approval lists). "Asks at launch" means neither list names it yet. |
-| Codex | this project's `.mcp.json` (injected) | The plugin's own `$PASEO_HOME/plugin-settings/paseo-mcp/workspace-disabled.json`; the `agent.create` hook leaves the server out for that directory. |
+| Codex | this project's `.mcp.json` (added by **Add project servers to agents**) | The plugin's own `$PASEO_HOME/plugin-settings/paseo-mcp/workspace-disabled.json`; the `agent.create` hook leaves the server out for that directory. |
 | Codex | user-level | No switch. Codex layers `config.toml` on top of what Paseo passes it, and `enabled = false` there is global. The row shows its state and says so. |
 | Kimi, Grok | any | No switch. |
 
@@ -200,9 +202,23 @@ so names the plugin does not know are kept, and a provider patch carries only `p
 and the card shows what was saved. The daemon copies the policy into an agent when it starts, so
 **a change applies to agents started after it**; a running agent keeps the tools it started with.
 
-The tool list is a catalogue in `shared/paseo-tools.ts` copied from Paseo 0.9.1, and the card says
-so. The daemon cannot be asked for it: `/mcp/agents` wants a per-run token that only agents get
-when the daemon has a password.
+Where the tool list comes from:
+
+- **Live**, when the daemon has no password. `/mcp/agents` is then open, so the host asks it for
+  `tools/list` at the address the daemon bound, which Paseo writes to `listen` in
+  `$PASEO_HOME/paseo.pid`. When that file is missing or has no address, it uses `PASEO_LISTEN`,
+  `daemon.listen` in `config.json`, or `127.0.0.1:$PORT` (default 6767). The card says "Tool list live from this host".
+  The host asks once at most every ten minutes, in the background, or now when you press
+  **Refresh**. A failed ask is not retried before then, and a good list is kept until a newer one
+  replaces it.
+- **The catalogue** in `shared/paseo-tools.ts`, copied from Paseo 0.9.1, otherwise. With a password
+  (`PASEO_PASSWORD` or `daemon.auth.password`), `/mcp/agents` wants a per-run token that only
+  agents get. The plugin never sends or guesses one. The card says "as of Paseo 0.9.1". When the host
+  runs another Paseo version, the card and the Overview line add: "This list is from Paseo 0.9.1;
+  this host runs X, so new tools may be missing and removed ones may still show." The version is
+  read from the `@getpaseo/server` package the daemon started the plugin from.
+
+The card also points to **Add project servers to agents** for servers from a project's `.mcp.json`.
 
 The same count feeds everything else: the Overview has a **Paseo tools** line, the workspace and
 agent panels list **Paseo tools (built in)** among what an agent loads, and the composer chip counts
@@ -222,7 +238,7 @@ is what the editor actually runs.
 The **MCP connections** tab and each agent's **MCP** tab lead with what an agent started in that
 workspace actually loads, counted from the same files the CLI reads:
 
-- the workspace's `.mcp.json` (read natively by Claude Code, or added by injection for the chosen
+- the workspace's `.mcp.json` (read natively by Claude Code, or added by **Add project servers to agents** for the chosen
   providers),
 - Claude Code's per-directory ("local") entries for that workspace,
 - the editor's user-level config (`~/.claude.json`, `~/.codex/config.toml`, …), which loads in
@@ -239,9 +255,8 @@ says so rather than showing a zero.
 
 ### Context-budget warning
 
-Every server's tool definitions are sent to the agent with its first prompt. Claude Code defers
-them once they pass 10% of the context window (MCP tool search, 2.1.7+); Cursor stops at 40 tools
-and warns that some models ignore more. The panel warns at **8** servers ("getting heavy", about 40
+Without tool search, every server's tool definitions are sent to the agent with its first prompt.
+Cursor stops at 40 tools and warns that some models ignore more. The panel warns at **8** servers ("getting heavy", about 40
 tools at five per server) and flags **16** or more as "over budget" (about 80 tools, well over 100K
 tokens before any work, the range where Paseo-launched agents fail with "Prompt is too long"). The
 warning lists the user-level servers the agent loads, since those are the ones that can be moved into
@@ -252,6 +267,39 @@ The server lines assume five tools per server. Paseo's built-in server is counte
 number of tools (61, or 39 without browser tools), so a second check counts tools: about 40 is
 "getting heavy" and 80 "over budget", the same lines as 8 and 16 servers at five each. The worse of
 the two checks wins. Without Paseo tools both checks always agree, so the numbers are unchanged.
+
+#### Tool search
+
+Claude Code's MCP tool search is on by default: it loads tool names at the start and definitions
+only when needed, so a long tool list costs little context. The host judges it per provider
+(`shared/tool-search.ts`) and the panel says which applies:
+
+| Verdict | When | Budget |
+| --- | --- | --- |
+| **on** | A Claude-based provider with none of the settings below, or `ENABLE_TOOL_SEARCH` set to `true`, `auto`, or `auto:N` with N up to 10 (`auto`'s own threshold) | The tool check does not raise the tier; the server check still does (stdio processes and connections are real). One line: "Claude Code's tool search is on: tool definitions load up front only while they fit in 10% of the context window, and on demand past that." |
+| **off** | A custom `ANTHROPIC_BASE_URL` (any host but `api.anthropic.com`), `ENABLE_TOOL_SEARCH=false`, or `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS`, which Claude Code says keeps tool search off even with `ENABLE_TOOL_SEARCH` set. Also every non-Claude CLI except Codex. | As before, and the warning names the reason: "AI Router re-routes this provider through OmniRoute (custom ANTHROPIC_BASE_URL) whenever its endpoint is up, so Claude Code's tool search is off and all 76 tool definitions load with the first prompt." |
+| **unknown** | Codex (it defers MCP tools only when the model supports tool search), Claude on Google Cloud's Agent Platform or Microsoft Foundry, `ENABLE_TOOL_SEARCH=auto:N` with N above 10 (tools load up front until they fill N% of the context window) or outside 0-100, or a provider whose CLI is not known | As before, with the reason |
+
+Sources, later ones winning:
+
+1. The daemon's own environment.
+2. The provider entry's `env` in the daemon config. A provider with `extends: "claude"` (or another
+   built-in) starts with that built-in's `env` and puts its own on top, as Paseo does.
+3. AI Router. It routes the built-in `claude` provider while its **routeAgents** setting is on
+   (read-only from `$PASEO_HOME/plugin-settings/ai-router/routing.json`; a missing or unreadable
+   file, or a `version` other than 1, means not routed, as AI Router reads it). It always routes
+   its own `ai-router` provider. A routed session gets both `ANTHROPIC_BASE_URL` and
+   `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1`.
+4. The `env` in Claude Code's own settings files: the user `settings.json` in the provider's
+   `CLAUDE_CONFIG_DIR` (or `~/.claude`), then, on the workspace and agent panels, the workspace's
+   `.claude/settings.json` and `.claude/settings.local.json`. Claude Code's docs say a value there
+   "overwrites the same variable exported in your shell, and when more than one settings file sets
+   a variable, the highest-precedence one applies"
+   ([settings reference, `env`](https://code.claude.com/docs/en/settings-reference#env)); local
+   beats project beats user ([settings precedence](https://code.claude.com/docs/en/settings#settings-precedence)).
+   An empty value cancels one set lower down. A missing or broken file counts as not there.
+
+Managed settings are not read, so a value set only there is not counted.
 
 Health issues under the count are split the same way: servers this workspace loads first, each with
 an **Open** button that lands on that server in MCP management, and problems elsewhere folded away.

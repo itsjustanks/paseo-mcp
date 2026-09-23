@@ -32,6 +32,7 @@ import {
   type McpDef,
 } from "./handlers";
 import { paseoToolsLoad } from "./paseo-tools";
+import { toolSearchVerdicts } from "./tool-search";
 import { withDeadline } from "./run";
 import { settingsPath } from "./settings";
 import { buildProfile, claudeLocalServers, readInjection } from "./workspace";
@@ -126,7 +127,8 @@ export async function handleMcpAgentServers(
   const { profile } = buildProfile(destinations, projectDefs, projectConfigPath, candidates);
   const scope = scopeForProvider(profile, providerId);
   const paseoTools = await paseoToolsLoad(paseo, providerId ? [providerId] : []);
-  const load = loadFor(profile, scope, readInjection(), paseoTools ?? null);
+  const toolSearch = providerId ? (await toolSearchVerdicts(paseo, [{ id: providerId, base: scope?.provider ?? "" }], { directory }))?.[providerId] : undefined;
+  const load = loadFor(profile, scope, readInjection(), paseoTools ?? null, toolSearch ? { [providerId]: toolSearch } : null);
   const dest = scope ? destinations.find((entry) => entry.id === scope.id) : undefined;
   const entry = scope?.provider === "claude" ? projectEntry(scope.configPath, directory) : undefined;
   const injectionDisabled = injectionDisabledFor(readInjectionStore(), directory);
@@ -169,7 +171,10 @@ export async function handleMcpAgentServers(
     account,
     // Paseo's built-in server is not an editor definition, so it has no switch
     // row here; it rides alongside with its count and why it is off, if it is.
-    ...(paseoTools && providerId ? { paseoTools: { tools: paseoTools.tools[providerId] ?? 0, blocker: paseoTools.blocker, asOf: paseoTools.asOf } } : {}),
+    ...(paseoTools && providerId
+      ? { paseoTools: { tools: paseoTools.tools[providerId] ?? 0, blocker: paseoTools.blocker, asOf: paseoTools.asOf, ...(paseoTools.source ? { source: paseoTools.source } : {}) } }
+      : {}),
+    ...(toolSearch ? { toolSearch } : {}),
   };
 }
 
@@ -220,7 +225,7 @@ export async function handleMcpSetEnabled(
         ok: true,
         state,
         message: changed
-          ? `${name} ${enabled ? "injected again" : "left out of injection"} for this workspace only. ${SWITCH_EFFECT_NOTE}`
+          ? `${name} ${enabled ? "added from .mcp.json again" : "no longer added from .mcp.json"} for this workspace only. ${SWITCH_EFFECT_NOTE}`
           : `${name} was already ${enabled ? "on" : "off"} here.`,
       };
     }

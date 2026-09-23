@@ -8,6 +8,13 @@ export type InjectionProvider = (typeof INJECTION_PROVIDERS)[number];
 export const InjectionProviderSchema = z.enum(INJECTION_PROVIDERS);
 
 /**
+ * The UI name of this plugin's own setting that adds a project's `.mcp.json`
+ * servers to new agents (keys: `injection.json`, `injectWorkspaceServers`).
+ * Not Paseo's "Enable Paseo tools" (`mcp.injectIntoAgents`); see shared/paseo-tools.ts.
+ */
+export const ADD_PROJECT_SERVERS = "Add project servers to agents";
+
+/**
  * Host-scoped settings for adding a workspace's `.mcp.json` servers to every
  * new agent. Stored by Paseo under `$PASEO_HOME/plugin-settings/paseo-mcp/injection.json`.
  */
@@ -20,7 +27,7 @@ export const injectionSettings = defineSettings({
       .boolean()
       .default(false)
       .describe("Add the workspace's .mcp.json servers to every new agent"),
-    providers: z.array(InjectionProviderSchema).default(["codex"]).describe("Which providers to inject for"),
+    providers: z.array(InjectionProviderSchema).default(["codex"]).describe("Which providers get them"),
     skipInlineCredentialServers: z
       .boolean()
       .default(true)

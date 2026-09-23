@@ -87,7 +87,7 @@ export function shapeServerInfo(result: unknown): { name: string; version: strin
 
 // ---------------------------------------------------------------- transport
 
-type FetchLike = (input: string, init: RequestInit) => Promise<Response>;
+export type FetchLike = (input: string, init: RequestInit) => Promise<Response>;
 
 type RpcReply =
   | { kind: "rpc"; code: number; result?: unknown; error?: unknown; sessionId: string | null }

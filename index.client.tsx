@@ -40,7 +40,7 @@ export default function contribute(client: PluginClientContext) {
   });
   client.addSettingsScreen({
     id: "injection",
-    title: "Injection",
+    title: "Project servers",
     icon: "Syringe",
     Component: InjectionSettingsScreen,
   });
@@ -62,9 +62,9 @@ export default function contribute(client: PluginClientContext) {
   });
   client.addCommandCenterItem({
     id: "configure-injection",
-    title: "Configure MCP injection",
+    title: "Add project servers to agents",
     icon: "Syringe",
-    keywords: ["mcp", "inject", "agents", "settings", "workspace servers"],
+    keywords: ["mcp", "inject", "injection", "agents", "settings", "project servers", "workspace servers", ".mcp.json"],
     context: "global",
     onSelect({ openSettings }) {
       openSettings("injection");

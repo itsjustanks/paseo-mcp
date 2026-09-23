@@ -15,10 +15,13 @@ import {
   PASEO_TOOLS_LABEL,
   PASEO_TOOL_GROUPS,
   blockerText,
+  catalogueDriftLine,
   paseoToolCount,
   toolChange,
+  toolListOrigin,
   type PaseoToolsChange,
 } from "../shared/paseo-tools";
+import { ADD_PROJECT_SERVERS } from "../shared/settings";
 import { backoffMs } from "../shared/schedule";
 import { canOpenMcp, openMcp } from "./navigate";
 import { Button, Card, Disclosure, ErrorText, Facts, Loading, Notice, Row, Section, Segmented, StatusLine, StatusPill, Tag, Toggle, useTokens, type Status } from "./ui";
@@ -56,6 +59,18 @@ export function usePaseoTools() {
  */
 export function paseoToolsFor(state: PaseoToolsStateReport | undefined, providerId: string | null | undefined): number {
   return paseoToolCount(state, providerId);
+}
+
+/** Refresh asks the host to re-read the daemon config and the daemon's own tool list now. */
+function useRefreshPaseoTools() {
+  const call = useRpc(mcpPaseoTools);
+  const queryClient = useQueryClient();
+  const toast = useToast();
+  return useMutation({
+    mutationFn: () => call({ refresh: true }),
+    onError: (error) => toast.error(plainError(error)),
+    onSuccess: (state) => queryClient.setQueryData(PASEO_TOOLS_QUERY_KEY, state),
+  });
 }
 
 function useSetPaseoTools() {
@@ -105,12 +120,13 @@ export function PaseoToolsLine({ onOpen }: { onOpen: () => void }) {
     );
   }
   const most = Math.max(...on.map((entry) => entry.tools));
+  const drift = catalogueDriftLine(state);
   return (
     <StatusLine
       label="Paseo tools"
       value={`on · ${plural(most, "tool")}`}
-      status="ok"
-      hint={`for ${on.length <= 3 ? on.map((entry) => entry.id).join(", ") : `${on.length} of ${plural(state.providers.length, "provider")}`}${state.browserTools ? "" : " · browser tools off"}`}
+      status={drift ? "attention" : "ok"}
+      hint={drift || `for ${on.length <= 3 ? on.map((entry) => entry.id).join(", ") : `${on.length} of ${plural(state.providers.length, "provider")}`}${state.browserTools ? "" : " · browser tools off"}`}
       action={{ label: "Paseo tools", onPress: onOpen }}
     />
   );
@@ -119,7 +135,7 @@ export function PaseoToolsLine({ onOpen }: { onOpen: () => void }) {
 // ------------------------------------------------------------- agent row
 
 /** The load's one built-in entry, in the agent panel's list of what the agent loads. */
-export function PaseoToolsAgentRow({ info, providerLabel, first }: { info: { tools: number; blocker: PaseoToolsLoad["blocker"]; asOf: string }; providerLabel: string; first?: boolean }) {
+export function PaseoToolsAgentRow({ info, providerLabel, first }: { info: { tools: number; blocker: PaseoToolsLoad["blocker"]; asOf: string; source?: PaseoToolsLoad["source"] }; providerLabel: string; first?: boolean }) {
   const t = useTokens();
   const on = info.tools > 0;
   const reason = on
@@ -139,7 +155,7 @@ export function PaseoToolsAgentRow({ info, providerLabel, first }: { info: { too
           {on ? <Tag label={plural(info.tools, "tool")} tone="ok" /> : null}
         </View>
       }
-      subtitle={`mcp__paseo__* · tool list as of Paseo ${info.asOf}`}
+      subtitle={`mcp__paseo__* · ${info.source === "live" ? "tool list live from this host" : `tool list as of Paseo ${info.asOf}`}`}
       meta={<Text style={t.text.caption}>{reason}</Text>}
       trailing={
         <View style={{ flexDirection: "row", alignItems: "center", gap: t.space.sm }}>
@@ -164,6 +180,7 @@ export function PaseoToolsCard({ hostLabel }: { hostLabel: string }) {
   const t = useTokens();
   const query = usePaseoTools();
   const mutation = useSetPaseoTools();
+  const refresh = useRefreshPaseoTools();
   const [armed, setArmed] = useState<boolean | null>(null);
   const [scope, setScope] = useState<Scope>("all");
   const [pending, setPending] = useState<string | null>(null);
@@ -221,9 +238,13 @@ export function PaseoToolsCard({ hostLabel }: { hostLabel: string }) {
 
   return (
     <Card>
-      <Header state={state} onRefresh={() => void query.refetch()} refreshing={query.isFetching} />
+      <Header state={state} onRefresh={() => refresh.mutate()} refreshing={refresh.isPending || query.isFetching} />
       <Text style={[t.text.body, { color: t.color.muted, maxWidth: 680 }]}>
-        {`Paseo's own MCP server. The daemon adds it to agents it starts, with ${plural(state.tools.length, "tool")} for agents, terminals, schedules, workspaces and the browser. Tool list as of Paseo ${state.asOf}.`}
+        {`Paseo's own MCP server. The daemon adds it to agents it starts, with ${plural(state.tools.length, "tool")} for agents, terminals, schedules, workspaces and the browser. ${toolListOrigin(state)}`}
+      </Text>
+      {catalogueDriftLine(state) ? <Notice tone="attention">{catalogueDriftLine(state)}</Notice> : null}
+      <Text style={t.text.caption}>
+        {`Servers from a project's .mcp.json are a different setting: Settings → Plugins → Paseo MCP → ${ADD_PROJECT_SERVERS}.`}
       </Text>
 
       <Row

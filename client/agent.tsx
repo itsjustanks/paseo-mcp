@@ -21,14 +21,14 @@ function AgentIntro({ agentId }: { agentId: string }) {
 
   const injection: { label: string; tone: Status } =
     settings.status === "loading"
-      ? { label: "Reading injection settings", tone: "neutral" }
+      ? { label: "Reading project-server settings", tone: "neutral" }
       : settings.status !== "ready"
-        ? { label: "Injection settings unavailable", tone: "attention" }
+        ? { label: "Project-server settings unavailable", tone: "attention" }
         : !settings.values.injectWorkspaceServers
-          ? { label: "Injection off", tone: "neutral" }
+          ? { label: "Project servers not added", tone: "neutral" }
           : injectionTargets(settings.values, agent.provider)
-            ? { label: "Injection on for this provider", tone: "ok" }
-            : { label: `Injection on, but not for ${providerLabel(agent.provider)}`, tone: "attention" };
+            ? { label: "Project servers added for this provider", tone: "ok" }
+            : { label: `Project servers added, but not for ${providerLabel(agent.provider)}`, tone: "attention" };
 
   return (
     <View style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: t.space.sm }}>

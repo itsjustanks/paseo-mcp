@@ -18,7 +18,11 @@ import {
   unknownTools,
   type DaemonToolsConfig,
 } from "../shared/paseo-tools";
+import { configureLive } from "../server/paseo-live";
 import { describePatch, handleMcpPaseoTools, handleMcpSetPaseoTools, resetPaseoToolsCache } from "../server/paseo-tools";
+
+// Never reach a real daemon from these tests: the live list always fails here.
+configureLive({ fetch: async () => { throw new Error("no network in tests"); } });
 
 const CORE = PASEO_TOOL_CATALOG.filter((entry) => !isBrowserTool(entry.name)).length;
 const ALL = PASEO_TOOL_CATALOG.length;

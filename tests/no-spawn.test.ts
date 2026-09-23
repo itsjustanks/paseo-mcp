@@ -35,6 +35,8 @@ writeFileSync(
 chmodSync(join(home, ".local", "bin", "codex"), 0o755);
 process.env.HOME = home;
 process.env.PASEO_HOME = join(home, ".paseo");
+// The live Paseo tool list asks the daemon's own endpoint; point it at a closed port.
+process.env.PASEO_LISTEN = "127.0.0.1:9";
 process.env.PATH = "/usr/bin:/bin";
 delete process.env.AGENT_LINK_HOME;
 delete process.env.AGENT_AUTH_HOME;

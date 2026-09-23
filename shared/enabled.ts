@@ -59,7 +59,7 @@ export function noSwitchReason(provider: string, scope: LoadScope): string {
   if (provider === "codex") {
     return "Codex reads config.toml on top of what Paseo passes it, so nothing per workspace can turn this off: enabled = false in config.toml turns it off everywhere. Use Servers to remove it, or edit config.toml.";
   }
-  return `${provider || "This editor"} has no per-workspace switch for an MCP server${scope === "project" ? " it injects" : ""}.`;
+  return `${provider || "This editor"} has no per-workspace switch for an MCP server${scope === "project" ? " it adds from .mcp.json" : ""}.`;
 }
 
 // ------------------------------------------------------------------- entry
@@ -118,8 +118,8 @@ export function switchVerdict(
       lever,
       reason:
         state === "disabled"
-          ? "Left out of injection for this workspace only. The .mcp.json entry is untouched; other workspaces are not affected."
-          : "Added from this workspace's .mcp.json by injection when an agent starts. Turn it off to leave it out here only.",
+          ? "Not added from .mcp.json in this workspace only. The .mcp.json entry is untouched; other workspaces are not affected."
+          : "Added from this workspace's .mcp.json by this plugin when an agent starts. Turn it off to leave it out here only.",
     };
   }
   if (lever === "mcpjsonServers") {

@@ -20,10 +20,12 @@
  * The policy is copied into an agent when it is created or reloaded
  * (agent/agent-manager.js), so a change applies to agents started after it.
  *
- * The daemon offers no tool list to a plugin: `/mcp/agents` wants a per-run
- * token handed only to agents whenever a daemon password is set. So the list
+ * The daemon offers no tool list to a plugin when a daemon password is set:
+ * `/mcp/agents` then wants a per-run token handed only to agents. So the list
  * is this catalogue, copied from the daemon's `registerTool` calls, and the UI
- * says which Paseo version it matches.
+ * says which Paseo version it matches. With no password the endpoint is open
+ * (server/auth.js `isAgentMcpRequestAuthorized`) and the host asks it instead
+ * (server/paseo-live.ts); `liveCatalog` below turns that answer into a list.
  */
 
 /** The Paseo release this catalogue was copied from. */
@@ -255,9 +257,13 @@ export function toolOnFor(config: DaemonToolsConfig, providerId: string, name: s
   return !(policy?.disabledTools ?? []).includes(name);
 }
 
-export function resolvePaseoTools(config: DaemonToolsConfig, providerIds: readonly string[]): PaseoToolsState {
+export function resolvePaseoTools(
+  config: DaemonToolsConfig,
+  providerIds: readonly string[],
+  catalog: readonly PaseoToolInfo[] = PASEO_TOOL_CATALOG,
+): PaseoToolsState {
   const injected = config.mcpEnabled && config.injectIntoAgents;
-  const tools = PASEO_TOOL_CATALOG.map((entry) => ({
+  const tools = catalog.map((entry) => ({
     ...entry,
     onFor: providerIds.filter((id) => toolOnFor(config, id, entry.name)),
   }));
@@ -280,7 +286,7 @@ export function resolvePaseoTools(config: DaemonToolsConfig, providerIds: readon
     providers,
     tools,
     // An id with no entry: what `toolOnFor` gives a provider the config does not name.
-    defaultTools: PASEO_TOOL_CATALOG.filter((entry) => toolOnFor({ ...config, providers: {} }, "", entry.name)).length,
+    defaultTools: catalog.filter((entry) => toolOnFor({ ...config, providers: {} }, "", entry.name)).length,
     asOf: PASEO_TOOLS_AS_OF,
   };
 }
@@ -381,10 +387,11 @@ export function mergeDisabledTools(current: readonly string[], set: Record<strin
   return next;
 }
 
-/** Names the catalogue does not know; a write refuses them so a typo never lands in the config. */
-export function unknownTools(change: PaseoToolsChange): string[] {
+/** Names neither the catalogue nor `known` (a live list's names) has; a write refuses them so a typo never lands in the config. */
+export function unknownTools(change: PaseoToolsChange, known: Iterable<string> = []): string[] {
+  const allowed = new Set([...CATALOG_NAMES, ...known]);
   const names = (change.providers ?? []).flatMap((entry) => Object.keys(entry.tools ?? {}));
-  return [...new Set(names.filter((name) => !CATALOG_NAMES.has(name)))];
+  return [...new Set(names.filter((name) => !allowed.has(name)))];
 }
 
 /** What the read-back must show for the write to count; the first mismatch, or "". */
@@ -406,4 +413,52 @@ export function patchMismatch(after: DaemonToolsConfig, change: PaseoToolsChange
     }
   }
   return "";
+}
+
+// ------------------------------------------------------------------ live list
+
+/** A tool the daemon's own `tools/list` answered with (shared/tools.ts `shapeTool` output, or anything with these fields). */
+export type LiveTool = { name: string; title?: string; description?: string };
+
+/** The group a tool the catalogue does not know goes in, from its name. */
+export function guessGroup(name: string): PaseoToolGroup {
+  if (isBrowserTool(name)) return "browser";
+  if (/schedule|heartbeat/.test(name)) return "schedules";
+  if (/terminal/.test(name)) return "terminals";
+  if (/workspace/.test(name)) return "workspaces";
+  return "agents";
+}
+
+/**
+ * The daemon's live tool list as the card shows it. The set of names is the
+ * daemon's; a name the catalogue knows keeps the catalogue's short title and
+ * description, a new one takes the daemon's and a group guessed from its name.
+ * `speak` is left out as in the catalogue. A session with no caller only lists
+ * `browser_*` tools while browser tools are on; when the answer has none, the
+ * catalogue's browser tools are kept so the group and its switch still show.
+ */
+export function liveCatalog(live: readonly LiveTool[]): PaseoToolInfo[] {
+  const known = new Map(PASEO_TOOL_CATALOG.map((entry) => [entry.name, entry] as const));
+  const names = new Set(live.map((entry) => entry.name).filter((name) => name && name !== "speak"));
+  const kept = PASEO_TOOL_CATALOG.filter((entry) => names.has(entry.name));
+  const added = live
+    .filter((entry) => names.has(entry.name) && !known.has(entry.name))
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .map((entry) => tool(guessGroup(entry.name), entry.name, entry.title || entry.name, entry.description ?? ""));
+  const browser = [...names].some(isBrowserTool) ? [] : PASEO_TOOL_CATALOG.filter((entry) => isBrowserTool(entry.name));
+  return [...kept, ...added, ...browser];
+}
+
+/**
+ * One line when the catalogue may not match the host: it is shown only when
+ * the list is the catalogue and the host's Paseo version is known and differs.
+ */
+export function catalogueDriftLine(state: { asOf: string; source?: "catalogue" | "live"; hostVersion?: string }): string {
+  if (state.source === "live" || !state.hostVersion || state.hostVersion === state.asOf) return "";
+  return `This list is from Paseo ${state.asOf}; this host runs ${state.hostVersion}, so new tools may be missing and removed ones may still show.`;
+}
+
+/** Where the card says the list comes from. */
+export function toolListOrigin(state: { asOf: string; source?: "catalogue" | "live" }): string {
+  return state.source === "live" ? "Tool list live from this host." : `Tool list as of Paseo ${state.asOf}.`;
 }

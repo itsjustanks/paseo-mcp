@@ -15,6 +15,7 @@ import {
 } from "../shared/budget";
 import type { mcpWorkspace } from "../shared/contracts";
 import { PASEO_TOOLS_LABEL } from "../shared/paseo-tools";
+import { TOOL_SEARCH_ON_LINE, toolSearchLine } from "../shared/tool-search";
 import { formatMemory } from "../shared/processes";
 import { canOpenMcp, openMcp } from "./navigate";
 import { Button, Card, Disclosure, Facts, Notice, Tag, useTokens, type Status } from "./ui";
@@ -38,11 +39,12 @@ export function pickLoad(data: WorkspaceData, providerId?: string): WorkspaceLoa
   if (!data.profile) return null;
   const injection = data.injection ?? null;
   const paseo = data.paseoTools ?? null;
+  const search = data.toolSearch ?? null;
   if (providerId) {
     const scope = scopeForProvider(data.profile, providerId);
-    if (scope) return loadFor(data.profile, scope, injection, paseo);
+    if (scope) return loadFor(data.profile, scope, injection, paseo, search);
   }
-  return loadsForWorkspace(data.profile, injection, paseo)[0] ?? null;
+  return loadsForWorkspace(data.profile, injection, paseo, search)[0] ?? null;
 }
 
 // -------------------------------------------------------------- context budget
@@ -54,20 +56,24 @@ function ContextBudget({ load, providerId }: { load: WorkspaceLoad; providerId?:
   const who = providerId ? "This agent" : load.label ? `A ${load.label.split(" · ")[0]} agent here` : "An agent here";
   if (cost.tier === "ok") return null;
   const severe = cost.tier === "problem";
+  const loads = `${who} loads ${plural(cost.total, "MCP server")}`;
+  // Tool search on: definitions are deferred, so only the server count raised the tier.
+  const heading = cost.deferred
+    ? `${loads} — tool definitions wait until needed, but each server still starts with every session`
+    : severe
+      ? `${loads}${cost.builtIn ? ` and about ${cost.tools} tools` : ""} — enough to exhaust its context before it starts`
+      : `${loads}${cost.builtIn ? ` and about ${cost.tools} tools` : ""} — a real share of its context goes to tool definitions`;
+  const why = cost.deferred
+    ? `${TOOL_SEARCH_ON_LINE} The count still matters: each stdio server is a child process per agent session and each server a connection, so past ${BUDGET_ATTENTION} servers the cost shows and past ${BUDGET_PROBLEM} it is heavy.`
+    : load.toolSearch
+      ? `${toolSearchLine(load.toolSearch, cost.tools)} Cursor stops at 40 tools. Past ${BUDGET_ATTENTION} servers the cost shows, past ${BUDGET_PROBLEM} agents can fail with "Prompt is too long" before their first tool call.`
+      : `Every server's tool definitions are sent with the first prompt. Claude Code defers them past 10% of the window; Cursor stops at 40 tools. Past ${BUDGET_ATTENTION} servers the cost shows, past ${BUDGET_PROBLEM} agents can fail with "Prompt is too long" before their first tool call.`;
   return (
     <Notice tone={severe ? "error" : "attention"}>
       <View style={{ gap: t.space.sm }}>
-        <Text style={t.text.bodyStrong}>
-          {severe
-            ? `${who} loads ${plural(cost.total, "MCP server")}${cost.builtIn ? ` and about ${cost.tools} tools` : ""} — enough to exhaust its context before it starts`
-            : `${who} loads ${plural(cost.total, "MCP server")}${cost.builtIn ? ` and about ${cost.tools} tools` : ""} — a real share of its context goes to tool definitions`}
-        </Text>
-        <Text style={t.text.body}>
-          Every server's tool definitions are sent with the first prompt. Claude Code defers them past 10% of the
-          window; Cursor stops at 40 tools. Past {BUDGET_ATTENTION} servers the cost shows, past {BUDGET_PROBLEM} agents
-          can fail with "Prompt is too long" before their first tool call.
-        </Text>
-        {cost.builtIn ? (
+        <Text style={t.text.bodyStrong}>{heading}</Text>
+        <Text style={t.text.body}>{why}</Text>
+        {cost.builtIn && !cost.deferred ? (
           <Text style={t.text.body}>
             {`${cost.paseoTools} of those tools are Paseo's own (counted exactly; other servers at five each). ${cost.paseoTools >= BUDGET_TOOLS_ATTENTION ? `That alone reaches the ${BUDGET_TOOLS_ATTENTION}-tool line. ` : ""}Groups agents here do not use can be turned off under Servers → Paseo tools (browser is the largest); that applies to every workspace.`}
           </Text>
@@ -182,6 +188,10 @@ export function WorkspaceContext({
           ]}
         />
         {!load.projectIncluded && load.projectNote ? <Text style={t.text.caption}>{load.projectNote}.</Text> : null}
+        {/* The warning below names the verdict itself; otherwise one line here. */}
+        {load.toolSearch && (cost.tier === "ok" || cost.deferred) && cost.total > 0 ? (
+          <Text style={t.text.caption}>{toolSearchLine(load.toolSearch, cost.tools)}</Text>
+        ) : null}
         {data.processes ? (
           <Disclosure title="Running now" open={data.processes.available && data.processes.observed.agents > 0}>
             <RunningNow processes={data.processes} />

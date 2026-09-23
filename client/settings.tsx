@@ -3,6 +3,7 @@ import { Text } from "react-native";
 import { useSettings, type PluginSurfaceProps, type SettingsState } from "@getpaseo/plugin/client";
 import { SettingsAction, SettingsCard, SettingsRow, SettingsSection, SettingsSelect, SettingsSwitch } from "@getpaseo/plugin/client/ui";
 import {
+  ADD_PROJECT_SERVERS,
   HEALTH_INTERVAL_CHOICES,
   healthSettings,
   injectionSettings,
@@ -39,10 +40,10 @@ function fromChoice(choice: ProviderChoice): InjectionProvider[] {
 }
 
 export function describeInjection(values: InjectionSettings): string {
-  if (!values.injectWorkspaceServers) return "Injection is off";
+  if (!values.injectWorkspaceServers) return "Off: this plugin adds no project servers to new agents";
   const who = toChoice(values.providers);
   const target = who === "both" ? "Claude Code and Codex" : who === "claude" ? "Claude Code" : "Codex";
-  return `Injecting into new ${target} agents${values.skipInlineCredentialServers ? ", skipping inline-credential servers" : ""}`;
+  return `Adding project servers to new ${target} agents${values.skipInlineCredentialServers ? ", skipping inline-credential servers" : ""}`;
 }
 
 function InjectionControls({ settings, theme }: { settings: Ready; theme: PluginSurfaceProps["theme"] }) {
@@ -56,18 +57,18 @@ function InjectionControls({ settings, theme }: { settings: Ready; theme: Plugin
   const { values } = settings;
   return (
     <>
-      <SettingsSection title="Injection">
+      <SettingsSection title={ADD_PROJECT_SERVERS}>
         <SettingsCard>
           <SettingsSwitch
-            label="Inject workspace servers"
-            hint="Add the workspace's .mcp.json servers to every new agent"
+            label={ADD_PROJECT_SERVERS}
+            hint="Add the workspace's .mcp.json servers to every new agent; mainly for Codex, which does not read .mcp.json"
             value={values.injectWorkspaceServers}
             disabled={settings.saving}
             onValueChange={(injectWorkspaceServers) => save({ injectWorkspaceServers })}
           />
           <SettingsSelect
             label="Providers"
-            hint="Which providers to inject for"
+            hint="Which providers get them"
             value={toChoice(values.providers)}
             options={PROVIDER_CHOICES}
             disabled={settings.saving || !values.injectWorkspaceServers}
@@ -94,6 +95,10 @@ function InjectionControls({ settings, theme }: { settings: Ready; theme: Plugin
           project root and adds each server to the agent's MCP configuration. Servers the agent already
           defines are left alone. Nothing is written to disk.
         </Text>
+        <Text style={muted}>
+          Paseo's own tools (mcp__paseo__*, the app's "Enable Paseo tools") are a different switch: MCP → Servers →
+          Paseo tools.
+        </Text>
       </SettingsSection>
     </>
   );
@@ -105,7 +110,7 @@ export function InjectionSettingsScreen({ theme }: PluginSurfaceProps) {
   if (settings.status === "loading") return <Text style={style}>Loading settings…</Text>;
   if (settings.status !== "ready") {
     return (
-      <SettingsSection title="Injection">
+      <SettingsSection title={ADD_PROJECT_SERVERS}>
         <Text style={style}>{settings.error}</Text>
         <SettingsAction label="Try again" actionLabel="Reload" onPress={settings.reload} />
         {settings.status === "invalid" ? (

@@ -2,6 +2,7 @@
 import React, { useCallback } from "react";
 import { Text, View } from "react-native";
 import { buildPaseoToolsPatch, paseoToolProviders, readDaemonToolsConfig, resolvePaseoTools } from "../../shared/paseo-tools";
+import { toolSearch } from "../../shared/tool-search";
 export function defineRpc<T>(contract: T) { return contract; }
 export function defineSettings<T>(definition: T) { return definition; }
 const params = new URLSearchParams(location.search);
@@ -99,8 +100,25 @@ const paseoConfig: any = (window as any).__paseoConfig ??= {
   providers: { claude: { enabled: true }, codex: { enabled: true, paseoTools: { disabledTools: ["kill_agent", "archive_workspace"] } }, "claude-work": { extends: "claude", enabled: true }, pi: { enabled: false } },
 };
 const merge = (a: any, b: any): any => Object.fromEntries([...new Set([...Object.keys(a ?? {}), ...Object.keys(b)])].map((k) => [k, b[k] && typeof b[k] === "object" && !Array.isArray(b[k]) && a?.[k] && typeof a[k] === "object" ? merge(a[k], b[k]) : k in b ? b[k] : a[k]]));
-const paseoState = () => ({ ...resolvePaseoTools(readDaemonToolsConfig(paseoConfig), paseoToolProviders(readDaemonToolsConfig(paseoConfig))), checkedAt: new Date().toISOString() });
-const paseoLoad = () => { const state = paseoState(); return { tools: Object.fromEntries(state.providers.map((p) => [p.id, p.tools])), blocker: state.blocker, asOf: state.asOf }; };
+// ?live: the list came from the daemon's own tools/list; ?host-version=0.10.2:
+// the host runs another Paseo than the catalogue (shows the drift line).
+const hostVersion = params.get("host-version") ?? "0.9.1";
+const paseoState = () => ({
+  ...resolvePaseoTools(readDaemonToolsConfig(paseoConfig), paseoToolProviders(readDaemonToolsConfig(paseoConfig))),
+  checkedAt: new Date().toISOString(),
+  source: params.has("live") ? "live" : "catalogue",
+  hostVersion,
+  liveNote: params.has("live") ? "" : "The daemon has a password, so its tool list needs a token only its agents get",
+});
+const paseoLoad = () => { const state = paseoState(); return { tools: Object.fromEntries(state.providers.map((p) => [p.id, p.tools])), blocker: state.blocker, asOf: state.asOf, source: state.source as "live" | "catalogue" }; };
+
+// Tool search per provider, from the real resolver. Default: Claude Code's
+// default (on). ?routed: AI Router routes claude agents (off);
+// ?proxy: every Claude provider behind a custom ANTHROPIC_BASE_URL (off);
+// ?no-tool-search: a 0.10 host that sends no verdict.
+const toolSearchFor = (id: string, base: string) =>
+  toolSearch(id, { base, aiRouterRoutes: params.has("routed"), daemonEnv: params.has("proxy") ? { ANTHROPIC_BASE_URL: "https://gateway.example.com" } : {} });
+const toolSearchMap = () => params.has("no-tool-search") ? undefined : Object.fromEntries(destinations.map((d) => [d.providerId, toolSearchFor(d.providerId, d.provider)]));
 
 async function call(contract: any, input: any) {
   const name = String(contract.name).replace("paseo-mcp.", "");
@@ -137,7 +155,7 @@ async function call(contract: any, input: any) {
     case "import-apply": return { ok: true, written: input.servers.map((s: any) => `${s.name} → ${input.targets.length} editors`), skipped: [], issues: [], message: `Imported ${input.servers.length} servers.` };
     case "export": return { text: JSON.stringify({ mcpServers: Object.fromEntries(servers.map((s) => [s.name, definition(s.name)])) }, null, 2), filename: input.scope === "all" ? "mcp-export.json" : `${input.name}.json`, containsSecrets: Boolean(input.reveal) };
     case "export-file": return { ok: true, path: `${HOME}/Downloads/${input.filename}`, message: `Saved to ${HOME}/Downloads/${input.filename}.` };
-    case "workspace": return { workspace: { id: "ws-1", name: "data-glue", directory: `${HOME}/projects/data-glue`, projectRootPath: `${HOME}/projects/data-glue` }, configPath: `${HOME}/projects/data-glue/.mcp.json`, servers: [{ name: "supabase", transport: "stdio", detail: "npx -y @supabase/mcp-server", authStyle: "inline-credentials" }, { name: "jam", transport: "http", detail: "https://mcp.jam.dev/mcp", authStyle: "oauth-or-none" }], accounts, profile, injection: { injectWorkspaceServers: !params.has("inject-off"), providers: ["codex"], skipInlineCredentialServers: true }, processes, paseoTools: paseoLoad() };
+    case "workspace": return { workspace: { id: "ws-1", name: "data-glue", directory: `${HOME}/projects/data-glue`, projectRootPath: `${HOME}/projects/data-glue` }, configPath: `${HOME}/projects/data-glue/.mcp.json`, servers: [{ name: "supabase", transport: "stdio", detail: "npx -y @supabase/mcp-server", authStyle: "inline-credentials" }, { name: "jam", transport: "http", detail: "https://mcp.jam.dev/mcp", authStyle: "oauth-or-none" }], accounts, profile, injection: { injectWorkspaceServers: !params.has("inject-off"), providers: ["codex"], skipInlineCredentialServers: true }, processes, paseoTools: paseoLoad(), toolSearch: toolSearchMap() };
     case "agent-servers": {
       const provider = params.get("provider") ?? "codex";
       const claudeP = provider !== "codex";
@@ -149,7 +167,7 @@ async function call(contract: any, input: any) {
           if (scope === "local") return { state: off ? "disabled" : "enabled", writable: true, lever: "disabledMcpServers", reason: "Claude Code's per-directory (local) server for this workspace." };
           return { state: off ? "disabled" : "enabled", writable: true, lever: "disabledMcpServers", reason: off ? "Off for this workspace only. The user-level definition is untouched and other workspaces still load it." : "User-level server, loaded in every workspace. Turn it off here to skip it for this workspace only." };
         }
-        if (scope === "project") return { state: off ? "disabled" : "enabled", writable: true, lever: "injection", reason: off ? "Left out of injection for this workspace only. The .mcp.json entry is untouched; other workspaces are not affected." : "Added from this workspace's .mcp.json by injection when an agent starts. Turn it off to leave it out here only." };
+        if (scope === "project") return { state: off ? "disabled" : "enabled", writable: true, lever: "injection", reason: off ? "Not added from .mcp.json in this workspace only. The .mcp.json entry is untouched; other workspaces are not affected." : "Added from this workspace's .mcp.json by this plugin when an agent starts. Turn it off to leave it out here only." };
         return { state: "enabled", writable: false, lever: "none", reason: "Codex reads config.toml on top of what Paseo passes it, so nothing per workspace can turn this off: enabled = false in config.toml turns it off everywhere. Use Servers to remove it, or edit config.toml." };
       };
       const scopeId = claudeP ? claude : codex;
@@ -160,7 +178,7 @@ async function call(contract: any, input: any) {
         { name: "jam", transport: "http", detail: "https://mcp.jam.dev/mcp", scope: "project", configPath: profile.projectConfigPath, inlineCredentials: false },
         ...userList.filter((s) => !["jam", "supabase"].includes(s.name)).map((s) => ({ name: s.name, transport: s.transport, detail: s.detail, scope: "user", configPath: scopeId, inlineCredentials: s.inlineCredentialsIn.includes(scopeId) })),
       ].map((row) => ({ ...row, enabled: verdict(row.scope, row.name) }));
-      return { directory: `${HOME}/projects/data-glue`, scope: { id: scopeId, label: destinations.find((d) => d.id === scopeId)!.label, provider: claudeP ? "claude" : "codex", providerId: provider, configPath: scopeId }, projectIncluded: true, projectNote: "", servers: rows, account: accounts.find((a) => a.provider === (claudeP ? "claude" : "codex")) ?? null, paseoTools: (() => { const load = paseoLoad(); return { tools: load.tools[provider] ?? 0, blocker: load.blocker, asOf: load.asOf }; })() };
+      return { directory: `${HOME}/projects/data-glue`, scope: { id: scopeId, label: destinations.find((d) => d.id === scopeId)!.label, provider: claudeP ? "claude" : "codex", providerId: provider, configPath: scopeId }, projectIncluded: true, projectNote: "", servers: rows, account: accounts.find((a) => a.provider === (claudeP ? "claude" : "codex")) ?? null, paseoTools: (() => { const load = paseoLoad(); return { tools: load.tools[provider] ?? 0, blocker: load.blocker, asOf: load.asOf, source: load.source }; })(), toolSearch: toolSearchMap()?.[provider] };
     }
     case "set-enabled": {
       const disabledHere = (window as any).__disabled ??= new Set<string>();

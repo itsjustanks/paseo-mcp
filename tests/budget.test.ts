@@ -69,7 +69,7 @@ test("a Claude agent loads local, project and user servers once each, local winn
 test("a Codex agent skips .mcp.json unless injection targets it", () => {
   const without = loadFor(profile, codex, off);
   assert.equal(without.projectIncluded, false);
-  assert.match(without.projectNote, /turn on injection/);
+  assert.match(without.projectNote, /turn on "Add project servers to agents"/);
   assert.deepEqual(without.servers.map((entry) => entry.name), ["jam", "posthog"]);
 
   const withInjection = loadFor(profile, codex, on);
