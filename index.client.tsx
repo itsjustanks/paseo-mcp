@@ -5,6 +5,7 @@ import { registerSurfaceOpener } from "./client/navigate";
 import { HealthSettingsScreen, InjectionSettingsScreen } from "./client/settings";
 import { McpChip } from "./client/tools";
 import { mcpHealthCached } from "./shared/contracts";
+import { backoffMs } from "./shared/schedule";
 
 export default function contribute(client: PluginClientContext) {
   // Panels have no openSurface of their own; lend them this one.
@@ -149,14 +150,28 @@ function registerMcpChips(client: PluginClientContext): () => void {
     }
   };
 
+  // The setting is read once a minute while there is an agent to put a chip
+  // on, and less often while the host does not answer (1, 2, 4 … 15 minutes).
+  let failures = 0;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const schedule = () => {
+    if (stopped) return;
+    timer = setTimeout(() => void poll(), backoffMs(failures, CHIP_SETTINGS_POLL_MS, 15 * 60_000));
+  };
   const poll = async () => {
-    try {
-      const cached = await client.rpc(mcpHealthCached, {});
-      wanted = cached.showComposerPill;
-    } catch {
-      // Host unreachable: keep whatever the last poll decided.
+    timer = null;
+    if (agents.size > 0) {
+      try {
+        const cached = await client.rpc(mcpHealthCached, {});
+        wanted = cached.showComposerPill;
+        failures = 0;
+      } catch {
+        // Host unreachable: keep whatever the last poll decided.
+        failures += 1;
+      }
+      reconcile();
     }
-    reconcile();
+    schedule();
   };
 
   const unsubscribe = client.paseo.agents.subscribe((update) => {
@@ -166,15 +181,20 @@ function registerMcpChips(client: PluginClientContext): () => void {
       return;
     }
     if (update.kind !== "upsert" || !update.agent.workspaceId) return;
+    const first = agents.size === 0;
     agents.set(update.agent.id, update.agent.workspaceId);
     reconcile();
+    // The first agent to appear gets the setting read now, not at the next beat.
+    if (first && timer !== null) {
+      clearTimeout(timer);
+      void poll();
+    }
   });
   void poll();
-  const timer = setInterval(() => void poll(), CHIP_SETTINGS_POLL_MS);
 
   return () => {
     stopped = true;
-    clearInterval(timer);
+    if (timer) clearTimeout(timer);
     unsubscribe();
     for (const remove of pills.values()) remove();
     pills.clear();

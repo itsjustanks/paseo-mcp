@@ -1,4 +1,6 @@
-import type { PluginServerContext } from "@getpaseo/plugin/server";
+import type { PluginRpcContract } from "@getpaseo/plugin";
+import type { PluginHandlerContext, PluginServerContext } from "@getpaseo/plugin/server";
+import type { ZodType, input as ZodInput, output as ZodOutput } from "zod";
 import {
   handleMcpAdd,
   handleMcpApply,
@@ -27,6 +29,7 @@ import {
   handleMcpRawGet,
   handleMcpRawPut,
 } from "./server/mcpjson";
+import { markClientSeen } from "./server/presence";
 import { handleMcpTools, handleMcpToolsCached } from "./server/tools";
 import { handleMcpWorkspace } from "./server/workspace";
 import {
@@ -62,37 +65,58 @@ import {
 } from "./shared/mcpjson";
 import { healthSettings, injectionSettings } from "./shared/settings";
 
+/** Slow enough to be worth a line in the daemon log. */
+const SLOW_RPC_MS = 5_000;
+
 export default function contribute(server: PluginServerContext) {
+  // Every RPC comes from a connected app: note it (background passes rest
+  // while nobody is looking, server/presence.ts), and log the slow ones so a
+  // stall shows up in `paseo plugin logs` with its name.
+  const handle = <I extends ZodType, O extends ZodType>(
+    contract: PluginRpcContract<I, O>,
+    handler: (input: ZodOutput<I>, context: PluginHandlerContext) => ZodInput<O> | Promise<ZodInput<O>>,
+  ) =>
+    server.handle(contract, async (input, context) => {
+      markClientSeen();
+      const began = Date.now();
+      try {
+        return await handler(input, context);
+      } finally {
+        const ms = Date.now() - began;
+        if (ms >= SLOW_RPC_MS) console.warn(`[paseo-mcp] ${contract.name} took ${(ms / 1000).toFixed(1)} s`);
+      }
+    });
+
   server.registerSettings(injectionSettings);
   server.registerSettings(healthSettings);
   registerHooks(server);
-  server.handle(mcpMatrix, handleMcpMatrix);
-  server.handle(mcpAdd, handleMcpAdd);
-  server.handle(mcpApply, handleMcpApply);
-  server.handle(mcpAuth, handleMcpAuth);
-  server.handle(mcpDefAll, handleMcpDefAll);
-  server.handle(mcpEditOne, handleMcpEditOne);
-  server.handle(mcpRename, handleMcpRename);
-  server.handle(mcpHealth, handleMcpHealth);
-  server.handle(mcpHealthCached, handleMcpHealthCached);
-  server.handle(mcpRemove, handleMcpRemove);
-  server.handle(mcpSync, handleMcpSync);
-  server.handle(mcpTools, handleMcpTools);
-  server.handle(mcpToolsCached, handleMcpToolsCached);
-  server.handle(mcpWorkspace, handleMcpWorkspace);
-  server.handle(mcpAgentServers, handleMcpAgentServers);
-  server.handle(mcpSetEnabled, handleMcpSetEnabled);
-  server.handle(mcpRawGet, handleMcpRawGet);
-  server.handle(mcpRawPut, handleMcpRawPut);
-  server.handle(mcpImportParse, handleMcpImportParse);
-  server.handle(mcpImportApply, handleMcpImportApply);
-  server.handle(mcpExport, handleMcpExport);
-  server.handle(mcpExportFile, handleMcpExportFile);
-  server.handle(mcpLogin, handleMcpLogin);
-  server.handle(mcpLoginComplete, handleMcpLoginComplete);
-  server.handle(mcpLoginStatus, handleMcpLoginStatus);
-  server.handle(mcpLoginCancel, handleMcpLoginCancel);
-  server.handle(mcpLogout, handleMcpLogout);
+  handle(mcpMatrix, handleMcpMatrix);
+  handle(mcpAdd, handleMcpAdd);
+  handle(mcpApply, handleMcpApply);
+  handle(mcpAuth, handleMcpAuth);
+  handle(mcpDefAll, handleMcpDefAll);
+  handle(mcpEditOne, handleMcpEditOne);
+  handle(mcpRename, handleMcpRename);
+  handle(mcpHealth, handleMcpHealth);
+  handle(mcpHealthCached, handleMcpHealthCached);
+  handle(mcpRemove, handleMcpRemove);
+  handle(mcpSync, handleMcpSync);
+  handle(mcpTools, handleMcpTools);
+  handle(mcpToolsCached, handleMcpToolsCached);
+  handle(mcpWorkspace, handleMcpWorkspace);
+  handle(mcpAgentServers, handleMcpAgentServers);
+  handle(mcpSetEnabled, handleMcpSetEnabled);
+  handle(mcpRawGet, handleMcpRawGet);
+  handle(mcpRawPut, handleMcpRawPut);
+  handle(mcpImportParse, handleMcpImportParse);
+  handle(mcpImportApply, handleMcpImportApply);
+  handle(mcpExport, handleMcpExport);
+  handle(mcpExportFile, handleMcpExportFile);
+  handle(mcpLogin, handleMcpLogin);
+  handle(mcpLoginComplete, handleMcpLoginComplete);
+  handle(mcpLoginStatus, handleMcpLoginStatus);
+  handle(mcpLoginCancel, handleMcpLoginCancel);
+  handle(mcpLogout, handleMcpLogout);
 
   runStart();
   return runShutdown;

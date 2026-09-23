@@ -18,11 +18,12 @@ import {
   type ClaudeProjectEntry,
   type InjectionDisabledStore,
 } from "../shared/enabled";
+import { readJsonCached } from "./files";
 import {
   backupFile,
   buildDestinations,
+  collectAccounts,
   destRead,
-  handleMcpAuth,
   hasInlineCredentials,
   jsonMcpRead,
   readJson,
@@ -30,6 +31,7 @@ import {
   writeJsonAtomic,
   type McpDef,
 } from "./handlers";
+import { withDeadline } from "./run";
 import { settingsPath } from "./settings";
 import { buildProfile, claudeLocalServers, readInjection } from "./workspace";
 
@@ -48,7 +50,7 @@ import { buildProfile, claudeLocalServers, readInjection } from "./workspace";
 type WorkspaceEntry = { id: string; name: string; workspaceDirectory?: string; projectRootPath: string };
 
 async function findWorkspace(paseo: PluginHandlerContext["paseo"], workspaceId: string): Promise<WorkspaceEntry> {
-  const result = await paseo.workspaces.list();
+  const result = await withDeadline(paseo.workspaces.list(), "its workspace list");
   const workspace = (result as { entries: WorkspaceEntry[] }).entries.find((entry) => entry.id === workspaceId);
   if (!workspace) throw new Error("This Paseo workspace no longer exists.");
   return workspace;
@@ -104,12 +106,10 @@ export function readClaudeConfig(path: string): ClaudeConfig {
   return parsed as ClaudeConfig;
 }
 
+/** Read-only, through the file cache: the switch state shown, not the document a write starts from. */
 function projectEntry(configPath: string, directory: string): ClaudeProjectEntry | undefined {
-  try {
-    return readClaudeConfig(configPath).projects?.[directory];
-  } catch {
-    return undefined;
-  }
+  const config = readJsonCached(configPath) as ClaudeConfig | null;
+  return config && typeof config === "object" && !Array.isArray(config) ? config.projects?.[directory] : undefined;
 }
 
 export async function handleMcpAgentServers(
@@ -150,10 +150,12 @@ export async function handleMcpAgentServers(
     };
   });
 
+  // Only this agent's own account, and only its own Codex check (answered
+  // from memory; a background refresh starts when the last answer is old).
   let account: McpAuthAccount | null = null;
   if (dest && (dest.provider === "claude" || dest.provider === "codex")) {
-    const { accounts } = await handleMcpAuth({}, { paseo } as PluginHandlerContext);
-    account = accounts.find((candidate) => candidate.provider === dest.provider && candidate.email === dest.account) ?? null;
+    const accounts = collectAccounts({ askCodex: dest.provider === "codex", only: { provider: dest.provider, email: dest.account } });
+    account = accounts[0] ?? null;
   }
 
   return {

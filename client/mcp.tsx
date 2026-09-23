@@ -3,7 +3,7 @@ import type { PluginSurfaceProps, PluginWorkspacePanelProps } from "@getpaseo/pl
 import { useRpc, useWorkspace } from "@getpaseo/plugin/client";
 import { useToast } from "@getpaseo/plugin/client/react-native";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Linking, Text, View } from "react-native";
 import { z } from "zod";
 import {
@@ -29,6 +29,8 @@ import {
   type McpServerRow,
 } from "../shared/contracts";
 import { SWITCH_EFFECT_NOTE } from "../shared/enabled";
+import { plainError } from "../shared/errors";
+import { clockTime } from "../shared/schedule";
 import { accountsNeedingSignIn, projectFilesFor, removePlan, serverMatches, signInState, type RemovePlan, type RemoveScope, type ServerFilter } from "../shared/servers";
 import { summarizeTools } from "../shared/tools";
 import {
@@ -74,6 +76,7 @@ import {
   Section,
   Segmented,
   StatCard,
+  StaleNote,
   StatusPill,
   Step,
   Tag,
@@ -108,9 +111,14 @@ function clampLines(text: string, limit: number): string {
   return `${lines.slice(0, limit).join("\n")}\n… ${lines.length - limit} more lines`;
 }
 
+/** Every error shown in these panels, in plain words (shared/errors.ts). */
 function errorText(error: unknown): string {
-  if (error instanceof Error) return error.message;
-  return String(error);
+  return plainError(error);
+}
+
+/** "14:05" for a query's last successful read. */
+function readAt(updatedAt: number): string {
+  return clockTime(updatedAt ? new Date(updatedAt).toISOString() : null);
 }
 
 /**
@@ -135,6 +143,18 @@ function loginCommand(account: McpAuthAccount, server: string, directory = ""): 
     ? `${account.provider} mcp login ${shellQuote(server)}`
     : `${variable}=${shellQuote(account.dir)} ${account.provider} mcp login ${shellQuote(server)}`;
   return directory ? `cd ${shellQuote(directory)} && ${login}` : login;
+}
+
+/** How current a Codex account's sign-in state is; Codex is asked in the background on the host. */
+function codexCheckLine(account: McpAuthAccount): string {
+  if (account.provider !== "codex") return "";
+  if (account.checking) return " · checking with Codex…";
+  if (account.statusNote) {
+    return account.statusAsOf
+      ? ` · as of ${clockTime(account.statusAsOf)}; the latest check did not finish: ${account.statusNote}`
+      : ` · from the grant file only; Codex could not be asked: ${account.statusNote}`;
+  }
+  return account.statusAsOf ? ` · checked ${clockTime(account.statusAsOf)}` : "";
 }
 
 function oauthState(account: McpAuthAccount, server: string) {
@@ -582,9 +602,10 @@ function AuthRows({
               first={index === 0}
               title={bare ? "Account connection" : account.email}
               subtitle={
-                bare
+                (bare
                   ? `${account.email} · ${account.isPrimary ? "primary" : "routed"} ${account.provider === "claude" ? "Claude" : "Codex"}`
-                  : `${account.isPrimary ? "primary" : "routed"} ${account.provider === "claude" ? "Claude" : "Codex"} account`
+                  : `${account.isPrimary ? "primary" : "routed"} ${account.provider === "claude" ? "Claude" : "Codex"} account`) +
+                codexCheckLine(account)
               }
               trailing={
                 connected ? (
@@ -1004,7 +1025,25 @@ function McpBody({ layout, host }: PluginSurfaceProps) {
   const addTargets = useTargetSet(destinations);
   const importTargets = useTargetSet(destinations);
 
-  const authQuery = useQuery({ queryKey: ["paseo-mcp", "auth"], queryFn: () => callAuth({}), retry: 1 });
+  // Sign-in state answers at once from files; `refresh` also asks Codex again
+  // on the host, in the background. While that check runs (`checking`), read
+  // again every few seconds, and only then.
+  const forceAuth = useRef(false);
+  const authQuery = useQuery({
+    queryKey: ["paseo-mcp", "auth"],
+    queryFn: () => {
+      const refresh = forceAuth.current;
+      forceAuth.current = false;
+      return callAuth({ refresh });
+    },
+    retry: 1,
+    refetchInterval: (query) => (query.state.data?.checking ? 3000 : false),
+  });
+  const refetchAuthQuery = authQuery.refetch;
+  const refreshAuth = useCallback(() => {
+    forceAuth.current = true;
+    return refetchAuthQuery();
+  }, [refetchAuthQuery]);
   const accounts = useMemo<McpAuthAccount[]>(() => authQuery.data?.accounts ?? [], [authQuery.data]);
   const rawQuery = useQuery({
     queryKey: ["paseo-mcp", "raw", selected, revealed],
@@ -1032,11 +1071,10 @@ function McpBody({ layout, host }: PluginSurfaceProps) {
   useEffect(() => setLiveLogin(anyLive), [anyLive]);
   // A grant that just landed changes who still needs one.
   const settled = sessions.filter((entry) => entry.state === "done").map((entry) => entry.key).join("|");
-  const refetchAuth = authQuery.refetch;
   useEffect(() => {
     if (!settled) return;
-    void refetchAuth();
-  }, [settled, refetchAuth]);
+    void refreshAuth();
+  }, [settled, refreshAuth]);
 
   useEffect(() => {
     const timer = setTimeout(() => setDebouncedBlob(blob), 400);
@@ -1059,7 +1097,7 @@ function McpBody({ layout, host }: PluginSurfaceProps) {
   const refreshDefinitions = () => {
     void matrixQuery.refetch();
     void healthQuery.refetch();
-    void authQuery.refetch();
+    void refreshAuth();
     void queryClient.invalidateQueries({ queryKey: ["paseo-mcp", "raw"] });
     void queryClient.invalidateQueries({ queryKey: ["paseo-mcp", "def"] });
   };
@@ -1244,7 +1282,7 @@ function McpBody({ layout, host }: PluginSurfaceProps) {
     onSuccess: (result) => {
       notify(result);
       if (result.ok) {
-        void authQuery.refetch();
+        void refreshAuth();
         refreshLogins();
       }
     },
@@ -1309,10 +1347,15 @@ function McpBody({ layout, host }: PluginSurfaceProps) {
       })
     : [];
   const inlineCredentialCount = server?.inlineCredentialsIn.length ?? 0;
-  const ready = Boolean(matrixQuery.data) && !matrixQuery.isError;
+  // A failed refresh keeps the last good read on screen (labelled with its time)
+  // instead of emptying the surface; only a first read that fails shows an error.
+  const ready = Boolean(matrixQuery.data);
+  const matrixStale = matrixQuery.isError && Boolean(matrixQuery.data);
 
-  const headerPill = matrixQuery.isError
+  const headerPill = matrixQuery.isError && !matrixQuery.data
     ? { status: "error" as Status, label: "Host unavailable" }
+    : matrixStale
+      ? { status: "attention" as Status, label: `As of ${readAt(matrixQuery.dataUpdatedAt)}` }
     : !matrixQuery.data
       ? { status: "neutral" as Status, label: "Connecting" }
       : servers.length === 0
@@ -1326,7 +1369,7 @@ function McpBody({ layout, host }: PluginSurfaceProps) {
               : { status: "ok" as Status, label: "All servers healthy" };
 
   // Decision table for the Overview card, first match wins.
-  const nextStep: { title: string; detail: string; label: string; onPress: () => void } = matrixQuery.isError
+  const nextStep: { title: string; detail: string; label: string; onPress: () => void } = matrixQuery.isError && !matrixQuery.data
     ? { title: "Reconnect to the host", detail: "The MCP plugin could not read the editor configs on this host. Retry once the daemon is reachable.", label: "Retry", onPress: refreshAll }
     : !matrixQuery.data
       ? { title: "Reading editor configs", detail: `Looking for Claude, Codex, Kimi and Grok configs on ${host.label}. This takes a moment.`, label: "Refresh", onPress: refreshAll }
@@ -1528,7 +1571,13 @@ function McpBody({ layout, host }: PluginSurfaceProps) {
   const list = (
     <View style={{ gap: t.space.md }}>
       {matrixQuery.isLoading ? <Loading label="Reading configs…" /> : null}
-      {healthQuery.error ? <ErrorText>{`Automatic health check failed: ${errorText(healthQuery.error)}`}</ErrorText> : null}
+      {healthQuery.error ? (
+        <ErrorText>
+          {healthQuery.data
+            ? `Could not read the latest health check (${errorText(healthQuery.error)}). Showing the check from ${clockTime(healthQuery.data.checkedAt)}.`
+            : `Could not read the health check: ${errorText(healthQuery.error)}`}
+        </ErrorText>
+      ) : null}
       {!matrixQuery.isLoading && shown.length === 0 ? (
         <Card>
           <EmptyState
@@ -2210,7 +2259,9 @@ function McpBody({ layout, host }: PluginSurfaceProps) {
         <Choice<SectionId> items={SECTIONS} selected={section} onChange={(next) => go(next, next === "servers" ? { server: null } : {})} label="MCP sections" />
       </View>
       <Screen t={t} paddingTop={4}>
-        {matrixQuery.isError ? (
+        {matrixStale ? (
+          <StaleNote what="the editor configs" at={readAt(matrixQuery.dataUpdatedAt)} reason={errorText(matrixQuery.error)} onRetry={refreshAll} />
+        ) : matrixQuery.isError ? (
           <Notice tone="error">
             <View style={{ gap: t.space.sm }}>
               <Text style={t.text.body}>{errorText(matrixQuery.error)}</Text>
@@ -2276,6 +2327,7 @@ export function WorkspaceBody({
     queryKey: ["paseo-mcp", "workspace", workspaceId],
     queryFn: () => callWorkspace({ workspaceId }),
     enabled: Boolean(workspace),
+    retry: 1,
   });
   // The workspace panel has no agent; it shows the switches for the heaviest
   // wired editor, the same one its count leads with.
@@ -2285,7 +2337,10 @@ export function WorkspaceBody({
     queryFn: () => callAgentServers({ workspaceId, providerId: switchProvider }),
     enabled: Boolean(workspace) && switchProvider !== "",
     // Read fresh on every visit: a /mcp disable in a terminal must show here.
+    // The host's defaults turn refetch-on-mount off, so it is asked for here.
     staleTime: 0,
+    refetchOnMount: "always",
+    retry: 1,
   });
 
   const loginQuery = useQuery({
@@ -2424,10 +2479,13 @@ export function WorkspaceBody({
         onlyAccount={{ provider: account.provider, email: account.email }}
       />
     ) : null;
+  const workspaceStale = workspaceQuery.isError && Boolean(data);
   const pill = !workspace
     ? { status: "error" as Status, label: "Workspace unavailable" }
-    : workspaceQuery.isError
+    : workspaceQuery.isError && !data
       ? { status: "error" as Status, label: "Host unavailable" }
+      : workspaceStale
+        ? { status: "attention" as Status, label: `As of ${readAt(workspaceQuery.dataUpdatedAt)}` }
       : !data
         ? { status: "neutral" as Status, label: "Reading" }
         : data.servers.length === 0
@@ -2438,7 +2496,7 @@ export function WorkspaceBody({
     <EmptyState title="Workspace unavailable" body="This Paseo workspace no longer exists." />
   ) : workspaceQuery.isLoading ? (
     <Loading label="Reading project MCP servers…" />
-  ) : workspaceQuery.error ? (
+  ) : workspaceQuery.error && !data ? (
     <Notice tone="error">
       <View style={{ gap: t.space.sm }}>
         <Text style={t.text.body}>{errorText(workspaceQuery.error)}</Text>
@@ -2512,6 +2570,9 @@ export function WorkspaceBody({
     </View>
   ) : data ? (
     <View style={{ gap: t.space.lg }}>
+      {workspaceStale ? (
+        <StaleNote what="this workspace" at={readAt(workspaceQuery.dataUpdatedAt)} reason={errorText(workspaceQuery.error)} onRetry={refresh} />
+      ) : null}
       {switchProvider ? (
         <AgentServers
           data={agentServersQuery.data}

@@ -2,7 +2,8 @@ import type { PluginHandlerContext } from "@getpaseo/plugin/server";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import type { McpServerTools, McpToolsReport } from "../shared/contracts";
-import { TOOLS_CONCURRENCY, listToolsMcp, mapLimit, stdioOutcome, summarizeTools } from "../shared/tools";
+import { TOOLS_CONCURRENCY, keepLastGoodTools, listToolsMcp, mapLimit, stdioOutcome, summarizeTools } from "../shared/tools";
+import { backgroundPass } from "./background";
 import { buildDestinations, destRead, discoverProjects, findDef, jsonMcpRead, type McpDef } from "./handlers";
 import { readHealthSettings } from "./health";
 import { onShutdown, onStart } from "./lifecycle";
@@ -17,7 +18,10 @@ const TAG = "[paseo-mcp]";
  * asked for their tools a few at a time; stdio servers are reported as such
  * without being run. Nothing here spawns a process.
  */
-export async function listAll(paseo: PluginHandlerContext["paseo"] | null): Promise<McpToolsReport> {
+export async function listAll(
+  paseo: PluginHandlerContext["paseo"] | null,
+  urls: Map<string, string> = new Map(),
+): Promise<McpToolsReport> {
   const destinations = await buildDestinations(paseo);
   const defsByDest = new Map(destinations.map((dest) => [dest.id, destRead(dest)] as const));
   const names = new Set<string>();
@@ -35,7 +39,10 @@ export async function listAll(paseo: PluginHandlerContext["paseo"] | null): Prom
     const def = findDef(destinations, name, defsByDest) ?? projectDefs.get(name) ?? null;
     if (!def) return { name, transport: "unknown", ...stdioOutcome(undefined), kind: "unavailable", note: "no readable definition" };
     if (def.command) return { name, transport: "stdio", ...stdioOutcome(def.command) };
-    if (def.url) return { name, transport: "http", ...(await listToolsMcp(def.url, def.headers)) };
+    if (def.url) {
+      urls.set(name, def.url);
+      return { name, transport: "http", ...(await listToolsMcp(def.url, def.headers)) };
+    }
     return { name, transport: "unknown", ...stdioOutcome(undefined), kind: "unavailable", note: "no command or url" };
   });
   return { servers, checkedAt: new Date().toISOString() };
@@ -46,15 +53,21 @@ export async function listAll(paseo: PluginHandlerContext["paseo"] | null): Prom
 let cached: McpToolsReport | null = null;
 let inFlight: Promise<McpToolsReport> | null = null;
 let lastPaseo: PluginHandlerContext["paseo"] | null = null;
+// Each HTTP server's URL at the last pass: a stale list is only kept for a
+// definition that has not changed since it was read.
+let lastUrls = new Map<string, string>();
 
 /** List now, sharing one pass between concurrent callers, and cache the result. */
 export function refreshTools(paseo: PluginHandlerContext["paseo"] | null): Promise<McpToolsReport> {
   if (paseo) lastPaseo = paseo;
   if (inFlight) return inFlight;
-  inFlight = listAll(paseo ?? lastPaseo)
+  const urls = new Map<string, string>();
+  inFlight = listAll(paseo ?? lastPaseo, urls)
     .then((report) => {
-      cached = report;
-      return report;
+      const previousUrls = lastUrls;
+      cached = keepLastGoodTools(cached, report, (name) => previousUrls.get(name) === urls.get(name));
+      lastUrls = urls;
+      return cached;
     })
     .finally(() => {
       inFlight = null;
@@ -65,46 +78,34 @@ export function refreshTools(paseo: PluginHandlerContext["paseo"] | null): Promi
 // --------------------------------------------------------------------- timer
 
 // Tool lists move far less often than reachability does, so the refresh runs
-// on a multiple of the health interval, and only while background checks are on.
+// on a multiple of the health interval, and only while background checks are
+// on. The first pass comes later than the health pass so the two do not hit
+// every server at once on start-up.
 const TOOLS_INTERVAL_FACTOR = 6;
-const RECHECK_SETTINGS_MS = 60_000;
-let timer: ReturnType<typeof setTimeout> | null = null;
 
-function schedule(delayMs: number): void {
-  if (timer) clearTimeout(timer);
-  timer = setTimeout(beat, delayMs);
-}
-
-function beat(): void {
-  timer = null;
-  const settings = readHealthSettings();
-  if (!settings.backgroundChecks) {
-    schedule(RECHECK_SETTINGS_MS);
-    return;
-  }
-  void refreshTools(null)
-    .then((report) => {
-      const totals = summarizeTools(report.servers);
-      console.log(`${TAG} tools: ${totals.listed} of ${totals.servers} servers listed, ${totals.tools} tools, ${totals.signIn} need sign-in, ${totals.stdio} stdio`);
-    })
-    .catch((error) => {
-      console.error(`${TAG} tools listing failed:`, error instanceof Error ? error.message : error);
-    })
-    .finally(() => schedule(settings.intervalMinutes * 60_000 * TOOLS_INTERVAL_FACTOR));
-}
-
-function startToolsTimer(): void {
-  if (timer) return;
-  // Later than the health pass so the two do not hit every server at once on start-up.
-  schedule(readHealthSettings().backgroundChecks ? 45_000 : RECHECK_SETTINGS_MS);
-}
+const pass = backgroundPass({
+  name: "tools listing",
+  firstDelayMs: 45_000,
+  intervalMs: () => {
+    const settings = readHealthSettings();
+    return settings.backgroundChecks ? settings.intervalMinutes * 60_000 * TOOLS_INTERVAL_FACTOR : null;
+  },
+  run: async () => {
+    const report = await refreshTools(null);
+    const totals = summarizeTools(report.servers);
+    const stale = report.servers.filter((entry) => entry.stale).length;
+    console.log(
+      `${TAG} tools: ${totals.listed} of ${totals.servers} servers listed, ${totals.tools} tools, ${totals.signIn} need sign-in, ${totals.stdio} stdio` +
+        (stale ? `, ${stale} kept from an earlier pass` : ""),
+    );
+  },
+});
 
 export function stopToolsTimer(): void {
-  if (timer) clearTimeout(timer);
-  timer = null;
+  pass.stop();
 }
 
-onStart(startToolsTimer);
+onStart(() => pass.start());
 onShutdown(stopToolsTimer);
 
 // ------------------------------------------------------------------ handlers

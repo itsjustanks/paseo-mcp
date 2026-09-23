@@ -3,6 +3,8 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { healthIsSignIn, healthNeedsAttention, type McpHealth, type McpHealthReport, type McpHealthScope } from "../shared/contracts";
 import { HEALTH_DEFAULTS, healthSettings, type HealthSettings } from "../shared/settings";
+import { mapLimit } from "../shared/tools";
+import { backgroundPass } from "./background";
 import {
   binaryOnPath,
   buildDestinations,
@@ -14,9 +16,12 @@ import {
   type McpDef,
 } from "./handlers";
 import { onShutdown, onStart } from "./lifecycle";
+import { resolveSearchPath } from "./path";
 import { readSettingsDocument } from "./settings";
 
 const TAG = "[paseo-mcp]";
+/** HTTP probes in flight at once during a pass: forty servers in batches, not forty sockets. */
+const HEALTH_CONCURRENCY = 8;
 
 export function readHealthSettings(): HealthSettings {
   return readSettingsDocument(healthSettings, HEALTH_DEFAULTS);
@@ -57,8 +62,9 @@ export async function probeAll(paseo: PluginHandlerContext["paseo"] | null): Pro
   }
 
   const names = [...scopes.keys()].sort();
-  const results = await Promise.all(
-    names.map(async (name): Promise<McpHealth> => {
+  // Stdio verdicts need the login shell's PATH, asked once per process.
+  await resolveSearchPath();
+  const results = await mapLimit(names, HEALTH_CONCURRENCY, async (name): Promise<McpHealth> => {
       const where = scopes.get(name) ?? [];
       const def = findDef(destinations, name, defsByDest) ?? projectDefs.get(name) ?? null;
       if (!def) return { name, status: "unknown", note: "no readable definition", scopes: where };
@@ -72,8 +78,7 @@ export async function probeAll(paseo: PluginHandlerContext["paseo"] | null): Pro
         return { name, ...probe, scopes: where };
       }
       return { name, status: "unknown", note: "no command or url", scopes: where };
-    }),
-  );
+  });
   return { results, checkedAt: new Date().toISOString() };
 }
 
@@ -102,52 +107,28 @@ export function refreshHealth(paseo: PluginHandlerContext["paseo"] | null): Prom
 
 // --------------------------------------------------------------------- timer
 
-let timer: ReturnType<typeof setTimeout> | null = null;
-let nextCheckAt: string | null = null;
-// Settings can change between beats, so the delay is recomputed every time
-// rather than fixed once with setInterval. A disabled check still wakes up
-// once a minute to notice when it is turned back on.
-const RECHECK_SETTINGS_MS = 60_000;
-
-function schedule(delayMs: number, probe: boolean): void {
-  if (timer) clearTimeout(timer);
-  nextCheckAt = probe ? new Date(Date.now() + delayMs).toISOString() : null;
-  timer = setTimeout(beat, delayMs);
-}
-
-function beat(): void {
-  timer = null;
-  const settings = readHealthSettings();
-  if (!settings.backgroundChecks) {
-    schedule(RECHECK_SETTINGS_MS, false);
-    return;
-  }
-  void refreshHealth(null)
-    .then((report) => {
-      const issues = report.results.filter((entry) => healthNeedsAttention(entry.status)).length;
-      const signIn = report.results.filter((entry) => healthIsSignIn(entry.status)).length;
-      console.log(`${TAG} health check: ${report.results.length} servers, ${issues} need attention, ${signIn} OAuth`);
-    })
-    .catch((error) => {
-      console.error(`${TAG} health check failed:`, error instanceof Error ? error.message : error);
-    })
-    .finally(() => schedule(settings.intervalMinutes * 60_000, true));
-}
-
-function startHealthTimer(): void {
-  if (timer) return;
-  // First pass shortly after start-up so the pill has a verdict before the
-  // user opens anything; later passes follow the configured interval.
-  schedule(readHealthSettings().backgroundChecks ? 15_000 : RECHECK_SETTINGS_MS, readHealthSettings().backgroundChecks);
-}
+// First pass shortly after start-up so the chip has a verdict before the user
+// opens anything; later passes follow the configured interval (server/background.ts).
+const pass = backgroundPass({
+  name: "health check",
+  firstDelayMs: 15_000,
+  intervalMs: () => {
+    const settings = readHealthSettings();
+    return settings.backgroundChecks ? settings.intervalMinutes * 60_000 : null;
+  },
+  run: async () => {
+    const report = await refreshHealth(null);
+    const issues = report.results.filter((entry) => healthNeedsAttention(entry.status)).length;
+    const signIn = report.results.filter((entry) => healthIsSignIn(entry.status)).length;
+    console.log(`${TAG} health check: ${report.results.length} servers, ${issues} need attention, ${signIn} OAuth`);
+  },
+});
 
 export function stopHealthTimer(): void {
-  if (timer) clearTimeout(timer);
-  timer = null;
-  nextCheckAt = null;
+  pass.stop();
 }
 
-onStart(startHealthTimer);
+onStart(() => pass.start());
 onShutdown(stopHealthTimer);
 
 // ------------------------------------------------------------------ handlers
@@ -159,11 +140,17 @@ export async function handleMcpHealth(_input: Record<string, never>, { paseo }: 
 export async function handleMcpHealthCached(_input: Record<string, never>, { paseo }: PluginHandlerContext) {
   lastPaseo = paseo;
   const settings = readHealthSettings();
+  // Back from a pause (no app was connected): answer with the old verdict now
+  // and refresh it in the background instead of waiting for the next beat.
+  const age = cached ? Date.now() - Date.parse(cached.checkedAt) : 0;
+  if (cached && settings.backgroundChecks && !inFlight && age > settings.intervalMinutes * 60_000) {
+    void refreshHealth(paseo).catch(() => undefined);
+  }
   return {
     report: cached,
     backgroundChecks: settings.backgroundChecks,
     intervalMinutes: settings.intervalMinutes,
     showComposerPill: settings.showComposerPill,
-    nextCheckAt: settings.backgroundChecks ? nextCheckAt : null,
+    nextCheckAt: settings.backgroundChecks ? pass.nextRunAt() : null,
   };
 }

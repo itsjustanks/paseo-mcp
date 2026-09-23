@@ -6,6 +6,7 @@ import { homedir, hostname } from "node:os";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import type { Destination } from "../shared/contracts";
 import { onShutdown } from "./lifecycle";
+import { withDeadline } from "./run";
 import {
   DIALECTS,
   backupFile,
@@ -1149,7 +1150,7 @@ async function workspaceLoginDirectory(
   paseo: PluginHandlerContext["paseo"],
 ): Promise<string | undefined> {
   if (!workspaceId) return undefined;
-  const result = await paseo.workspaces.list();
+  const result = await withDeadline(paseo.workspaces.list(), "its workspace list");
   const entries = (result as {
     entries: Array<{ id: string; workspaceDirectory?: string; projectRootPath: string }>;
   }).entries;

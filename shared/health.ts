@@ -21,7 +21,7 @@ export const INITIALIZE_REQUEST = {
   params: {
     protocolVersion: "2025-06-18",
     capabilities: {},
-    clientInfo: { name: "paseo-mcp", version: "0.6.0" },
+    clientInfo: { name: "paseo-mcp", version: "0.8.0" },
   },
 } as const;
 

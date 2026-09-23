@@ -1,7 +1,6 @@
 import type { PluginBeforeRequests, PluginServerContext } from "@getpaseo/plugin/server";
-import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { injectionDisabledFor } from "../shared/enabled";
 import { INJECTION_DEFAULTS, injectionSettings, injectionTargets, type InjectionSettings } from "../shared/settings";
 import { readInjectionStore } from "./enabled";
@@ -23,16 +22,19 @@ export function readInjectionSettings(path = settingsPath(injectionSettings.id))
 
 // ------------------------------------------------------------------ .mcp.json
 
-function gitRoot(cwd: string): string | null {
-  try {
-    const out = execFileSync("git", ["-C", cwd, "rev-parse", "--show-toplevel"], {
-      encoding: "utf8",
-      timeout: 3_000,
-      stdio: ["ignore", "pipe", "ignore"],
-    }).trim();
-    return out || null;
-  } catch {
-    return null;
+/**
+ * The nearest directory at or above `cwd` holding a `.git` entry: a directory
+ * in a plain checkout, a file in a worktree or submodule. That is the top level
+ * `git rev-parse --show-toplevel` reports, found without starting git on the
+ * agent-creation path.
+ */
+export function gitRoot(cwd: string): string | null {
+  let directory = resolve(cwd);
+  for (;;) {
+    if (existsSync(join(directory, ".git"))) return directory;
+    const parent = dirname(directory);
+    if (parent === directory) return null;
+    directory = parent;
   }
 }
 

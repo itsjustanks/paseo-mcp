@@ -4,17 +4,18 @@ import { join } from "node:path";
 import type { Destination, ProcessObservation } from "../shared/contracts";
 import type { ProfileScope, ProfileServer, WorkspaceProfile } from "../shared/budget";
 import { INJECTION_DEFAULTS, injectionSettings, type InjectionSettings } from "../shared/settings";
+import { readJsonCached } from "./files";
 import {
   buildDestinations,
+  collectAccounts,
   destRead,
-  handleMcpAuth,
   hasInlineCredentials,
   jsonMcpRead,
-  readJson,
   redactDetail,
   type McpDef,
 } from "./handlers";
 import { observeWorkspaceProcesses } from "./processes";
+import { withDeadline } from "./run";
 import { readSettingsDocument } from "./settings";
 
 /**
@@ -40,12 +41,13 @@ function profileServers(defs: Record<string, McpDef>): ProfileServer[] {
  * names and transports leave; the entries often carry tokens.
  */
 export function claudeLocalServers(configPath: string, directories: string[]): Record<string, McpDef> {
-  const config = readJson(configPath);
-  const projects = (config?.projects as Record<string, { mcpServers?: Record<string, McpDef> }> | undefined) ?? {};
+  const config = readJsonCached(configPath) as { projects?: Record<string, { mcpServers?: Record<string, McpDef> }> } | null;
+  const projects = config?.projects ?? {};
   const defs: Record<string, McpDef> = {};
   for (const dir of directories) {
     for (const [name, def] of Object.entries(projects[dir]?.mcpServers ?? {})) {
-      if (!(name in defs)) defs[name] = def;
+      // A copy: the parse behind it is shared (server/files.ts).
+      if (!(name in defs)) defs[name] = structuredClone(def);
     }
   }
   return defs;
@@ -87,7 +89,7 @@ export async function handleMcpWorkspace(
   { workspaceId }: { workspaceId: string },
   { paseo }: PluginHandlerContext,
 ) {
-  const result = await paseo.workspaces.list();
+  const result = await withDeadline(paseo.workspaces.list(), "its workspace list");
   const entries = (result as {
     entries: Array<{
       id: string;
@@ -114,12 +116,13 @@ export async function handleMcpWorkspace(
       };
     })
     .sort((a, b) => a.name.localeCompare(b.name));
-  const { accounts } = await handleMcpAuth({}, { paseo });
+  // The panel shows Claude sign-in rows only, so no Codex check is started from here.
+  const accounts = collectAccounts({ askCodex: false });
   const destinations = await buildDestinations(paseo);
   const { profile, defs } = buildProfile(destinations, definitions, configPath, candidates);
   let processes: ProcessObservation;
   try {
-    processes = observeWorkspaceProcesses(directory, defs);
+    processes = await observeWorkspaceProcesses(directory, defs);
   } catch (error) {
     // A process-table hiccup must never take the panel down with it.
     processes = { available: false, reason: error instanceof Error ? error.message : String(error) };

@@ -84,13 +84,26 @@ export const McpAuthAccountSchema = z.object({
   definedServers: z.number(),
   needsAuth: z.array(z.string()),
   authStatus: z.record(z.string(), z.enum(["connected", "not-connected", "unsupported", "unknown"])),
+  // Codex accounts (0.8.0): when Codex itself last answered for this account
+  // (null: never yet), whether a background check is running now, and why the
+  // latest check failed when the states shown are older than it. Absent on
+  // Claude accounts and on reports from older hosts.
+  statusAsOf: z.string().nullable().optional(),
+  checking: z.boolean().optional(),
+  statusNote: z.string().optional(),
 });
 export type McpAuthAccount = z.infer<typeof McpAuthAccountSchema>;
 
+/**
+ * Accounts and their MCP sign-in state. Answers from files and memory at once;
+ * `refresh` also asks Codex again in the background, and `checking` says a
+ * check is still running (read again shortly for its answer).
+ */
 export const mcpAuth = defineRpc({
   name: "paseo-mcp.auth",
-  input: z.object({}),
+  input: z.object({ refresh: z.boolean().optional() }),
   output: z.object({
+    checking: z.boolean().optional(),
     accounts: z.array(McpAuthAccountSchema),
     // `path` is the `.mcp.json` file itself, so a removal can name it. Absent
     // on reports from older hosts.
@@ -361,6 +374,10 @@ export const McpServerToolsSchema = z.object({
   // From the initialize handshake, when the server sent one.
   serverInfo: z.object({ name: z.string(), version: z.string() }).nullable(),
   protocolVersion: z.string(),
+  // 0.8.0: the latest ask failed (timeout, refused, an error page) but the
+  // server listed its tools before; this is that earlier list, from `asOf`,
+  // with the reason the new ask failed. Absent when the list is current.
+  stale: z.object({ reason: z.string(), asOf: z.string() }).optional(),
 });
 export type McpServerTools = z.infer<typeof McpServerToolsSchema>;
 

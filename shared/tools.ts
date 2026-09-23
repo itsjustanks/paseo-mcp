@@ -9,7 +9,7 @@
  * knowable by running its command, which this module never does. A list is
  * either what the server said or absent — never guessed.
  */
-import type { McpServerTools, McpTool, McpToolsKind } from "./contracts";
+import type { McpServerTools, McpTool, McpToolsKind, McpToolsReport } from "./contracts";
 import { INITIALIZE_REQUEST, PROBE_TIMEOUT_MS, classifyProbe, describeError, parseJsonRpc, redactNote } from "./health";
 
 /** Servers asked at once during a refresh; 29 HTTP servers in 5 batches, not 29 sockets. */
@@ -289,6 +289,31 @@ export async function mapLimit<T, R>(items: T[], limit: number, work: (item: T) 
   };
   await Promise.all(Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, worker));
   return results;
+}
+
+// ----------------------------------------------------------- last good list
+
+/**
+ * A server that listed its tools before and fails to answer now keeps its
+ * earlier list, marked stale with the time it was read and why the new ask
+ * failed. A blip (a timeout, a restart, a 502) must not shrink the tool count
+ * on every composer chip until the next pass. Only a definition that is still
+ * the same (`sameDefinition`) keeps its list; an edited URL starts over, and a
+ * sign-in wall or a stdio command is a real answer, not a failure.
+ */
+export function keepLastGoodTools(
+  previous: McpToolsReport | null,
+  next: McpToolsReport,
+  sameDefinition: (name: string) => boolean,
+): McpToolsReport {
+  if (!previous) return next;
+  const before = new Map(previous.servers.map((entry) => [entry.name, entry]));
+  const servers = next.servers.map((entry) => {
+    const earlier = before.get(entry.name);
+    if (entry.kind !== "unavailable" || earlier?.kind !== "listed" || !sameDefinition(entry.name)) return entry;
+    return { ...earlier, stale: { reason: entry.note, asOf: earlier.stale?.asOf ?? previous.checkedAt } };
+  });
+  return { ...next, servers };
 }
 
 // ------------------------------------------------------------------- totals

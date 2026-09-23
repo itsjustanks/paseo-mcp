@@ -1,5 +1,44 @@
 # Changelog
 
+## 0.8.0 — 2026-09-23
+
+The plugin no longer chugs. Opening an MCP panel used to start `codex mcp list` once per Codex account, per panel, and wait for each one; now nothing waits on a process.
+
+### Why it was slow
+- Every read of the Servers section, the workspace panel and each agent's MCP panel ran `codex mcp list --json` once per Codex account (primary plus every AgentLink slot) with `execFileSync`. That command asks each HTTP server over the network whether it uses OAuth, up to 5 s per server, and the synchronous call froze the whole plugin while it ran: health reads, the composer chip, and the `agent.create` hook all queued behind it. Past the daemon's 30 s RPC limit the app retried, which queued more runs. On a daemon this is the `WARNING: failed to clean up stale arg0 temp dirs` line every ~5 s: Codex prints it on every start.
+- The workspace panel threw the Codex answers away (it shows Claude sign-in rows only), and the Claude agent panel asked for every account to use one.
+
+### Measured (`npm run bench`: sandbox HOME, 3 Codex accounts, fake `codex` taking 5 s like a real one waiting on an unreachable server)
+
+| | 0.7.0 | 0.8.0 |
+| --- | --- | --- |
+| Codex runs, panel closed | 0 / min | 0 / min |
+| Codex runs, panel open | 12 / min (66 for one open-and-refresh; 332 s to drain) | 3, once, in the background; none after |
+| Plugin frozen for (longest event-loop stall, panel open) | 181 s | 13 ms |
+| A cheap RPC while the panel loads (median / max) | 66 s / 284 s | 1 ms / 1 ms |
+| RPCs past the daemon's 30 s limit, and app retries | 28, 20 | 0, 0 |
+| `agent.create` hook while the panel loads | 70.6 s | 1 ms |
+| `auth` / `workspace` / `agent-servers` RPC | 15.1 s each | 1 ms (workspace 57 ms cold: one `ps` + `lsof`) |
+| Codex warnings in the plugin log | 102 | 0 (one explanation per account) |
+
+### Changes
+- Codex sign-in state (`server/codex-auth.ts`, `shared/accounts.ts`): panel reads answer at once from Codex's grant file (`$CODEX_HOME/.credentials.json`, used where there is no keyring) and Codex's last answer. `codex mcp list` runs only in the background, one process at a time, 20 s limit, when the last answer is missing, older than 30 minutes, or the account's `config.toml` or grant file changed, and on Refresh or a finished sign-in. Only a success is cached; a failure keeps the last good answer, is shown with its time and reason, and is retried after 1, 2, 4 … minutes. The workspace panel never starts Codex; an agent panel checks only its own account.
+- Fixed: Codex prints `o_auth` for a connected OAuth server; 0.7.0 read that as "unknown", so Codex grants never showed as connected.
+- Codex's stderr is captured instead of passed to the plugin log. The arg0 warning is explained once per account with the directory and the fix (something under `$CODEX_HOME/tmp/arg0` is owned by another user, usually root from `docker exec` without `--user`; `chown -R` it once as root).
+- Config reads go through an mtime/size/inode-keyed cache (`server/files.ts`): `~/.claude.json` was parsed five or six times per panel refresh. A file caught mid-write keeps its last good parse for 60 s instead of emptying the server list. Credential files (`auth.json`, `.credentials.json`) are read fresh and never cached.
+- No blocking calls left on the RPC path: the login-shell PATH lookup, `ps` and `lsof` are async with timeouts, and one process-table snapshot serves every panel for 5 s. The `agent.create` hook finds the git root by walking up to `.git` instead of starting `git`. Calls back into the daemon (config, workspaces, projects) have a 10 s deadline with a plain-English error.
+- Health and tool passes (`server/background.ts`) run only while an app is connected (any RPC in the last 15 minutes), back off 1, 2, 4 … minutes after a failure, and probe eight servers at a time instead of all at once. After a pause, the first read answers with the last verdict and refreshes in the background.
+- A server that listed its tools before and fails on a later pass keeps its earlier list, marked "as of HH:MM" with the reason, so a blip does not shrink the chip's tool count.
+- Panels keep the last good data when a refresh fails, with an "as of HH:MM" pill and a note saying what failed and why, instead of replacing the content with an error. Errors from the daemon are reworded into plain sentences (`shared/errors.ts`), e.g. a 30 s timeout says the plugin is busy and to try again.
+- Client polling: health and tool reads back off after failures; the composer chip's settings poll runs only while there is an agent and backs off when the host does not answer; Codex sign-in is re-read every 3 s only while a background check is running. The agent panel's switch list is re-read on every visit as its comment always said (the host turns refetch-on-mount off).
+- Every RPC slower than 5 s is logged with its name. Removed the unused `ToolsSection` component.
+
+### Contracts
+All additions are optional, so a 0.7 app reads a 0.8 host and the other way round: `paseo-mcp.auth` takes `refresh` and returns `checking`; accounts carry `statusAsOf`, `checking`, `statusNote`; a tool list entry can carry `stale: { reason, asOf }`.
+
+### Tests
+102 tests (was 76): Codex state mapping and grant rules (`tests/accounts.test.ts`), the file cache and last-good tool lists (`tests/cache.test.ts`), background Codex checks with caching, invalidation, backoff and single-flight (`tests/codex-auth.test.ts`), pausing and backoff of background passes (`tests/background.test.ts`), and "no spawn loop" against the real handlers with a fake `codex` (`tests/no-spawn.test.ts`).
+
 ## 0.7.0 — 2026-09-10
 
 Navigation changed: the **Tools** and **Accounts** sections are gone. Everything they showed is on the server's card under **Servers**.

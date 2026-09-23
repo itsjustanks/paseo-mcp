@@ -120,6 +120,12 @@ Settings live on the host at `$PASEO_HOME/plugin-settings/paseo-mcp/health.json`
 invalid file means the defaults apply. The daemon log shows `health check: N servers, M need attention, K OAuth`
 after each pass.
 
+Background passes only run while a Paseo app is connected to the daemon (any RPC from the app counts;
+the composer chip reads the cached verdict once a minute). With no app connected for 15 minutes the
+log says `health check: no app connected, pausing until one is` and nothing is probed; the first read
+after that answers with the last verdict and refreshes it in the background. A pass that fails is
+retried after 1, 2, 4 … minutes, never more often than the interval. Probes run eight at a time.
+
 | Status | Meaning | Needs attention |
 | --- | --- | --- |
 | `ok` | The endpoint answered `initialize`, or is alive and rejected the anonymous request the way the protocol says to (400, 405, 406, a redirect) | no |
@@ -158,6 +164,10 @@ Nothing is guessed. A server that cannot be asked says why:
 | `sign in to list` | An OAuth server: it answers an anonymous request with 401 and lists its tools only to a signed-in editor |
 | `runs on demand` | A stdio (command) server: its tools are only knowable while an agent has it running, and the plugin does not start processes |
 | `not listed` | The endpoint answered but not with MCP (a web page at the URL, a JSON-RPC error, a timeout), with the redacted reason |
+
+A server that listed its tools before and does not answer on a later pass (a timeout, a restart, an
+error page) keeps its earlier list, marked "as of HH:MM" with the reason the new ask failed, so a blip
+never shrinks the tool count on the chip. An edited URL starts over.
 
 Tool descriptions are text the server controls; they are flattened to one capped line before they
 are stored or shown. The data carries each tool's name and argument list so a per-tool policy
@@ -206,6 +216,34 @@ thresholds live in `shared/budget.ts`.
 Health issues under the count are split the same way: servers this workspace loads first, each with
 an **Open** button that lands on that server in MCP management, and problems elsewhere folded away.
 
+## Sign-in state and Codex
+
+Claude Code records which servers each account still has to authorize in its own config dir, so its
+sign-in state is a file read. Codex keeps MCP OAuth grants in the OS keyring, or, where there is none
+(a Linux container, or `mcp_oauth_credentials_store = "file"`), in `$CODEX_HOME/.credentials.json`. The
+plugin reads that file directly: a usable grant there shows as connected at once. Nothing from it
+leaves the host except that yes/no; no token is read into a response or a log.
+
+For everything the file cannot answer (keyring grants, whether a server wants OAuth at all), Codex is
+asked with `codex mcp list --json`, which checks each server over the network and can take seconds. So
+it never runs while a panel waits:
+
+- Panel reads answer at once from the file and Codex's last answer. Only the Servers section and a
+  Codex agent's own panel start a check, in the background, and only when the last answer is missing,
+  older than 30 minutes, or that account's `config.toml` or grant file changed. **Refresh** and a
+  finished sign-in ask again.
+- One Codex process at a time, 20 second limit each. A failed check keeps the last good answer, shown
+  with its time and the reason, and is retried after 1, 2, 4 … minutes (up to 30).
+- The workspace panel never starts Codex; it shows Claude sign-in rows only.
+
+### "failed to clean up stale arg0 temp dirs"
+
+Codex prints this on every start when it cannot tidy `$CODEX_HOME/tmp/arg0`: something in there
+belongs to another user, usually root, left by running `codex` through `docker exec` without `--user`.
+It is harmless. The plugin captures Codex's output instead of passing it to its log, and explains the
+warning once per account with the exact directory. To silence it, fix the ownership once, as root on
+the daemon host (in the paseo-dev-stack container: `docker compose exec --user root paseo chown -R paseo:paseo /home/paseo/.codex/tmp`).
+
 ## AgentLink integration
 
 AgentLink is optional. Standard `~/.claude`, `~/.codex`, `~/.kimi-code`, and `~/.grok` setups work on their own.
@@ -217,7 +255,13 @@ When [AgentLink](https://github.com/itsjustanks/agent-link) account directories 
 ```sh
 npm install
 npm run typecheck
+npm test
 paseo plugin add /absolute/path/to/paseo-mcp --link
 ```
+
+`npm run bench` runs the load harness (`tests/perf/harness.ts`): the plugin in its own process against
+a sandbox HOME with a fake `codex`, playing daemon and app, and prints processes started per minute,
+event-loop stalls, and RPC timings with the panel closed and open. `npm run bench -- --quick` takes
+about a minute.
 
 Paseo's plugin host supplies the runtime. The npm dependencies are development types only.

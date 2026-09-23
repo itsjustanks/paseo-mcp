@@ -991,6 +991,28 @@ export function ErrorText({ children }: { children: string }) {
   return <Text style={[t.text.caption, { color: t.color.danger }]}>{children}</Text>;
 }
 
+/**
+ * A refresh failed but an earlier answer is on screen: say so above it, with
+ * the time that answer was read and why the new one failed, instead of
+ * replacing the content with an error.
+ */
+export function StaleNote({ what, at, reason, onRetry }: { what: string; at: string; reason: string; onRetry?: () => void }) {
+  const t = useTokens();
+  return (
+    <Notice tone="attention">
+      <View style={{ gap: t.space.xs }}>
+        <Text style={t.text.body}>{`Could not refresh ${what}. Showing what was read at ${at}.`}</Text>
+        <Text style={t.text.caption}>{reason}</Text>
+        {onRetry ? (
+          <View style={{ flexDirection: "row" }}>
+            <Button label="Try again" variant="ghost" onPress={onRetry} />
+          </View>
+        ) : null}
+      </View>
+    </Notice>
+  );
+}
+
 export function Disclosure({ title, children, open: initial = false }: { title: string; children: React.ReactNode; open?: boolean }) {
   const t = useTokens();
   const [open, setOpen] = useState(initial);

@@ -1,12 +1,16 @@
 import type { PluginHandlerContext } from "@getpaseo/plugin/server";
-import { execFileSync } from "node:child_process";
 import { copyFileSync, existsSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, delimiter, dirname, join } from "node:path";
-import type { Destination } from "../shared/contracts";
+import { basename, dirname, join } from "node:path";
+import type { AuthState } from "../shared/accounts";
+import type { Destination, McpAuthAccount } from "../shared/contracts";
 import { probeMcp } from "../shared/health";
-import { onStart } from "./lifecycle";
 import type { Dialect } from "../shared/mcpjson";
+import { codexAuthView } from "./codex-auth";
+import { forgetFile, readJsonCached, readTextCached } from "./files";
+import { withDeadline } from "./run";
+
+export { binaryOnPath, searchPath } from "./path";
 
 const HOME = homedir();
 // Home dir: prefer whichever location actually holds accounts. Picking a
@@ -52,12 +56,19 @@ function listDirs(root: string): string[] {
   }
 }
 
+/** A fresh parse, for callers that change what they read and write it back. */
 export function readJson(path: string): Record<string, unknown> | null {
   try {
     return JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
   } catch {
     return null;
   }
+}
+
+/** The cached parse (server/files.ts), for callers that only look. Do not change the result. */
+function readJsonShared(path: string): Record<string, unknown> | null {
+  const value = readJsonCached(path);
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
 }
 
 const BACKUP_KEEP = 20;
@@ -93,6 +104,7 @@ export function writeTextAtomic(path: string, text: string): void {
   const tmp = `${path}.tmp-paseo-mcp`;
   writeFileSync(tmp, text, { mode });
   renameSync(tmp, path);
+  forgetFile(path);
 }
 
 export function writeJsonAtomic(path: string, value: unknown): void {
@@ -104,11 +116,13 @@ export function writeJsonAtomic(path: string, value: unknown): void {
 // Only the account email is ever read from credential-adjacent files — no token
 // material leaves the handler.
 function claudeAccountEmail(configDir: string): string {
-  const config = readJson(configDir === HOME ? join(HOME, ".claude.json") : join(configDir, ".claude.json"));
+  const config = readJsonShared(configDir === HOME ? join(HOME, ".claude.json") : join(configDir, ".claude.json"));
   const account = config?.oauthAccount as { emailAddress?: string } | undefined;
   return account?.emailAddress ?? "";
 }
 
+// auth.json is nothing but credentials: read fresh (it is small) and never
+// kept in the file cache, so its tokens do not stay in memory.
 function codexAccountEmail(codexHome: string): string {
   const auth = readJson(join(codexHome, "auth.json"));
   const idToken = (auth?.tokens as { id_token?: string } | undefined)?.id_token;
@@ -195,35 +209,10 @@ async function providerOverrides(paseo: PluginHandlerContext["paseo"] | null): P
   // The background health check may run before any RPC has handed us a paseo
   // handle; without one, every discovered editor counts as enabled.
   if (!paseo) return {};
-  const { config } = await paseo.config.get();
+  const { config } = await withDeadline(paseo.config.get(), "its provider settings");
   const shape = config as { providers?: ProviderOverrides; agents?: { providers?: ProviderOverrides } };
   return (shape.providers ?? shape.agents?.providers ?? {}) as ProviderOverrides;
 }
-
-// A GUI-launched daemon inherits a minimal PATH, not the user's login PATH, so
-// tools installed in /opt/homebrew/bin, ~/.local/bin etc. look "missing".
-// Resolve the login shell's PATH once per process.
-let cachedSearchPath: string[] | null = null;
-
-export function searchPath(): string[] {
-  if (cachedSearchPath === null) {
-    let raw = process.env.PATH ?? "";
-    try {
-      const shell = process.env.SHELL || "/bin/sh";
-      const out = execFileSync(shell, ["-lc", 'printf %s "$PATH"'], { encoding: "utf8", timeout: 5000 });
-      if (out.trim()) raw = out.trim();
-    } catch {
-      // Fall back to the inherited PATH.
-    }
-    const extras = [join(HOME, ".local", "bin"), "/opt/homebrew/bin", "/usr/local/bin"];
-    cachedSearchPath = [...new Set(raw.split(delimiter).concat(extras).filter(Boolean))];
-  }
-  return cachedSearchPath;
-}
-
-// A slow shell rc can take seconds, so fill the cache once the plugin is up
-// rather than leaving the first RPC that needs a PATH lookup to stall on it.
-onStart(searchPath);
 
 // ---------------------------------------------------------------- MCP formats
 
@@ -293,9 +282,11 @@ export function jsonSafeDef(def: McpDef, dialect: "claude-json" | "other"): McpD
 
 // json-mcp: a JSON file with a top-level `mcpServers` object. Claude Code's
 // ~/.claude.json and Kimi Code's mcp.json both use this shape.
+// Read through the file cache and handed out as a private copy: the parse of a
+// large ~/.claude.json is shared, the few server entries are not.
 export function jsonMcpRead(path: string): Record<string, McpDef> {
-  const config = readJson(path);
-  return (config?.mcpServers as Record<string, McpDef> | undefined) ?? {};
+  const servers = readJsonShared(path)?.mcpServers;
+  return servers && typeof servers === "object" && !Array.isArray(servers) ? structuredClone(servers as Record<string, McpDef>) : {};
 }
 
 function jsonMcpWrite(path: string, name: string, def: McpDef | null): void {
@@ -326,11 +317,8 @@ export function tomlMcpNamesFromText(text: string): string[] {
 }
 
 export function tomlMcpNames(path: string): string[] {
-  try {
-    return tomlMcpNamesFromText(readFileSync(path, "utf8"));
-  } catch {
-    return [];
-  }
+  const text = readTextCached(path);
+  return text === null ? [] : tomlMcpNamesFromText(text);
 }
 
 // TOML basic ("…", escapes) and literal ('…', no escapes) strings.
@@ -368,11 +356,8 @@ export function tomlServerBlock(text: string, name: string): { start: number; en
 
 // Minimal parse of one server block — enough to re-create the definition elsewhere.
 export function tomlMcpReadOne(path: string, name: string): McpDef | null {
-  try {
-    return tomlMcpReadOneFromText(readFileSync(path, "utf8"), name);
-  } catch {
-    return null;
-  }
+  const text = readTextCached(path);
+  return text === null ? null : tomlMcpReadOneFromText(text, name);
 }
 
 // Same parse against a buffer rather than a file, so a computed document can be
@@ -551,12 +536,8 @@ export function redactDetail(def: McpDef | null): string {
 export function destRead(dest: Destination): Record<string, McpDef> {
   if (dest.format === "json-mcp") return jsonMcpRead(dest.configPath);
   // One read of the file, then every block is parsed from that text.
-  let text = "";
-  try {
-    text = readFileSync(dest.configPath, "utf8");
-  } catch {
-    return {};
-  }
+  const text = readTextCached(dest.configPath);
+  if (text === null) return {};
   const defs: Record<string, McpDef> = {};
   for (const name of tomlMcpNamesFromText(text)) {
     const def = tomlMcpReadOneFromText(text, name);
@@ -1015,11 +996,6 @@ export async function handleMcpRename({ name, newName }: { name: string; newName
   };
 }
 
-export function binaryOnPath(command: string): boolean {
-  if (command.includes("/")) return existsSync(command);
-  return searchPath().some((dir) => existsSync(join(dir, command)));
-}
-
 /**
  * Health-check a remote server the way an MCP client would: a JSON-RPC
  * `initialize` POST with the configured headers, the URL sent intact (a token
@@ -1043,36 +1019,6 @@ const SYNC_PROJECT_FIELDS = [
   "dontCrawlDirectory",
 ];
 
-// Which MCP servers each ACCOUNT still has to authorize. Claude records this
-// per config dir, so it is readable without touching a token — and it is the
-// answer to "server X says not connected".
-function codexMcpAuth(accountDir: string): Record<string, "connected" | "not-connected" | "unsupported" | "unknown"> {
-  const binary = searchPath().map((entry) => join(entry, "codex")).find(existsSync);
-  if (!binary) return {};
-  try {
-    const env = { ...process.env, CODEX_HOME: accountDir };
-    const output = execFileSync(binary, ["mcp", "list", "--json"], { encoding: "utf8", timeout: 8_000, maxBuffer: 4 * 1024 * 1024, env });
-    const rows = JSON.parse(output) as Array<{ name?: string; auth_status?: string }>;
-    return Object.fromEntries(
-      rows.flatMap((row) => {
-        if (!row.name) return [];
-        const raw = row.auth_status ?? "unknown";
-        const state =
-          raw === "not_logged_in"
-            ? "not-connected"
-            : raw === "unsupported"
-              ? "unsupported"
-              : /logged_in|authenticated|connected/i.test(raw)
-                ? "connected"
-                : "unknown";
-        return [[row.name, state]];
-      }),
-    );
-  } catch {
-    return {};
-  }
-}
-
 // Paseo 0.7 exposes every registered project, including projects with no
 // active workspace. Prefer that catalog so the MCP inventory is not tied to
 // guessed folder roots; retain the old scan for earlier hosts.
@@ -1085,7 +1031,7 @@ export async function discoverProjects(
   } | null)?.projects;
   if (projectApi) {
     try {
-      const result = await projectApi.list();
+      const result = await withDeadline(projectApi.list(), "its project list");
       const entries = Array.isArray(result) ? result : result.entries ?? [];
       projects = entries.flatMap((entry) => entry.path
         ? [{ name: entry.name || basename(entry.path), path: entry.path }]
@@ -1109,77 +1055,83 @@ export async function discoverProjects(
   return projects;
 }
 
-export async function handleMcpAuth(
-  _input: Record<string, never> = {},
-  context?: PluginHandlerContext,
-) {
+// ---------------------------------------------------------------- accounts
+
+export type AccountOptions = {
+  /** Start a background `codex mcp list` when an account's answer is missing or old. Off for reads that show no Codex sign-in. */
+  askCodex: boolean;
+  /** Ask Codex again now, whatever the cache says (Refresh, a finished sign-in). */
+  force?: boolean;
+  /** Only this account (the agent panel needs one). */
+  only?: { provider: string; email: string };
+};
+
+/**
+ * Every account with its MCP sign-in state, read from files. Claude records
+ * which servers each config dir still has to authorize in
+ * `mcp-needs-auth-cache.json`, so its state is a file read. Codex state comes
+ * from server/codex-auth.ts: the grant file now, plus Codex's own last answer
+ * from a background check. No process is started on this path.
+ */
+export function collectAccounts(options: AccountOptions): McpAuthAccount[] {
+  const wanted = (provider: string, email: string) =>
+    !options.only || (options.only.provider === provider && options.only.email === email);
   const readNeeds = (dir: string): string[] => {
-    const data = readJson(join(dir, "mcp-needs-auth-cache.json"));
+    const data = readJsonShared(join(dir, "mcp-needs-auth-cache.json"));
     return data ? Object.keys(data) : [];
   };
-  const countServers = (configPath: string): number => Object.keys(jsonMcpRead(configPath)).length;
-  const accounts = [] as Array<{
-    provider: "claude" | "codex";
-    email: string;
-    dir: string;
-    isPrimary: boolean;
-    definedServers: number;
-    needsAuth: string[];
-    authStatus: Record<string, "connected" | "not-connected" | "unsupported" | "unknown">;
-  }>;
+  const claude = (email: string, dir: string, configPath: string, isPrimary: boolean): McpAuthAccount => {
+    const needsAuth = readNeeds(dir);
+    return {
+      provider: "claude",
+      email,
+      dir,
+      isPrimary,
+      definedServers: Object.keys(jsonMcpRead(configPath)).length,
+      needsAuth,
+      authStatus: Object.fromEntries(needsAuth.map((name) => [name, "not-connected" as AuthState])),
+    };
+  };
+  const codex = (email: string, dir: string, isPrimary: boolean): McpAuthAccount => {
+    const servers = destRead({ id: "", label: "", provider: "codex", providerId: "codex", account: email, configPath: join(dir, "config.toml"), format: "toml-mcp" });
+    const view = codexAuthView(dir, servers, { askCli: options.askCodex, force: options.force });
+    return {
+      provider: "codex",
+      email,
+      dir,
+      isPrimary,
+      definedServers: tomlMcpNames(join(dir, "config.toml")).length,
+      needsAuth: [],
+      authStatus: view.states,
+      statusAsOf: view.asOf,
+      checking: view.checking,
+      statusNote: view.staleReason ?? undefined,
+    };
+  };
+
+  const accounts: McpAuthAccount[] = [];
+  const slots = collectSlots();
   const primaryEmail = claudeAccountEmail(HOME);
-  if (primaryEmail) {
-    const needsAuth = readNeeds(join(HOME, ".claude"));
-    accounts.push({
-      provider: "claude",
-      email: primaryEmail,
-      dir: join(HOME, ".claude"),
-      isPrimary: true,
-      definedServers: countServers(join(HOME, ".claude.json")),
-      needsAuth,
-      authStatus: Object.fromEntries(needsAuth.map((name) => [name, "not-connected" as const])),
-    });
-  }
-  for (const slot of collectSlots()) {
-    if (slot.provider !== "claude") continue;
-    const needsAuth = readNeeds(slot.dir);
-    accounts.push({
-      provider: "claude",
-      email: slot.email,
-      dir: slot.dir,
-      isPrimary: false,
-      definedServers: countServers(join(slot.dir, ".claude.json")),
-      needsAuth,
-      authStatus: Object.fromEntries(needsAuth.map((name) => [name, "not-connected" as const])),
-    });
+  if (primaryEmail && wanted("claude", primaryEmail)) accounts.push(claude(primaryEmail, join(HOME, ".claude"), join(HOME, ".claude.json"), true));
+  for (const slot of slots) {
+    if (slot.provider === "claude" && wanted("claude", slot.email)) accounts.push(claude(slot.email, slot.dir, join(slot.dir, ".claude.json"), false));
   }
   const primaryCodexDir = join(HOME, ".codex");
   const primaryCodexEmail = codexAccountEmail(primaryCodexDir);
-  if (primaryCodexEmail) {
-    accounts.push({
-      provider: "codex",
-      email: primaryCodexEmail,
-      dir: primaryCodexDir,
-      isPrimary: true,
-      definedServers: tomlMcpNames(join(primaryCodexDir, "config.toml")).length,
-      needsAuth: [],
-      authStatus: codexMcpAuth(primaryCodexDir),
-    });
+  if (primaryCodexEmail && wanted("codex", primaryCodexEmail)) accounts.push(codex(primaryCodexEmail, primaryCodexDir, true));
+  for (const slot of slots) {
+    // The destination is keyed by the slot name. The Agents tab separately
+    // flags a slot whose authenticated email does not match that name.
+    if (slot.provider === "codex" && slot.loggedIn && wanted("codex", slot.email)) accounts.push(codex(slot.email, slot.dir, false));
   }
-  for (const slot of collectSlots()) {
-    if (slot.provider !== "codex" || !slot.loggedIn) continue;
-    accounts.push({
-      provider: "codex",
-      // The destination is keyed by the slot name. The Agents tab separately
-      // flags a slot whose authenticated email does not match that name.
-      email: slot.email,
-      dir: slot.dir,
-      isPrimary: false,
-      definedServers: tomlMcpNames(join(slot.dir, "config.toml")).length,
-      needsAuth: [],
-      authStatus: codexMcpAuth(slot.dir),
-    });
-  }
+  return accounts;
+}
+
+export async function handleMcpAuth(
+  input: { refresh?: boolean } = {},
+  context?: PluginHandlerContext,
+) {
+  const accounts = collectAccounts({ askCodex: true, force: input.refresh === true });
   const projectServers: Array<{ project: string; name: string; path: string }> = [];
   const projects = await discoverProjects(context?.paseo ?? null);
   const seenProjectServers = new Set<string>();
@@ -1194,7 +1146,7 @@ export async function handleMcpAuth(
     }
   }
   projectServers.sort((a, b) => a.project.localeCompare(b.project) || a.name.localeCompare(b.name));
-  return { accounts, projectServers };
+  return { accounts, projectServers, checking: accounts.some((account) => account.checking === true) };
 }
 
 

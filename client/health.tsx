@@ -11,6 +11,7 @@ import {
   type McpHealth,
   type McpHealthReport,
 } from "../shared/contracts";
+import { backoffMs } from "../shared/schedule";
 import { canOpenMcp, openMcp } from "./navigate";
 import { Button, Disclosure, Facts, Notice, Tag, useTokens, type Status } from "./ui";
 
@@ -33,7 +34,9 @@ export function useHealth() {
       return cached.report ?? (await callHealth({}));
     },
     staleTime: 60_000,
-    refetchInterval: 60_000,
+    // Only while something that shows health is mounted; slower after failures
+    // (1, 2, 4 … 15 minutes) so an unreachable host is not asked every minute.
+    refetchInterval: (query) => backoffMs(query.state.fetchFailureCount, 60_000, 15 * 60_000),
     retry: false,
   });
   const probe = useQuery({

@@ -3,12 +3,12 @@ import type { PluginComposerPillProps } from "@getpaseo/plugin/client";
 import { useRpc } from "@getpaseo/plugin/client";
 import { Icon } from "@getpaseo/plugin/client/react-native";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import React, { useCallback, useState } from "react";
+import React, { useCallback } from "react";
 import { Text, View } from "react-native";
 import { chipLabel, mcpTools, mcpToolsCached, type McpServerTools, type McpTool, type McpToolsReport } from "../shared/contracts";
-import { summarizeTools } from "../shared/tools";
+import { backoffMs, clockTime } from "../shared/schedule";
 import { useHealth } from "./health";
-import { Button, Card, Disclosure, EmptyState, Facts, Row, Tag, useTokens, type Status } from "./ui";
+import { Card, Disclosure, Facts, Row, useTokens, type Status } from "./ui";
 
 export const TOOLS_QUERY_KEY = ["paseo-mcp", "tools"] as const;
 
@@ -28,7 +28,8 @@ export function useTools() {
       return cached.report ?? (await callTools({}));
     },
     staleTime: 5 * 60_000,
-    refetchInterval: 5 * 60_000,
+    // Only while a chip or panel is mounted; slower after failures.
+    refetchInterval: (query) => backoffMs(query.state.fetchFailureCount, 5 * 60_000, 30 * 60_000),
     retry: false,
   });
   const fresh = useQuery({
@@ -60,7 +61,7 @@ export function toolsStatus(kind: McpServerTools["kind"]): Status {
 export function toolsWord(entry: McpServerTools): string {
   switch (entry.kind) {
     case "listed":
-      return `${entry.tools.length} ${entry.tools.length === 1 ? "tool" : "tools"}`;
+      return `${entry.tools.length} ${entry.tools.length === 1 ? "tool" : "tools"}${entry.stale ? ` (as of ${clockTime(entry.stale.asOf)})` : ""}`;
     case "auth-required":
       return "sign in to list";
     case "stdio":
@@ -165,6 +166,11 @@ export function ServerTools({ entry, open = false }: { entry: McpServerTools; op
   return (
     <View style={{ gap: t.space.sm }}>
       {facts}
+      {entry.stale ? (
+        <Text style={t.text.caption}>
+          {`This list is from ${clockTime(entry.stale.asOf)}; the latest ask did not get an answer (${entry.stale.reason}). It is kept until the server answers again.`}
+        </Text>
+      ) : null}
       <Disclosure title={toolsWord(entry)} open={open}>
         <Card level={2} padded={false}>
           {entry.tools.map((tool, index) => (
@@ -183,90 +189,6 @@ function reasonText(entry: McpServerTools): string {
     case "stdio":
       return `Command server: ${entry.note}. The plugin does not start processes, so nothing is listed here rather than guessed.`;
     default:
-      return `Tools could not be listed: ${entry.note || "no answer"}.`;
+      return `Tools could not be listed: ${entry.note || "the server gave no answer"}.`;
   }
-}
-
-// ---------------------------------------------------------------- section
-
-/**
- * The Tools section of the MCP surface: every server with its tool count and,
- * expanded, the tools themselves. Reads the cache; Refresh asks every server.
- */
-export function ToolsSection({ onOpenServer }: { onOpenServer: (name: string) => void }) {
-  const t = useTokens();
-  const { data, error, isFetching, refetch } = useTools();
-  const totals = data ? summarizeTools(data.servers) : null;
-  const [filter, setFilter] = useState<"all" | "listed" | "sign-in" | "stdio">("all");
-  const shown = (data?.servers ?? []).filter((entry) => {
-    if (filter === "listed") return entry.kind === "listed";
-    if (filter === "sign-in") return entry.kind === "auth-required";
-    if (filter === "stdio") return entry.kind === "stdio";
-    return true;
-  });
-  return (
-    <View style={{ gap: t.space.lg }}>
-      <View style={{ flexDirection: t.compact ? "column" : "row", alignItems: t.compact ? "stretch" : "flex-end", justifyContent: "space-between", gap: t.space.md }}>
-        <View style={{ gap: 2, flexShrink: 1 }}>
-          <Text style={t.text.display}>
-            {totals ? `${totals.tools} tools across ${totals.listed} of ${totals.servers} servers` : "Tools"}
-          </Text>
-          <Text style={t.text.caption}>
-            What each server would hand an agent, asked with the same initialize and tools/list a client sends. Nothing is guessed: a server that cannot be asked says why.
-          </Text>
-        </View>
-        <View style={{ flexDirection: "row", gap: t.space.sm }}>
-          <Button label="Refresh" loading={isFetching} onPress={() => void refetch()} />
-        </View>
-      </View>
-      {totals ? (
-        <Facts
-          items={[
-            { value: `${totals.listed} listed`, tone: totals.listed > 0 ? "ok" : undefined },
-            totals.signIn > 0 ? { value: `${totals.signIn} need sign-in` } : null,
-            totals.stdio > 0 ? { value: `${totals.stdio} command servers` } : null,
-            totals.unavailable > 0 ? { value: `${totals.unavailable} not listed`, tone: "attention" } : null,
-            data ? { value: `checked ${new Date(data.checkedAt).toLocaleString()}` } : null,
-          ]}
-        />
-      ) : null}
-      <View style={{ flexDirection: "row", flexWrap: "wrap", gap: t.space.sm }}>
-        {(
-          [
-            ["all", "All"],
-            ["listed", "Listed"],
-            ["sign-in", "Need sign-in"],
-            ["stdio", "Command"],
-          ] as const
-        ).map(([value, label]) => (
-          <Button key={value} label={label} variant={filter === value ? "secondary" : "ghost"} onPress={() => setFilter(value)} />
-        ))}
-      </View>
-      {error && !data ? <Text style={[t.text.caption, { color: t.color.danger }]}>{`Tool listing failed: ${error instanceof Error ? error.message : String(error)}`}</Text> : null}
-      <Card padded={false}>
-        {!data && isFetching ? <EmptyState title="Asking every server" body="The first listing asks each HTTP server to initialize and list its tools. Later visits read the host's cache." /> : null}
-        {data && shown.length === 0 ? <EmptyState title="Nothing here" body={data.servers.length === 0 ? "No MCP server is defined in any editor yet." : "No server matches this filter."} /> : null}
-        {shown.map((entry, index) => (
-          <Row
-            key={entry.name}
-            first={index === 0}
-            title={
-              <View style={{ flexDirection: "row", alignItems: "center", gap: t.space.sm, minWidth: 0 }}>
-                <Text numberOfLines={1} style={[t.text.bodyStrong, { flexShrink: 1 }]}>{entry.name}</Text>
-                <Tag label={entry.transport} />
-                {entry.serverInfo?.name && entry.serverInfo.name !== entry.name ? <Tag label={entry.serverInfo.name} /> : null}
-              </View>
-            }
-            trailing={
-              <>
-                <Tag label={toolsWord(entry)} tone={toolsStatus(entry.kind)} />
-                <Button label="Open" variant="ghost" onPress={() => onOpenServer(entry.name)} />
-              </>
-            }
-            expanded={<ServerTools entry={entry} />}
-          />
-        ))}
-      </Card>
-    </View>
-  );
 }
