@@ -11,7 +11,7 @@ import type { ZodType, output as ZodOutput } from "zod";
  * unreadable, from another schema version, or invalid yields the caller's
  * defaults; a server module must never guess.
  */
-function paseoHome(): string {
+export function paseoHome(): string {
   const raw = process.env.PASEO_HOME?.trim();
   if (!raw) return join(homedir(), ".paseo");
   return resolve(raw === "~" ? homedir() : raw.startsWith("~/") ? join(homedir(), raw.slice(2)) : raw);

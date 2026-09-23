@@ -30,6 +30,7 @@ import {
   handleMcpRawPut,
 } from "./server/mcpjson";
 import { markClientSeen } from "./server/presence";
+import { handleMcpSiblings } from "./server/siblings";
 import { handleMcpTools, handleMcpToolsCached } from "./server/tools";
 import { handleMcpWorkspace } from "./server/workspace";
 import {
@@ -45,6 +46,7 @@ import {
   mcpRemove,
   mcpRename,
   mcpSetEnabled,
+  mcpSiblings,
   mcpSync,
   mcpTools,
   mcpToolsCached,
@@ -63,7 +65,7 @@ import {
   mcpRawGet,
   mcpRawPut,
 } from "./shared/mcpjson";
-import { healthSettings, injectionSettings } from "./shared/settings";
+import { healthSettings, injectionSettings, promoSettings } from "./shared/settings";
 
 /** Slow enough to be worth a line in the daemon log. */
 const SLOW_RPC_MS = 5_000;
@@ -89,6 +91,7 @@ export default function contribute(server: PluginServerContext) {
 
   server.registerSettings(injectionSettings);
   server.registerSettings(healthSettings);
+  server.registerSettings(promoSettings);
   registerHooks(server);
   handle(mcpMatrix, handleMcpMatrix);
   handle(mcpAdd, handleMcpAdd);
@@ -117,6 +120,7 @@ export default function contribute(server: PluginServerContext) {
   handle(mcpLoginStatus, handleMcpLoginStatus);
   handle(mcpLoginCancel, handleMcpLoginCancel);
   handle(mcpLogout, handleMcpLogout);
+  handle(mcpSiblings, handleMcpSiblings);
 
   runStart();
   return runShutdown;

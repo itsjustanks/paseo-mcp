@@ -1,5 +1,4 @@
 import type { PluginTheme } from "@getpaseo/plugin";
-import { Icon } from "@getpaseo/plugin/client/react-native";
 import React, { createContext, useContext, useMemo, useState } from "react";
 import { ActivityIndicator, Clipboard, Image, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 
@@ -227,61 +226,6 @@ export function Header({ title, caption, pill }: { title: string; caption: strin
   );
 }
 
-export type ChoiceItem<Id extends string> = { id: Id; label: string; icon: string; description: string };
-
-/**
- * Section tiles. On a phone with more than three of them they become one
- * horizontally scrolling strip instead of a wall of half-width boxes.
- */
-export function Choice<Id extends string>({
-  items,
-  selected,
-  onChange,
-  label,
-}: {
-  items: ChoiceItem<Id>[];
-  selected: Id;
-  onChange: (id: Id) => void;
-  label: string;
-}) {
-  const t = useTokens();
-  const narrowNavigation = t.compact && items.length > 3;
-  const choices = (
-    <View accessibilityRole="tablist" accessibilityLabel={label} style={{ flexDirection: "row", flexWrap: narrowNavigation ? "nowrap" : "wrap", gap: t.space.sm }}>
-      {items.map((item) => {
-        const on = selected === item.id;
-        return (
-          <Pressable
-            key={item.id}
-            accessibilityRole="tab"
-            accessibilityLabel={item.label}
-            accessibilityState={{ selected: on }}
-            onPress={() => onChange(item.id)}
-            style={({ pressed }) => ({
-              flexGrow: narrowNavigation ? 0 : 1,
-              flexBasis: narrowNavigation ? "auto" : t.compact ? "44%" : items.length > 3 ? 140 : 180,
-              minHeight: narrowNavigation ? 44 : 68,
-              padding: t.space.md,
-              gap: 5,
-              borderRadius: t.radius.md,
-              borderWidth: 1,
-              borderColor: on ? t.color.accent : t.color.border,
-              backgroundColor: on ? alpha(t.color.accent, 0.09) : pressed ? t.color.surface2 : t.color.surface1,
-            })}
-          >
-            <View style={{ flexDirection: "row", alignItems: "center", gap: 7 }}>
-              <Icon name={item.icon} size={16} color={on ? t.color.accent : t.color.muted} />
-              <Text style={t.text.bodyStrong}>{item.label}</Text>
-            </View>
-            {!narrowNavigation ? <Text style={t.text.caption}>{item.description}</Text> : null}
-          </Pressable>
-        );
-      })}
-    </View>
-  );
-  return narrowNavigation ? <ScrollView horizontal showsHorizontalScrollIndicator={false}>{choices}</ScrollView> : choices;
-}
-
 /** Fixed-width cards that wrap on wide layouts and stack in compact ones. */
 export function Grid({ children, min = 240 }: { children: React.ReactNode; min?: number }) {
   const t = useTokens();
@@ -295,18 +239,6 @@ export function Grid({ children, min = 240 }: { children: React.ReactNode; min?:
         ) : null,
       )}
     </View>
-  );
-}
-
-/** One number with its name above and one line of meaning below. */
-export function StatCard({ label, value, detail }: { label: string; value: string | number; detail?: string }) {
-  const t = useTokens();
-  return (
-    <Card>
-      <Text style={t.text.label}>{label}</Text>
-      <Text style={t.text.value}>{value}</Text>
-      {detail ? <Text style={t.text.caption}>{detail}</Text> : null}
-    </Card>
   );
 }
 
@@ -325,18 +257,6 @@ export function Step({ index, title }: { index: number; title: string }) {
   );
 }
 
-/** Eyebrow, headline and one paragraph — the opening of a section. */
-export function Intro({ eyebrow, title, description }: { eyebrow?: string; title: string; description?: string }) {
-  const t = useTokens();
-  return (
-    <View style={{ gap: t.space.xs }}>
-      {eyebrow ? <Text style={t.text.label}>{eyebrow.toUpperCase()}</Text> : null}
-      <Text style={[t.text.display, { fontSize: t.compact ? 22 : 26, lineHeight: t.compact ? 28 : 32 }]}>{title}</Text>
-      {description ? <Text style={[t.text.body, { color: t.color.muted, maxWidth: 680 }]}>{description}</Text> : null}
-    </View>
-  );
-}
-
 /** Title, one sentence of orientation, and the actions for the whole surface. */
 export function Toolbar({
   title,
@@ -344,7 +264,7 @@ export function Toolbar({
   actions,
   below,
 }: {
-  title: string;
+  title?: string;
   subtitle?: string;
   actions?: React.ReactNode;
   below?: React.ReactNode;
@@ -360,10 +280,12 @@ export function Toolbar({
           gap: t.space.md,
         }}
       >
-        <View style={{ gap: 2, flexShrink: 1 }}>
-          <Text style={t.text.display}>{title}</Text>
-          {subtitle ? <Text style={t.text.caption}>{subtitle}</Text> : null}
-        </View>
+        {title || subtitle ? (
+          <View style={{ gap: 2, flexShrink: 1 }}>
+            {title ? <Text style={t.text.display}>{title}</Text> : null}
+            {subtitle ? <Text style={t.text.caption}>{subtitle}</Text> : null}
+          </View>
+        ) : null}
         {actions ? <View style={{ flexDirection: "row", flexWrap: "wrap", gap: t.space.sm, flexShrink: 1 }}>{actions}</View> : null}
       </View>
       {below}
@@ -406,7 +328,8 @@ export function Card({
         borderWidth: 1,
         borderColor: tone ? alpha(statusColor(t, tone), 0.35) : t.color.borderSubtle,
         padding: padded ? (t.compact ? t.space.md : t.space.lg) : 0,
-        gap: t.space.md,
+        // An unpadded card holds a list of Rows, which bring their own padding and dividers.
+        gap: padded ? t.space.md : 0,
         overflow: "hidden",
       }}
     >
@@ -532,6 +455,52 @@ export function StatusPill({ status, label }: { status: Status; label: string })
     <View style={{ flexDirection: "row", alignItems: "center", gap: 6, flexShrink: 0 }}>
       <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: color }} />
       <Text style={[t.text.caption, { color, fontWeight: "600" }]}>{label}</Text>
+    </View>
+  );
+}
+
+/**
+ * One line of an at-a-glance list: what it is, its state as a pill, a short
+ * hint, and a link to where it is dealt with.
+ */
+export function StatusLine({
+  label,
+  value,
+  status,
+  hint,
+  action,
+}: {
+  label: string;
+  value: string;
+  status: Status;
+  hint?: string | null;
+  action?: { label: string; onPress: () => void } | null;
+}) {
+  const t = useTokens();
+  const link = action ? <Button label={`${action.label} →`} variant="ghost" onPress={action.onPress} /> : null;
+  const state = (
+    <>
+      <StatusPill status={status} label={value} />
+      {hint ? <Text style={[t.text.caption, { flexShrink: 1 }]}>{hint}</Text> : null}
+    </>
+  );
+  // Narrow: the name and its link on one line, the state under it, so the link never wraps onto a line of its own.
+  if (t.compact) {
+    return (
+      <View style={{ gap: 2 }}>
+        <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: t.space.sm, minHeight: 24 }}>
+          <Text style={t.text.label}>{label}</Text>
+          {link}
+        </View>
+        <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", columnGap: t.space.sm, rowGap: 2 }}>{state}</View>
+      </View>
+    );
+  }
+  return (
+    <View style={{ flexDirection: "row", alignItems: "center", gap: t.space.sm, minHeight: 28 }}>
+      <Text style={[t.text.label, { width: 96 }]}>{label}</Text>
+      <View style={{ flex: 1, minWidth: 0, flexDirection: "row", flexWrap: "wrap", alignItems: "center", columnGap: t.space.sm, rowGap: 2 }}>{state}</View>
+      {link}
     </View>
   );
 }

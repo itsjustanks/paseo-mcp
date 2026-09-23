@@ -449,3 +449,18 @@ export function scopedToDirectory(scope: McpHealthScope, directory: string): boo
   const root = scope.configPath.replace(/[\\/]\.mcp\.json$/, "");
   return directory === root || directory.startsWith(`${root}/`) || directory.startsWith(`${root}\\`);
 }
+
+// ---- sibling plugins -----------------------------------------------------------
+
+/**
+ * Other plugins on this daemon that the Overview points to, today AI Router.
+ * Read from Paseo's own install records on the host (server/siblings.ts), two
+ * cached `stat`s per call; the client asks once and keeps the answer.
+ */
+export const mcpSiblings = defineRpc({
+  name: "paseo-mcp.siblings",
+  input: z.object({}),
+  output: z.object({
+    aiRouter: z.object({ installed: z.boolean() }),
+  }),
+});

@@ -56,6 +56,7 @@ const { handleMcpWorkspace } = await import("../server/workspace");
 const { handleMcpAgentServers } = await import("../server/enabled");
 const { handleMcpHealthCached } = await import("../server/health");
 const { handleMcpToolsCached } = await import("../server/tools");
+const { handleMcpSiblings } = await import("../server/siblings");
 const { codexChecksSettled } = await import("../server/codex-auth");
 const { injectWorkspaceServers } = await import("../server/hooks");
 
@@ -78,9 +79,10 @@ test("panel reads start no process at all", async () => {
     await handleMcpMatrix({} as never, context);
     await handleMcpHealthCached({} as never, context);
     await handleMcpToolsCached({} as never, context);
+    handleMcpSiblings();
   }
   await codexChecksSettled();
-  assert.equal(codexRuns(), 0, "no codex from the workspace panel, the Claude agent panel, the matrix or the cached reads");
+  assert.equal(codexRuns(), 0, "no codex from the workspace panel, the Claude agent panel, the matrix, the cached reads or the AI Router card");
   assert.deepEqual(spawned.filter((name) => name !== "ps" && name !== "lsof"), [], `unexpected processes: ${spawned.join(", ")}`);
   // The process scan is shared: ten workspace reads in a row read the table once.
   assert.ok(spawned.filter((name) => name === "ps").length <= 1, `ps ran ${spawned.filter((name) => name === "ps").length} times`);

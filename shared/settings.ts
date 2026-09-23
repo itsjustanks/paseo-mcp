@@ -77,3 +77,23 @@ export type HealthSettings = z.infer<typeof healthSettings.schema>;
 
 /** Schema defaults as a plain object, for callers that cannot reach the store. */
 export const HEALTH_DEFAULTS: HealthSettings = healthSettings.schema.parse({});
+
+// ---------------------------------------------------------------- promo
+
+/**
+ * Host-scoped: the Overview's "Check out AI Router" card, and its Hide.
+ * Stored by Paseo under `$PASEO_HOME/plugin-settings/paseo-mcp/promo.json`.
+ */
+export const promoSettings = defineSettings({
+  id: "promo",
+  scope: "host",
+  version: 1,
+  schema: z.object({
+    hideAiRouter: z.boolean().default(false).describe("Hide the AI Router card on the MCP Overview"),
+  }),
+});
+
+export type PromoSettings = z.infer<typeof promoSettings.schema>;
+
+/** Schema defaults as a plain object, for callers that cannot reach the store. */
+export const PROMO_DEFAULTS: PromoSettings = promoSettings.schema.parse({});

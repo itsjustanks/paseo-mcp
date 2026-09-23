@@ -32,6 +32,7 @@ import { SWITCH_EFFECT_NOTE } from "../shared/enabled";
 import { plainError } from "../shared/errors";
 import { clockTime } from "../shared/schedule";
 import { accountsNeedingSignIn, projectFilesFor, removePlan, serverMatches, signInState, type RemovePlan, type RemoveScope, type ServerFilter } from "../shared/servers";
+import { overviewNextStep, overviewVerdict, type OverviewTarget } from "../shared/overview";
 import { summarizeTools } from "../shared/tools";
 import {
   ParsedServerSchema,
@@ -53,11 +54,12 @@ import {
 import { WorkspaceContext, pickLoad } from "./budget";
 import { HealthSummary, ServerHealthTag, healthStatus, healthWord, splitIssues, useHealth } from "./health";
 import { canOpenMcp, openMcp, takePendingServer } from "./navigate";
+import { SectionHeading, TabBar, type SectionId } from "./navigation";
+import { AiRouterCard } from "./promo";
 import { ServerTools, toolsStatus, toolsWord, useTools } from "./tools";
 import {
   Button,
   Card,
-  Choice,
   CodeBlock,
   ConfirmButton,
   Coverage,
@@ -68,15 +70,14 @@ import {
   Field,
   Grid,
   Header,
-  Intro,
   Loading,
   Notice,
   Row,
   Screen,
   Section,
   Segmented,
-  StatCard,
   StaleNote,
+  StatusLine,
   StatusPill,
   Step,
   Tag,
@@ -86,7 +87,6 @@ import {
   copyToClipboard,
   useTokens,
   useUi,
-  type ChoiceItem,
   type Status,
 } from "./ui";
 
@@ -889,17 +889,9 @@ function RemovePanel({
 // Since 0.7.0 the Servers section is the one place for a server: its
 // definitions, health, tools and sign-in state live on its card. The separate
 // Tools and Accounts tabs folded into it; their totals sit in the strip above
-// the cards, and "Sync accounts" moved to Overview.
-type SectionId = "overview" | "servers" | "projects" | "transfer" | "guide";
+// the cards, and "Sync accounts" moved to Overview. The sections themselves
+// (ids, labels, icons, the line under the tab bar) live in client/navigation.tsx.
 type Filter = ServerFilter;
-
-const SECTIONS: ChoiceItem<SectionId>[] = [
-  { id: "overview", label: "Overview", icon: "LayoutDashboard", description: "Your next step" },
-  { id: "servers", label: "Servers", icon: "Server", description: "Definitions, tools, sign-in" },
-  { id: "projects", label: "Projects", icon: "FolderCode", description: "Per-project .mcp.json" },
-  { id: "transfer", label: "Import & Export", icon: "ArrowLeftRight", description: "Paste JSON, back up" },
-  { id: "guide", label: "Guide & Setup", icon: "BookOpen", description: "How this works" },
-];
 
 const GUIDE_STEPS: { title: string; detail: string; label: string; section: SectionId; filter?: Filter }[] = [
   { title: "Add or import servers", detail: "Type a URL or command, or paste the JSON block straight out of a README. Fences, comments and the mcpServers wrapper are handled.", label: "Open Import & Export", section: "transfer" },
@@ -916,6 +908,19 @@ function providerName(provider: string): string {
 
 function plural(count: number, word: string): string {
   return `${count} ${word}${count === 1 ? "" : "s"}`;
+}
+
+const FILTER_WORDS: Record<Filter, string> = {
+  all: "",
+  gaps: "is missing from an editor",
+  issues: "has a health issue",
+  "sign-in": "needs sign-in",
+};
+
+/** "Checked 6 servers: none has "jam" in its name and needs sign-in." — what an empty list was checked for. */
+function noMatchLine(count: number, search: string, filter: Filter): string {
+  const parts = [search.trim() ? `has "${search.trim()}" in its name` : "", FILTER_WORDS[filter]].filter(Boolean);
+  return `Checked ${plural(count, "server")}: none ${parts.join(" and ")}.`;
 }
 
 /** Toasts carry one line. Anything longer is kept where the section can show it. */
@@ -1015,10 +1020,6 @@ function McpBody({ layout, host }: PluginSurfaceProps) {
   const toolsQuery = useTools();
   const toolsByName = useMemo(
     () => toolsQuery.data ? new Map(toolsQuery.data.servers.map((entry) => [entry.name, entry])) : null,
-    [toolsQuery.data],
-  );
-  const toolTotal = useMemo(
-    () => (toolsQuery.data?.servers ?? []).reduce((sum, entry) => sum + entry.tools.length, 0),
     [toolsQuery.data],
   );
 
@@ -1181,15 +1182,17 @@ function McpBody({ layout, host }: PluginSurfaceProps) {
   const removeMutation = useMutation({
     mutationFn: (input: { name: string; targets: string[]; projectFiles: string[] }) => callRemove(input),
     onError: fail,
-    onSuccess: (result) => {
+    onSuccess: (result, input) => {
       // Partial failure stays visible: the toast is one line, the skipped
       // targets are reported in full under the server.
       report(result);
-      setRemoveResult(result);
+      setRemoveResult({ ...result, server: input.name });
     },
   });
-  const [removeResult, setRemoveResult] = useState<{ ok: boolean; removed: string[]; skipped: string[] } | null>(null);
-  const [armedRemove, setArmedRemove] = useState<{ scope: RemoveScope; destId?: string } | null>(null);
+  // Both carry the server they belong to: the list draws a RemovePanel per
+  // card, and an unkeyed armed state armed every card at once (0.7.0-0.8.0).
+  const [removeResult, setRemoveResult] = useState<{ server: string; ok: boolean; removed: string[]; skipped: string[] } | null>(null);
+  const [armedRemove, setArmedRemove] = useState<{ server: string; scope: RemoveScope; destId?: string } | null>(null);
   // Export is two steps on purpose: the first produces the text (masked unless
   // secrets are revealed), the second writes it where the user can find it.
   const exportMutation = useMutation({
@@ -1312,9 +1315,6 @@ function McpBody({ layout, host }: PluginSurfaceProps) {
     const status = health?.get(server.name)?.status;
     return status === "down" || status === "binary-missing";
   });
-  const needsAuthNames = [...new Set(accounts.flatMap((account) => account.needsAuth))].filter((name) =>
-    servers.some((server) => server.name === name),
-  );
   const coveredEditors = destinations.filter((dest) => servers.every((server) => server.presentIn.includes(dest.id))).length;
   const inlineServers = servers.filter((server) => server.inlineCredentialsIn.length > 0);
   const projectServers = authQuery.data?.projectServers ?? [];
@@ -1352,56 +1352,43 @@ function McpBody({ layout, host }: PluginSurfaceProps) {
   const ready = Boolean(matrixQuery.data);
   const matrixStale = matrixQuery.isError && Boolean(matrixQuery.data);
 
-  const headerPill = matrixQuery.isError && !matrixQuery.data
-    ? { status: "error" as Status, label: "Host unavailable" }
-    : matrixStale
-      ? { status: "attention" as Status, label: `As of ${readAt(matrixQuery.dataUpdatedAt)}` }
-    : !matrixQuery.data
-      ? { status: "neutral" as Status, label: "Connecting" }
-      : servers.length === 0
-        ? { status: "neutral" as Status, label: "No servers yet" }
-        : brokenServers.length > 0
-          ? { status: "error" as Status, label: `${plural(brokenServers.length, "server")} down` }
-          : needsAuthNames.length > 0
-            ? { status: "attention" as Status, label: `${needsAuthNames.length} need sign-in` }
-            : gapServers.length > 0
-              ? { status: "attention" as Status, label: plural(gapServers.length, "gap") }
-              : { status: "ok" as Status, label: "All servers healthy" };
+  // The pill and the Overview's next step come from one decision table
+  // (shared/overview.ts), so they always name the same problem. Sign-in counts
+  // the servers the "Need sign-in" filter shows, so the two numbers match.
+  const overviewFacts = {
+    state: matrixQuery.data ? ("ready" as const) : matrixQuery.isError ? ("error" as const) : ("loading" as const),
+    staleAt: matrixStale ? readAt(matrixQuery.dataUpdatedAt) : null,
+    hostLabel: host.label,
+    servers: servers.length,
+    broken: brokenServers.length,
+    warnings: issueServers.length - brokenServers.length,
+    signIn: signInServers.length,
+    gaps: gapServers.length,
+  };
+  const headerPill: { status: Status; label: string } = overviewVerdict(overviewFacts);
+  const nextStep = overviewNextStep(overviewFacts);
+  const goTo = (target: OverviewTarget) => {
+    if (target.section === "refresh") refreshAll();
+    else if (target.section === "transfer") go("transfer", { mode: target.mode });
+    else go("servers", { server: null, filter: target.filter });
+  };
 
-  // Decision table for the Overview card, first match wins.
-  const nextStep: { title: string; detail: string; label: string; onPress: () => void } = matrixQuery.isError && !matrixQuery.data
-    ? { title: "Reconnect to the host", detail: "The MCP plugin could not read the editor configs on this host. Retry once the daemon is reachable.", label: "Retry", onPress: refreshAll }
-    : !matrixQuery.data
-      ? { title: "Reading editor configs", detail: `Looking for Claude, Codex, Kimi and Grok configs on ${host.label}. This takes a moment.`, label: "Refresh", onPress: refreshAll }
-    : servers.length === 0
-      ? { title: "Add or import your first server", detail: "Paste the JSON block from a server's README, or type a URL or command. It is written to every editor you choose.", label: "Open Import & Export", onPress: () => go("transfer", { mode: "import" }) }
-      : gapServers.length > 0
-        ? { title: `Apply ${plural(gapServers.length, "server")} to the editors missing them`, detail: "A server defined in one editor is not yet in the others. Open a server and choose Add to missing to copy its definition across.", label: "Review gaps", onPress: () => go("servers", { server: null, filter: "gaps" }) }
-        : needsAuthNames.length > 0
-          ? { title: `Sign in to ${plural(needsAuthNames.length, "server")}`, detail: "OAuth grants are per account. Connect each one once from the server's card; the browser sign-in runs on the daemon host.", label: "Show servers needing sign-in", onPress: () => go("servers", { server: null, filter: "sign-in" }) }
-          : brokenServers.length > 0
-            ? { title: `Fix ${plural(brokenServers.length, "unhealthy server")}`, detail: "A server is down or its binary is missing. Open it to read the health note and edit its definition.", label: "Show issues", onPress: () => go("servers", { server: null, filter: "issues" }) }
-            : { title: "Ready", detail: `${plural(servers.length, "server")} defined in every editor, with every account connected. Add another server or export a backup whenever you like.`, label: "Browse servers", onPress: () => go("servers", { server: null, filter: "all" }) };
-
-  const attention: { key: string; title: string; detail: string; tone: Status; server: string }[] = [
-    ...issueServers.map((entry) => {
-      const item = health!.get(entry.name)!;
-      return {
-        key: `health-${entry.name}`,
-        title: `${entry.name} — ${healthWord(item.status)}`,
-        detail: item.note || "Health check did not pass.",
-        tone: healthStatus(item.status),
-        server: entry.name,
-      };
-    }),
-    ...inlineServers.map((entry) => ({
-      key: `inline-${entry.name}`,
-      title: `${entry.name} — credentials in ${plural(entry.inlineCredentialsIn.length, "config file")}`,
+  // One row per server that needs a look, with every reason it is listed.
+  const attentionByServer = new Map<string, { label: string; detail: string; tone: Status }[]>();
+  const noteAttention = (name: string, item: { label: string; detail: string; tone: Status }) =>
+    attentionByServer.set(name, [...(attentionByServer.get(name) ?? []), item]);
+  for (const entry of issueServers) {
+    const item = health!.get(entry.name)!;
+    noteAttention(entry.name, { label: healthWord(item.status), detail: item.note || "Health check did not pass.", tone: healthStatus(item.status) });
+  }
+  for (const entry of inlineServers) {
+    noteAttention(entry.name, {
+      label: `credentials in ${plural(entry.inlineCredentialsIn.length, "config file")}`,
       detail: "A token is stored in clear text in the editor config. Exports keep it masked unless you reveal secrets.",
-      tone: "attention" as Status,
-      server: entry.name,
-    })),
-  ];
+      tone: "attention",
+    });
+  }
+  const attention = [...attentionByServer.entries()];
 
   // ---------------------------------------------------------------- sections
 
@@ -1430,50 +1417,117 @@ function McpBody({ layout, host }: PluginSurfaceProps) {
     </Card>
   );
 
+  // "a, b, c and 2 more": which servers a line is about, without a wall of names.
+  const nameList = (list: McpServerRow[]) => {
+    const head = list.slice(0, 3).map((entry) => entry.name).join(", ");
+    return list.length > 3 ? `${head} and ${list.length - 3} more` : head;
+  };
+  const toServers = (filter: Filter) => () => go("servers", { server: null, filter });
+  const connectedCount = servers.filter((entry) => signInOf(entry) === "connected").length;
+
+  // At a glance: one line per question, each with the link to where it is dealt with.
+  const glance = (
+    <Card>
+      <StatusLine
+        label="Health"
+        {...(!health
+          ? { value: healthQuery.error ? "unavailable" : healthQuery.isFetching ? "checking" : "not checked yet", status: healthQuery.isFetching ? "busy" as Status : "neutral" as Status, hint: healthQuery.error ? errorText(healthQuery.error) : null }
+          : health.size === 0
+            ? { value: "nothing to check", status: "neutral" as Status, hint: null }
+          : brokenServers.length > 0
+            ? { value: `${brokenServers.length} down`, status: "error" as Status, hint: nameList(brokenServers), action: { label: "Show issues", onPress: toServers("issues") } }
+            : issueServers.length > 0
+              ? { value: plural(issueServers.length, "warning"), status: "attention" as Status, hint: nameList(issueServers), action: { label: "Show issues", onPress: toServers("issues") } }
+              : { value: "no issues", status: "ok" as Status, hint: healthQuery.data ? `checked ${clockTime(healthQuery.data.checkedAt)}` : null })}
+      />
+      <StatusLine
+        label="Editors"
+        {...(!ready
+          ? { value: "reading", status: "neutral" as Status }
+          : servers.length === 0
+            ? { value: "no servers yet", status: "neutral" as Status, hint: `${plural(destinations.length, "editor")} found on ${host.label}` }
+            : gapServers.length > 0
+              ? { value: plural(gapServers.length, "gap"), status: "attention" as Status, hint: `${coveredEditors} of ${plural(destinations.length, "editor")} hold all ${plural(servers.length, "server")}`, action: { label: "Review gaps", onPress: toServers("gaps") } }
+              : { value: "in step", status: "ok" as Status, hint: `${plural(servers.length, "server")} in all ${plural(destinations.length, "editor")}`, action: { label: "Servers", onPress: toServers("all") } })}
+      />
+      <StatusLine
+        label="Sign-in"
+        {...(!authQuery.data
+          ? { value: authQuery.error ? "unavailable" : "reading", status: "neutral" as Status, hint: authQuery.error ? errorText(authQuery.error) : null }
+          : signInServers.length > 0
+            ? { value: `${signInServers.length} need sign-in`, status: "attention" as Status, hint: nameList(signInServers), action: { label: "Show", onPress: toServers("sign-in") } }
+            : connectedCount > 0
+              ? { value: "all connected", status: "ok" as Status, hint: `${plural(connectedCount, "OAuth server")} across ${plural(accounts.length, "account")}` }
+              : { value: "none needed", status: "neutral" as Status, hint: "No server here uses OAuth" })}
+      />
+      <StatusLine
+        label="Tools"
+        {...(toolTotals && toolTotals.servers === 0
+          ? { value: "nothing to list", status: "neutral" as Status }
+          : toolTotals
+          ? { value: plural(toolTotals.tools, "tool"), status: (toolTotals.tools > 0 ? "ok" : "neutral") as Status, hint: `listed by ${toolTotals.listed} of ${plural(toolTotals.servers, "server")}`, action: { label: "Servers", onPress: toServers("all") } }
+          : { value: toolsQuery.isFetching ? "listing" : "not listed yet", status: (toolsQuery.isFetching ? "busy" : "neutral") as Status })}
+      />
+      <StatusLine
+        label="Projects"
+        {...(authQuery.data
+          ? { value: projectGroups.length > 0 ? `${projectGroups.length} with .mcp.json` : "none with .mcp.json", status: "neutral" as Status, action: { label: "Projects", onPress: () => go("projects") } }
+          : { value: "reading", status: "neutral" as Status })}
+      />
+    </Card>
+  );
+
   const overview = (
     <View style={{ gap: t.space.lg }}>
-      <Intro
-        title="Every MCP server, in every editor."
-        description={`You are managing ${host.label}. Definitions, health and account sign-in below belong to the editors installed on this host.`}
-      />
-      <Grid min={160}>
-        <StatCard label="Servers" value={ready ? servers.length : "—"} detail="Defined in at least one editor" />
-        <StatCard label="Editors covered" value={ready ? `${coveredEditors} of ${destinations.length}` : "—"} detail="Hold every server" />
-        <StatCard label="Need sign-in" value={ready ? needsAuthNames.length : "—"} detail="OAuth grants missing" />
-        <StatCard label="Tools" value={toolsQuery.data ? toolTotal : "—"} detail="Listed by servers that answered" />
-        <StatCard label="Projects with MCP" value={authQuery.data ? projectGroups.length : "—"} detail="Workspaces with a .mcp.json" />
-      </Grid>
-      <Card>
-        <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: t.space.sm }}>
-          <StatusPill status={headerPill.status} label={headerPill.label} />
-          <Text style={t.text.caption}>MCP · selected host</Text>
+      <Card tone={headerPill.status === "neutral" ? undefined : headerPill.status}>
+        <Text style={t.text.label}>NEXT STEP</Text>
+        <View style={{ gap: t.space.xs }}>
+          <Text style={t.text.heading}>{nextStep.title}</Text>
+          <Text style={[t.text.body, { color: t.color.muted, maxWidth: 680 }]}>{nextStep.detail}</Text>
+          {matrixQuery.isError && !matrixQuery.data ? <ErrorText>{errorText(matrixQuery.error)}</ErrorText> : null}
         </View>
-        <Text style={t.text.heading}>{nextStep.title}</Text>
-        <Text style={t.text.body}>{nextStep.detail}</Text>
         <View style={{ flexDirection: "row", flexWrap: "wrap", gap: t.space.sm }}>
-          <Button label={nextStep.label} variant="primary" onPress={nextStep.onPress} />
-          <Button label="Browse servers" onPress={() => go("servers", { server: null, filter: "all" })} />
-          <Button label="Read the walkthrough" onPress={() => go("guide")} />
-          <Button label="Refresh" variant="ghost" loading={matrixQuery.isFetching || healthQuery.isFetching} onPress={refreshAll} />
+          <Button
+            label={nextStep.label}
+            variant="primary"
+            loading={nextStep.target.section === "refresh" && matrixQuery.isFetching}
+            onPress={() => goTo(nextStep.target)}
+          />
+          {servers.length > 0 && nextStep.label !== "Browse servers" ? <Button label="Browse servers" onPress={toServers("all")} /> : null}
+          <Button label="Read the walkthrough" variant="ghost" onPress={() => go("guide")} />
+          {nextStep.target.section !== "refresh" ? (
+            <Button label="Refresh" variant="ghost" loading={matrixQuery.isFetching || healthQuery.isFetching} onPress={refreshAll} />
+          ) : null}
         </View>
       </Card>
-      {syncCard}
+      {glance}
       {attention.length > 0 ? (
-        <Card>
-          <Step index={0} title="Needs attention" />
-          <View style={{ gap: t.space.md }}>
-            {attention.map((item) => (
-              <View key={item.key} style={{ gap: t.space.xs, borderTopWidth: 1, borderTopColor: t.color.borderSubtle, paddingTop: t.space.md }}>
-                <StatusPill status={item.tone} label={item.title} />
-                <Text style={t.text.caption}>{item.detail}</Text>
-                <View style={{ flexDirection: "row" }}>
-                  <Button label={`Open ${item.server}`} onPress={() => selectServer(item.server)} />
-                </View>
-              </View>
+        <Section title={`Needs attention · ${attention.length}`}>
+          <Card padded={false}>
+            {attention.map(([name, items], index) => (
+              <Row
+                key={name}
+                first={index === 0}
+                tone={items.some((item) => item.tone === "error") ? "error" : "attention"}
+                title={name}
+                meta={
+                  <View style={{ gap: t.space.xs, paddingTop: 2 }}>
+                    {items.map((item) => (
+                      <View key={item.label} style={{ gap: 2 }}>
+                        <StatusPill status={item.tone} label={item.label} />
+                        <Text style={t.text.caption}>{item.detail}</Text>
+                      </View>
+                    ))}
+                  </View>
+                }
+                trailing={<Button label="Open" onPress={() => selectServer(name)} />}
+              />
             ))}
-          </View>
-        </Card>
+          </Card>
+        </Section>
       ) : null}
+      {syncCard}
+      <AiRouterCard />
     </View>
   );
 
@@ -1516,10 +1570,10 @@ function McpBody({ layout, host }: PluginSurfaceProps) {
       server={entry}
       destinations={destinations}
       projectFiles={projectFilesFor(entry.name, projectServers)}
-      armed={armedRemove}
-      onArm={setArmedRemove}
+      armed={armedRemove?.server === entry.name ? armedRemove : null}
+      onArm={(next) => setArmedRemove(next ? { ...next, server: entry.name } : null)}
       pending={removeMutation.isPending}
-      result={removeResult}
+      result={removeResult?.server === entry.name ? removeResult : null}
       onRemove={(plan) => {
         setArmedRemove(null);
         removeMutation.mutate({ name: entry.name, targets: plan.targets, projectFiles: plan.projectFiles });
@@ -1570,7 +1624,7 @@ function McpBody({ layout, host }: PluginSurfaceProps) {
 
   const list = (
     <View style={{ gap: t.space.md }}>
-      {matrixQuery.isLoading ? <Loading label="Reading configs…" /> : null}
+      {matrixQuery.isLoading ? <Loading label={`Reading editor configs on ${host.label}…`} /> : null}
       {healthQuery.error ? (
         <ErrorText>
           {healthQuery.data
@@ -1578,13 +1632,21 @@ function McpBody({ layout, host }: PluginSurfaceProps) {
             : `Could not read the health check: ${errorText(healthQuery.error)}`}
         </ErrorText>
       ) : null}
-      {!matrixQuery.isLoading && shown.length === 0 ? (
+      {ready && shown.length === 0 ? (
         <Card>
-          <EmptyState
-            title="Nothing here"
-            body={servers.length === 0 ? "No MCP server is defined in any editor yet." : "No server matches this search and filter."}
-            action={servers.length === 0 ? <Button label="Add or import a server" variant="primary" onPress={() => go("transfer")} /> : undefined}
-          />
+          {servers.length === 0 ? (
+            <EmptyState
+              title="No servers yet"
+              body={`None of the ${plural(destinations.length, "editor config")} on ${host.label} defines an MCP server.`}
+              action={<Button label="Add or import a server" variant="primary" onPress={() => go("transfer")} />}
+            />
+          ) : (
+            <EmptyState
+              title="No server matches"
+              body={noMatchLine(servers.length, search, filter)}
+              action={<Button label="Show all servers" onPress={() => { setSearch(""); setFilter("all"); }} />}
+            />
+          )}
         </Card>
       ) : null}
       {[...shown]
@@ -1646,7 +1708,10 @@ function McpBody({ layout, host }: PluginSurfaceProps) {
                   />
                 ) : null}
               </View>
-              {removePanel(entry)}
+              {/* Quiet on the list: three red buttons on every card drowned out everything else. The server's own page shows them open. */}
+              <Disclosure title="Remove…" open={armedRemove?.server === entry.name || removeResult?.server === entry.name}>
+                {removePanel(entry)}
+              </Disclosure>
             </Card>
           );
         })}
@@ -1922,8 +1987,6 @@ function McpBody({ layout, host }: PluginSurfaceProps) {
   const serversSection = server ? serverPane : (
     <View style={{ gap: t.space.lg }}>
       <Toolbar
-        title="Servers"
-        subtitle="One card per server: where it is defined, its health, its tools, and who is signed in. Open a server to edit a definition."
         actions={
           <>
             <Button label="Add server" variant="primary" onPress={() => go("transfer", { mode: "add" })} />
@@ -1946,14 +2009,15 @@ function McpBody({ layout, host }: PluginSurfaceProps) {
 
   const projectsSection = (
     <View style={{ gap: t.space.lg }}>
-      <Intro
-        eyebrow="Projects"
-        title="Servers a project brings with it."
-        description="A .mcp.json at a project root defines servers for that workspace only. They are read here; sign-in happens from the workspace itself."
-      />
       {authQuery.isLoading ? <Loading label="Reading projects…" /> : null}
+      {authQuery.error ? <ErrorText>{authQuery.data ? `Could not refresh projects (${errorText(authQuery.error)}). Showing the earlier read.` : `Could not read projects: ${errorText(authQuery.error)}`}</ErrorText> : null}
       {authQuery.data && projectGroups.length === 0 ? (
-        <Notice tone="neutral">No trusted project on this host has a .mcp.json yet. Add one at a project root and it appears here after the next refresh.</Notice>
+        <Card>
+          <EmptyState
+            title="No project brings its own servers"
+            body={`No trusted project on ${host.label} has a .mcp.json at its root yet. Add one and it appears here after the next refresh.`}
+          />
+        </Card>
       ) : null}
       {projectGroups.length > 0 ? (
         <Card padded={false}>
@@ -2159,11 +2223,6 @@ function McpBody({ layout, host }: PluginSurfaceProps) {
 
   const transferSection = (
     <View style={{ gap: t.space.lg }}>
-      <Intro
-        eyebrow="Import & Export"
-        title="Bring servers in, keep a copy out."
-        description="Add one server by hand, paste a whole block of JSON, or write every definition to a backup file on this host."
-      />
       <Segmented
         value={mode}
         onChange={setMode}
@@ -2203,11 +2262,6 @@ function McpBody({ layout, host }: PluginSurfaceProps) {
 
   const guideSection = (
     <View style={{ gap: t.space.lg }}>
-      <Intro
-        eyebrow="Guide & Setup"
-        title="How MCP management works."
-        description="Four steps take a server from a README to every editor and every account on this host."
-      />
       <Grid min={260}>
         {GUIDE_STEPS.map((step, index) => (
           <Card key={step.title}>
@@ -2254,14 +2308,19 @@ function McpBody({ layout, host }: PluginSurfaceProps) {
   const pad = t.compact ? 16 : 20;
   return (
     <View style={{ flex: 1, backgroundColor: t.color.surface0 }}>
-      <View style={{ padding: pad, paddingBottom: t.space.md, gap: t.space.md, width: "100%", maxWidth: t.maxWidth, alignSelf: "center" }}>
-        <Header title="MCP" caption={`Selected host: ${host.label}`} pill={<StatusPill status={headerPill.status} label={headerPill.label} />} />
-        <Choice<SectionId> items={SECTIONS} selected={section} onChange={(next) => go(next, next === "servers" ? { server: null } : {})} label="MCP sections" />
+      {/* Padded the same way as Screen below, so the header, the tab bar and the content share one left edge. */}
+      <View style={{ paddingHorizontal: pad, paddingTop: pad }}>
+        <View style={{ width: "100%", maxWidth: t.maxWidth, alignSelf: "center", gap: t.space.md }}>
+          <Header title="MCP" caption={`Selected host: ${host.label}`} pill={<StatusPill status={headerPill.status} label={headerPill.label} />} />
+          <TabBar active={section} onSelect={(next) => go(next, next === "servers" ? { server: null } : {})} />
+        </View>
       </View>
-      <Screen t={t} paddingTop={4}>
+      <Screen t={t} paddingTop={t.space.lg}>
+        {section === "servers" && server ? null : <SectionHeading section={section} />}
         {matrixStale ? (
           <StaleNote what="the editor configs" at={readAt(matrixQuery.dataUpdatedAt)} reason={errorText(matrixQuery.error)} onRetry={refreshAll} />
-        ) : matrixQuery.isError ? (
+        ) : matrixQuery.isError && section !== "overview" ? (
+          // On Overview the next-step card already says this, with its own Retry.
           <Notice tone="error">
             <View style={{ gap: t.space.sm }}>
               <Text style={t.text.body}>{errorText(matrixQuery.error)}</Text>

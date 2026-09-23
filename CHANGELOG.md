@@ -1,5 +1,39 @@
 # Changelog
 
+## 0.9.0 — 2026-09-23
+
+The MCP page gets AI Router's navigation: one row of tabs with icons, a line under it saying what the tab is for, and an Overview that answers "is everything OK, and what do I do next" before anything else.
+
+### Navigation
+- The five section tiles are now an underline tab bar (`client/navigation.tsx`): Overview · Servers · Projects · Import & Export · Guide & Setup, each with a Lucide icon drawn by the app. On a narrow screen every tab shows its icon and the active one its label too, so nothing is hidden; an app that hands plugins no icons gets the labels in a sideways-scrolling row instead. Same pattern and code shape as AI Router's tabs.
+- One line under the bar says what each section is for; it replaces the big per-section headlines ("Every MCP server, in every editor.", "Bring servers in, keep a copy out." …). The Guide's line now says five steps; it said four above five cards.
+- The header, the tab bar and the content share one left edge (the header sat 20 px to the right of everything under it).
+- Unchanged: every `go()` deep link, a panel opening the page on one server (`openMcp` / `takePendingServer`), the Guide's buttons that land on Servers with a filter, and pressing Servers to get back to the list from a server's page.
+
+### Overview
+- First card: the next step, with its one primary button. Under it, one line each for Health, Editors, Sign-in, Tools and Projects: a status pill, which servers it is about, and a link to the filtered list ("1 down · supabase · Show issues →"). These replace the five number tiles; every number is still there.
+- The header pill and the next step now come from one decision table (`shared/overview.ts`) and always name the same problem, most urgent first: a server that is down or not installed, then sign-in, then gaps, then warnings. Before, the pill said "1 server down" while the card below asked to "Apply 3 servers to the editors missing them". A server with only a warning used to leave the pill at "All servers healthy"; it now reads "1 warning". Sign-in counts the same servers as the Servers tab's Need sign-in filter.
+- Needs attention: one row per server with every reason it is listed (a server both down and holding a token in clear text was listed twice).
+- When the host cannot be read, the error sits in the next-step card with its Retry instead of a second Retry box above it; Browse servers and the extra Refresh are left out when they would do nothing.
+
+### Check out AI Router
+- A small card at the bottom of Overview: "Check out AI Router", one line on what it does, **View plugin** (opens https://github.com/itsjustanks/paseo-plugin-ai-router the way sign-in links open; if no browser opens, the address is copied and said in a toast) and **Copy install source** (`git:https://github.com/itsjustanks/paseo-plugin-ai-router.git:apps/paseo`, with the usual no-clipboard toast). AI Router shows the same card pointing here.
+- When this daemon already has AI Router, an **Installed** badge replaces the copy button. The host checks Paseo's own install records (`server/siblings.ts`): `$PASEO_HOME/plugins/sources.json` for git and npm installs, and `plugins` in `$PASEO_HOME/config.json`, the only record of a directory install. Both go through the stat-keyed file cache, so a check is two `stat`s, and the app asks once per session.
+- **Hide** removes it on that host, stored with the plugin's settings (`$PASEO_HOME/plugin-settings/paseo-mcp/promo.json`, new `promoSettings`). There is no Show-again button; deleting that file brings it back.
+
+### Also fixed
+- Arming a removal on one server card armed it on every card: six "Remove … from Claude?" confirmations appeared at once. The armed removal and its result now belong to one server. On the list, the three red remove buttons sit behind a quiet **Remove…** disclosure; a server's own page still shows them open.
+- A list inside a card (editors, accounts, import targets, projects) had a 12 px gap between rows, which showed as dark bands between selected rows; rows now sit flush with their dividers.
+- Projects says so when the project list cannot be read, instead of showing nothing. Empty lists say what was checked: "Checked 6 servers: none has "jam" in its name and needs sign-in", with a button to show all.
+- Tabs report their selected state to the web build (`aria-selected`).
+- Removed the now-unused `Choice`, `Intro` and `StatCard` components.
+
+### Contracts
+Additive only: new RPC `paseo-mcp.siblings` (`{ aiRouter: { installed } }`) and host settings `promo` (`hideAiRouter`, default off). No existing RPC changed shape.
+
+### Tests
+114 tests (was 102): the verdict and next-step table (`tests/overview.test.ts`), the installed check against both records, broken files and changes on disk, and the Hide setting (`tests/siblings.test.ts`). The no-spawn test also calls the new RPC. The UI preview (`npm run preview:ui`) answers the new RPC and takes `?ai-router` (installed), `?promo-hidden` and `?no-icons` (label fallback).
+
 ## 0.8.0 — 2026-09-23
 
 The plugin no longer chugs. Opening an MCP panel used to start `codex mcp list` once per Codex account, per panel, and wait for each one; now nothing waits on a process.
