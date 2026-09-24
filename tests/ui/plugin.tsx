@@ -5,6 +5,8 @@ import { buildPaseoToolsPatch, paseoToolProviders, readDaemonToolsConfig, resolv
 import { toolSearch } from "../../shared/tool-search";
 import { curatedCard, planInstall, registryCard, teamCard, budgetImpact, type CatalogCard } from "../../shared/catalog";
 import { CURATED_CATALOG } from "../../shared/catalog-curated";
+import { GALLERY_META, libraryCard, mergeGallery, parseLibrary } from "../../shared/library";
+import { DEFAULT_LIBRARIES } from "../../shared/library-source";
 export function defineRpc<T>(contract: T) { return contract; }
 export function defineSettings<T>(definition: T) { return definition; }
 const params = new URLSearchParams(location.search);
@@ -156,13 +158,36 @@ const teamEntries = [
   { id: "ikit-n8n", name: "Team n8n", publisher: "InvestorKit", description: "Our workflows as tools.", category: "automation", transport: "http", url: "https://n8n.example.ondigitalocean.app/mcp/team", headers: { Authorization: "Bearer {N8N_TOKEN}" }, inputs: [{ id: "N8N_TOKEN", label: "n8n token", secret: true, required: true }], auth: "header", docs: "", verifiedAt: "2026-09-24" },
   { id: "ikit-metabase", name: "Metabase", publisher: "InvestorKit", description: "Questions and dashboards from our warehouse.", category: "data", transport: "http", url: "https://data.example.app/mcp", headers: { "x-api-key": "{METABASE_KEY}" }, inputs: [{ id: "METABASE_KEY", label: "Metabase key", secret: true, required: true }], auth: "header", docs: "", verifiedAt: "2026-09-24" },
 ] as any[];
+// ?gallery: the default library answers with three servers (Notion replaces its
+// recommended card, a token server, a pinned npm package); without it the
+// library answers 404, as it does until itsjustanks/mcp-gallery is published.
+// ?registry turns the MCP Registry library on.
+const galleryDoc = {
+  servers: [
+    { server: { name: "com.notion/mcp", description: "Pages, databases and comments in your Notion workspace.", version: "1.0.0", remotes: [{ type: "streamable-http", url: "https://mcp.notion.com/mcp" }] }, _meta: { [GALLERY_META]: { id: "notion", displayName: "Notion", category: "productivity", auth: "oauth", publisher: "Notion", iconUrl: "https://www.notion.so/images/favicon.ico", docsUrl: "https://developers.notion.com/docs/get-started-with-mcp", verifiedAt: "2026-09-24" } } },
+    { server: { name: "com.acme/mcp", description: "Acme orders and invoices.", version: "2.1.0", remotes: [{ type: "streamable-http", url: "https://mcp.acme.example/mcp", headers: [{ name: "Authorization", value: "Bearer {ACME_TOKEN}", isRequired: true, isSecret: true, variables: { ACME_TOKEN: { description: "Acme API token", isRequired: true, isSecret: true } } }] }] }, _meta: { [GALLERY_META]: { displayName: "Acme", category: "payments", auth: "token", publisher: "Acme" } } },
+    { server: { name: "io.github.microsoft/playwright-mcp", description: "Drive a browser: open pages, click, type and read.", version: "0.0.41", packages: [{ registryType: "npm", identifier: "@playwright/mcp", version: "0.0.41", transport: { type: "stdio" } }] }, _meta: { [GALLERY_META]: { id: "playwright-pinned", displayName: "Playwright (pinned)", category: "developer", auth: "none", publisher: "Microsoft" } } },
+    { server: { name: "com.leaky/mcp", description: "Refused: a literal key in a header.", version: "1.0.0", remotes: [{ type: "streamable-http", url: "https://mcp.leaky.example/mcp", headers: [{ name: "Authorization", value: "Bearer sk_" + "live_51Habcdefghijklmnopqrstu" }] }] } },
+  ],
+  metadata: { count: 4 },
+};
+const galleryParse = parseLibrary(JSON.stringify(galleryDoc));
 const catalogCards = (query: string): CatalogCard[] => {
   const known = new Map(CURATED_CATALOG.filter((e) => e.url).map((e) => [e.url!.replace(/\/+$/, "").toLowerCase(), e.name]));
-  const cards = CURATED_CATALOG.map(curatedCard);
-  if (params.has("team")) cards.push(...teamEntries.map((e) => teamCard(e, "raw.githubusercontent.com/…/mcp-catalogue.json")));
+  const libraries: CatalogCard[][] = [];
+  if (params.has("gallery")) libraries.push(galleryParse.items.map((item) => libraryCard(item, { id: "mcp-gallery", name: "MCP Gallery", label: "raw.githubusercontent.com…/v0.1/servers.json" })));
+  if (params.has("team")) libraries.push(teamEntries.map((e) => ({ ...teamCard(e, "raw.githubusercontent.com/…/mcp-catalogue.json"), library: { id: "team", name: "Team" } })));
   const q = query.trim().toLowerCase();
-  if (q.length >= 2) cards.push(...Object.entries(registryFixtures).filter(([k]) => k.includes(q) || q.includes(k)).flatMap(([, list]) => list.map((server) => registryCard(server, known))));
-  return cards;
+  const registry = params.has("registry") && q.length >= 2 ? Object.entries(registryFixtures).filter(([k]) => k.includes(q) || q.includes(k)).flatMap(([, list]) => list.map((server) => ({ ...registryCard(server, known), library: { id: "mcp-registry", name: "MCP Registry" } }))) : [];
+  return mergeGallery(CURATED_CATALOG.map(curatedCard), libraries, registry);
+};
+const libraryStates = (query: string) => {
+  const searching = params.has("registry") && query.trim().length >= 2;
+  return [
+    { id: "mcp-gallery", name: "MCP Gallery", source: DEFAULT_LIBRARIES[0]!.source, kind: "json", enabled: true, headerName: "", state: params.has("gallery") ? "ready" : "error", count: params.has("gallery") ? galleryParse.items.length : 0, refused: params.has("gallery") ? galleryParse.refused : [], fetchedAt: params.has("gallery") ? checkedAt : null, note: params.has("gallery") ? "" : "Could not read the MCP Gallery library: answered HTTP 404: nothing is published at that address (yet). The recommended servers shipped with the plugin are shown instead." },
+    { id: "mcp-registry", name: "MCP Registry", source: "https://registry.modelcontextprotocol.io", kind: "registry", enabled: params.has("registry"), headerName: "", state: !params.has("registry") ? "off" : searching ? "ready" : "idle", count: searching ? 4 : 0, refused: [], fetchedAt: searching ? checkedAt : null, note: "" },
+    ...(params.has("team") ? [{ id: "team", name: "Team", source: "https://raw.githubusercontent.com/you/devstack/main/mcp-catalogue.json", kind: "json", enabled: true, headerName: "Authorization", state: "ready", count: 2, refused: [{ id: "ikit-attio", reason: "header Authorization holds what looks like a literal key; use a {PLACEHOLDER} the user fills in" }], fetchedAt: checkedAt, note: "" }] : []),
+  ];
 };
 const catalogProjects = [
   { name: "data-glue", path: `${HOME}/projects/data-glue`, servers: 2 },
@@ -170,7 +195,7 @@ const catalogProjects = [
 ];
 const catalogPlan = (input: any) => {
   const card = catalogCards("supabase jira").concat(catalogCards("jira")).find((c) => c.key === input.key) ?? catalogCards("").find((c) => c.key === input.key)!;
-  const plan = planInstall(card.entry, input.scope, input.values ?? {}, card.shelf === "recommended" ? "curated" : card.shelf);
+  const plan = planInstall(card.entry, input.scope, input.values ?? {}, card.shelf === "recommended" ? "curated" : card.shelf === "registry" ? "registry" : "team");
   const taken = input.scope === "user" ? servers.filter((s) => input.targets.some((t: string) => s.presentIn.includes(t))).map((s) => s.name) : ["supabase", "jam"];
   const clash = taken.includes(input.name) ? { files: input.scope === "user" ? input.targets.map((t: string) => destinations.find((d) => d.id === t)?.label ?? t) : [`${input.projectPath}/.mcp.json`], suggestion: `${input.name}-2` } : null;
   const previews = input.scope === "user"
@@ -273,7 +298,8 @@ async function call(contract: any, input: any) {
       // ?added: Notion reads as already added (as ikit-notion) in one of the fixture editors and data-glue.
       cards: catalogCards(input.query ?? "").map((card) => (params.has("added") && card.key === "recommended:notion" ? { ...card, added: { label: `in 1 of ${destinations.length} editors and data-glue`, name: "ikit-notion", editors: [destinations[0]?.id ?? ""], projects: [catalogProjects[0]?.path ?? ""] } } : card)),
       team: params.has("team") ? { source: "https://raw.githubusercontent.com/you/devstack/main/mcp-catalogue.json", state: "ready", count: 2, refused: [{ id: "ikit-attio", reason: "header Authorization holds what looks like a literal key; use a {PLACEHOLDER} the user fills in" }], fetchedAt: checkedAt, note: "" } : { source: "", state: "off", count: 0, refused: [], fetchedAt: null, note: "" },
-      registry: (input.query ?? "").trim().length >= 2 ? { query: input.query.trim(), state: "ready", fetchedAt: checkedAt, note: "", count: 4 } : { query: "", state: "idle", fetchedAt: null, note: "", count: 0 },
+      registry: params.has("registry") && (input.query ?? "").trim().length >= 2 ? { query: input.query.trim(), state: "ready", fetchedAt: checkedAt, note: "", count: 4 } : { query: "", state: "idle", fetchedAt: null, note: "", count: 0 },
+      libraries: libraryStates(input.query ?? ""),
       projects: catalogProjects,
     };
     case "catalog-plan": { const { card: _c, plan: _p, ...out } = catalogPlan(input); return out; }
@@ -294,7 +320,11 @@ async function call(contract: any, input: any) {
 export function useRpc(contract: any) { return useCallback((input: unknown) => call(contract, input), [contract]); }
 export function useWorkspace<T>(_id: string, select: (workspace: { name: string; directory: string }) => T): T { return select({ name: "data-glue", directory: `${HOME}/projects/data-glue` }); }
 export function useAgent<T>(_id: string, select: (agent: { provider: string; model: string | null }) => T): T { return select({ provider: params.get("provider") ?? "codex", model: "gpt-5-codex" }); }
-const settingsValues: Record<string, unknown> = { injectWorkspaceServers: !params.has("inject-off"), providers: ["codex"], skipInlineCredentialServers: true, backgroundChecks: true, intervalMinutes: 10, showComposerPill: true, hideAiRouter: params.has("promo-hidden"), teamSource: params.has("team") ? "https://raw.githubusercontent.com/you/devstack/main/mcp-catalogue.json" : "", teamHeaderName: params.has("team") ? "Authorization" : "" };
+const settingsValues: Record<string, unknown> = { injectWorkspaceServers: !params.has("inject-off"), providers: ["codex"], skipInlineCredentialServers: true, backgroundChecks: true, intervalMinutes: 10, showComposerPill: true, hideAiRouter: params.has("promo-hidden"), libraries: [
+  { ...DEFAULT_LIBRARIES[0]! },
+  { ...DEFAULT_LIBRARIES[1]!, enabled: params.has("registry") },
+  ...(params.has("team") ? [{ id: "team", name: "Team", source: "https://raw.githubusercontent.com/you/devstack/main/mcp-catalogue.json", format: "json", enabled: true, headerName: "Authorization" }] : []),
+] };
 let teamAuthSet = params.has("team");
 export function useSettings(_definition: unknown) {
   return { status: "ready" as const, values: settingsValues, revision: "fixture", saving: false, saveError: null, async save(values: Record<string, unknown>) { Object.assign(settingsValues, values); return true; }, async reset() { return true; }, async reload() {} };

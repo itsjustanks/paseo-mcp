@@ -1,6 +1,7 @@
 import { defineRpc, defineSettings } from "@getpaseo/plugin";
 import { z } from "zod";
 import { BUDGET_ATTENTION, BUDGET_PROBLEM, budgetTier } from "./budget";
+import { DEFAULT_LIBRARIES, LibrariesSchema, migrateCatalogValues } from "./library-source";
 import { sha256Hex } from "./sha256";
 
 /**
@@ -12,6 +13,10 @@ import { sha256Hex } from "./sha256";
  *   - Team: a file or URL the user points the plugin at, same entry shape.
  *   - Registry: a search of the official MCP Registry. Official only when
  *     every address is one the Recommended shelf checked; Community otherwise.
+ *
+ * 0.13.0 adds libraries (shared/library.ts): catalogues the gallery subscribes
+ * to by address or file. The team catalogue is now one of them, and a
+ * registry (the official one included, off by default) is another kind.
  *
  * Everything in this file is pure so it can be unit-tested; the server fetches
  * and writes, the client renders. No entry ever carries a literal secret:
@@ -93,18 +98,20 @@ export const CatalogEntrySchema = z.object({
   auth: CatalogAuthSchema,
   docs: z.string().max(2048).default(""),
   verifiedAt: z.string().max(40).default(""),
+  /** An https image shown on the card; never fetched by the host. */
+  iconUrl: z.string().max(2048).optional(),
 });
 export type CatalogEntry = z.output<typeof CatalogEntrySchema>;
 
-export type Shelf = "recommended" | "team" | "registry";
-export type Trust = "official" | "team" | "community";
+export type Shelf = "recommended" | "team" | "library" | "registry";
+export type Trust = "official" | "team" | "library" | "community";
 
 export const CatalogCardSchema = z.object({
-  /** `<shelf>:<id>`, or `registry:<registry name>`: what the install RPCs take. */
+  /** `<shelf>:<id>`, `library:<library id>:<server name>`, or `registry:<registry name>`: what the install RPCs take. */
   key: z.string(),
-  shelf: z.enum(["recommended", "team", "registry"]),
+  shelf: z.enum(["recommended", "team", "library", "registry"]),
   entry: CatalogEntrySchema,
-  trust: z.enum(["official", "team", "community"]),
+  trust: z.enum(["official", "team", "library", "community"]),
   /** Why the badge says what it says, in a sentence. */
   trustNote: z.string(),
   /** A plain warning for community entries; "" otherwise. */
@@ -113,6 +120,8 @@ export const CatalogCardSchema = z.object({
   blockedReason: z.string(),
   version: z.string().optional(),
   registryName: z.string().optional(),
+  /** The library the card came from (team, library and registry cards). */
+  library: z.object({ id: z.string(), name: z.string() }).optional(),
   /** Where this card's endpoint is already defined (see addedFor); absent when nowhere. */
   added: z
     .object({
@@ -485,12 +494,24 @@ export function validateEntry(entry: CatalogEntry, origin: EntryOrigin): string[
     if (!docs || docs.protocol !== "https:") issues.push("docs must be an https link");
     if (hasEnvReference(entry.docs)) issues.push("docs holds a ${…} reference");
   }
+  if (entry.iconUrl !== undefined && !httpsImage(entry.iconUrl)) issues.push("iconUrl must be an https link");
   if (origin === "curated") {
     if (!entry.docs) issues.push("a recommended entry must cite the vendor's docs");
     if (!/^\d{4}-\d{2}-\d{2}$/.test(entry.verifiedAt)) issues.push("a recommended entry needs verifiedAt as YYYY-MM-DD");
     if (!entry.publisher) issues.push("a recommended entry needs a publisher");
   }
   return [...new Set(issues)];
+}
+
+/** An https address an image may be shown from: parses, https, no user name, no control character. */
+export function httpsImage(link: string): boolean {
+  if (link.length > 2048 || hasUnwritableChar(link)) return false;
+  try {
+    const url = new URL(link);
+    return url.protocol === "https:" && !url.username && !url.password;
+  } catch {
+    return false;
+  }
 }
 
 // ------------------------------------------------------------ team catalogue
@@ -697,17 +718,17 @@ export function latestRegistryServers(body: unknown): RegistryServer[] {
   return [...byName.values()].map((entry) => entry.server);
 }
 
-function inputIdFrom(raw: string): string {
+export function inputIdFrom(raw: string): string {
   const cleaned = raw.replace(/[^A-Za-z0-9_]/g, "_").replace(/^[^A-Za-z_]+/, "");
   return (cleaned || "VALUE").slice(0, 64);
 }
 
-function idFromRegistryName(name: string): string {
+export function idFromRegistryName(name: string): string {
   const last = name.split("/").pop() ?? name;
   return (last.replace(/[^A-Za-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "") || "server").slice(0, 64);
 }
 
-function titleFromId(id: string): string {
+export function titleFromId(id: string): string {
   return id.replace(/[-_]+/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
@@ -719,7 +740,7 @@ const URL_MAX = 2048;
 const ARG_MAX = 1024;
 
 /** An https link no longer than the schema allows, or "". */
-function linkOrEmpty(link: string | undefined): string {
+export function linkOrEmpty(link: string | undefined): string {
   return typeof link === "string" && link.startsWith("https://") && link.length <= URL_MAX && !hasUnwritableChar(link) ? link : "";
 }
 
@@ -892,18 +913,23 @@ export function searchSummary(input: {
   query: string;
   recommended: number;
   team: number;
+  /** Servers from libraries other than the team one (0.13.0). */
+  library?: number;
   registrySearched: boolean;
   shown: CatalogCard[];
 }): string {
+  const libraryTotal = input.library ?? 0;
   const places: string[] = [];
   if (input.registrySearched) places.push("the registry");
   places.push(`${input.recommended} recommended server${input.recommended === 1 ? "" : "s"}`);
+  if (libraryTotal > 0) places.push(`${libraryTotal} library server${libraryTotal === 1 ? "" : "s"}`);
   if (input.team > 0) places.push(`${input.team} team server${input.team === 1 ? "" : "s"}`);
   const joined = places.length > 1 ? `${places.slice(0, -1).join(", ")} and ${places[places.length - 1]}` : places[0];
   const official = input.shown.filter((card) => card.trust === "official").length;
   const team = input.shown.filter((card) => card.trust === "team").length;
+  const library = input.shown.filter((card) => card.trust === "library").length;
   const community = input.shown.filter((card) => card.trust === "community").length;
-  const counts = [`${official} official`, ...(input.team > 0 ? [`${team} team`] : []), `${community} community`].join(", ");
+  const counts = [`${official} official`, ...(libraryTotal > 0 ? [`${library} library`] : []), ...(input.team > 0 ? [`${team} team`] : []), `${community} community`].join(", ");
   return input.query.trim() ? `Searched ${joined} for '${input.query.trim()}': ${counts}.` : `Showing ${joined}: ${counts}.`;
 }
 
@@ -1368,23 +1394,27 @@ export function budgetImpact(scope: InstallScope, after: number, where: string):
 // ---------------------------------------------------------------- settings
 
 /**
- * Host-scoped: where the team catalogue lives. Stored by Paseo under
+ * Host-scoped: the libraries the gallery reads, in order (the first to list a
+ * server name wins). Stored by Paseo under
  * `$PASEO_HOME/plugin-settings/paseo-mcp/catalog.json`, and sent by Paseo to
- * every client that reads it, so it holds no secret. The header's value is
- * write-only, kept by the host in `team-auth.json` beside it (0600), bound to
- * the origin of the team address it was set for, and set through
- * mcpCatalogTeamAuth; an old document's `teamHeaderValue` is moved there on
- * first read (bound to that document's address) and cleared here. Version 1 still: a key the schema no
- * longer names is dropped when Paseo parses the document.
+ * every client that reads it, so it holds no secret. A library's header value
+ * is write-only, kept by the host in `team-auth.json` beside it (0600), bound
+ * to the origin of the library address it was set for, and set through
+ * mcpCatalogTeamAuth.
+ *
+ * Version 2 (0.13.0). Version 1 held one team catalogue (`teamSource`,
+ * `teamHeaderName`); migrateCatalogValues turns it into the default
+ * libraries plus a library called Team. Paseo runs the migration when it
+ * reads the document; the host's own reader runs it too (server/settings.ts).
  */
 export const catalogSettings = defineSettings({
   id: "catalog",
   scope: "host",
-  version: 1,
+  version: 2,
   schema: z.object({
-    teamSource: z.string().default("").describe("A team catalogue: an https URL, or a file path on this host"),
-    teamHeaderName: z.string().default("").describe("Optional header for a private URL, e.g. Authorization"),
+    libraries: LibrariesSchema.default(DEFAULT_LIBRARIES).describe("Libraries of MCP servers the gallery reads, in order"),
   }),
+  migrate: migrateCatalogValues,
 });
 export type CatalogSettings = z.infer<typeof catalogSettings.schema>;
 export const CATALOG_DEFAULTS: CatalogSettings = catalogSettings.schema.parse({});
@@ -1402,6 +1432,23 @@ export const TeamStateSchema = z.object({
   note: z.string(),
 });
 
+/** One library as the gallery shows it: where it lives (without any key), whether it read, and what it holds. */
+export const LibraryStateSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  source: z.string(),
+  kind: z.enum(["json", "registry", "file", "invalid"]),
+  enabled: z.boolean(),
+  /** `idle`: a registry waiting for a search of two letters or more. */
+  state: z.enum(["off", "loading", "ready", "error", "idle", "searching"]),
+  count: z.number(),
+  refused: z.array(z.object({ id: z.string(), reason: z.string() })),
+  fetchedAt: z.string().nullable(),
+  note: z.string(),
+  headerName: z.string(),
+});
+export type LibraryState = z.output<typeof LibraryStateSchema>;
+
 export const RegistryStateSchema = z.object({
   query: z.string(),
   state: z.enum(["idle", "searching", "ready", "error"]),
@@ -1417,11 +1464,20 @@ export const RegistryStateSchema = z.object({
  */
 export const mcpCatalog = defineRpc({
   name: "paseo-mcp.catalog",
-  input: z.object({ query: z.string().max(200).default(""), refresh: z.enum(["team", "registry", "both"]).optional() }),
+  input: z.object({
+    query: z.string().max(200).default(""),
+    /** `team` and `registry` as in 0.12.0; `libraries` reads every library file again, `all` everything. */
+    refresh: z.enum(["team", "registry", "both", "libraries", "all"]).optional(),
+    /** Read this one library again (its id). */
+    library: z.string().max(64).optional(),
+  }),
   output: z.object({
     cards: z.array(CatalogCardSchema),
+    /** The library called Team (0.12.0's team catalogue), "off" when there is none. */
     team: TeamStateSchema,
+    /** Every registry library's search, together. */
     registry: RegistryStateSchema,
+    libraries: z.array(LibraryStateSchema),
     projects: z.array(CatalogProjectSchema),
   }),
 });
@@ -1489,13 +1545,18 @@ export const mcpCatalogInstall = defineRpc({
 });
 
 /**
- * The team catalogue's header value, write-only: set it, clear it, or ask
- * whether one is set. The answer is only ever `{ set, origin }`, the site the
- * value is bound to (not secret); the value never leaves the host.
+ * A library's header value, write-only: set it, clear it, or ask whether one
+ * is set. The answer is only ever `{ set, origin }`, the site the value is
+ * bound to (not secret); the value never leaves the host. `library` defaults
+ * to the Team library, as in 0.12.0.
  */
 export const mcpCatalogTeamAuth = defineRpc({
   name: "paseo-mcp.catalog-team-auth",
-  input: z.object({ action: z.enum(["status", "set", "clear"]).default("status"), value: z.string().max(8192).default("") }),
+  input: z.object({
+    action: z.enum(["status", "set", "clear"]).default("status"),
+    value: z.string().max(8192).default(""),
+    library: z.string().max(64).default("team"),
+  }),
   output: z.object({ set: z.boolean(), origin: z.string() }),
 });
 

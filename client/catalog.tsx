@@ -1,22 +1,20 @@
 /** Add from catalogue: the gallery behind "Add server", its install sheet, and "Copy as catalogue entry". */
-import { useRpc, useSettings } from "@getpaseo/plugin/client";
+import { useRpc } from "@getpaseo/plugin/client";
 import { useToast } from "@getpaseo/plugin/client/react-native";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Linking, Pressable, Text, TextInput, View } from "react-native";
+import { Image, Linking, Pressable, Text, View } from "react-native";
 import {
   CATALOG_CATEGORIES,
   CATEGORY_LABELS,
   cardMatches,
-  catalogSettings,
   mcpCatalog,
   mcpCatalogEntry,
   mcpCatalogInstall,
   mcpCatalogPlan,
-  mcpCatalogTeamAuth,
   searchSummary,
   type CatalogCard,
-  type CatalogSettings,
+  type LibraryState,
 } from "../shared/catalog";
 import type { Destination } from "../shared/contracts";
 import { plainError } from "../shared/errors";
@@ -42,6 +40,7 @@ import {
   useTokens,
   type Status,
 } from "./ui";
+import { LibrariesPanel, SecretField } from "./libraries";
 
 type Project = { name: string; path: string; servers: number };
 
@@ -54,39 +53,6 @@ function useDebounced<T>(value: T, ms: number): T {
     return () => clearTimeout(timer);
   }, [value, ms]);
   return held;
-}
-
-/** A masked one-line field; the value never shows on screen. */
-function SecretField({ label, value, onChangeText, hint, placeholder }: { label: string; value: string; onChangeText: (value: string) => void; hint?: string; placeholder?: string }) {
-  const t = useTokens();
-  return (
-    <View style={{ gap: 4 }}>
-      <Text style={t.text.label}>{label}</Text>
-      <TextInput
-        value={value}
-        onChangeText={onChangeText}
-        secureTextEntry
-        placeholder={placeholder ?? "Paste it here"}
-        placeholderTextColor={t.color.placeholder}
-        accessibilityLabel={label}
-        autoCorrect={false}
-        autoCapitalize="none"
-        spellCheck={false}
-        style={{
-          borderWidth: 1,
-          borderColor: t.color.border,
-          borderRadius: t.radius.sm,
-          backgroundColor: t.color.surface0,
-          paddingVertical: t.compact ? 10 : 7,
-          paddingHorizontal: 10,
-          color: t.color.fg,
-          minHeight: t.control.min,
-          fontSize: t.compact ? 14 : 13,
-        }}
-      />
-      {hint ? <Text style={t.text.caption}>{hint}</Text> : null}
-    </View>
-  );
 }
 
 /** Category filter: one row of pressable pills, "All" first. */
@@ -123,6 +89,7 @@ function Pills({ options, value, onChange }: { options: Array<{ value: string; l
 const TRUST: Record<CatalogCard["trust"], { label: string; tone: Status }> = {
   official: { label: "Official", tone: "ok" },
   team: { label: "Team", tone: "busy" },
+  library: { label: "Library", tone: "neutral" },
   community: { label: "Community", tone: "attention" },
 };
 
@@ -139,9 +106,21 @@ function publisherLine(card: CatalogCard): string {
   return card.shelf === "registry" ? `published as ${card.entry.publisher}` : card.entry.publisher;
 }
 
-/** A registry server that only ships a package: shown with its repository, added by hand. */
+/** A server that only ships a package the plugin won't start in one click: shown with its docs, added by hand. */
 function byHandOnly(card: CatalogCard): boolean {
-  return card.shelf === "registry" && card.entry.transport === "stdio" && !card.installable;
+  return card.shelf !== "recommended" && card.entry.transport === "stdio" && !card.installable;
+}
+
+/** Where a card came from, for its source tag. */
+function sourceLabel(card: CatalogCard): string {
+  return card.library?.name ?? (card.shelf === "recommended" ? "Recommended" : card.shelf === "team" ? "Team" : "Registry");
+}
+
+/** The card's icon: an https image from its library, shown at 20 px. Nothing is shown when there is none or it fails to load. */
+function CardIcon({ url }: { url?: string }) {
+  const [failed, setFailed] = useState(false);
+  if (!url || failed || !/^https:\/\//i.test(url)) return null;
+  return <Image source={{ uri: url }} accessibilityIgnoresInvertColors style={{ width: 20, height: 20, borderRadius: 4 }} onError={() => setFailed(true)} />;
 }
 
 function ServerCard({ card, onAdd, onAddByHand }: { card: CatalogCard; onAdd: () => void; onAddByHand: (name: string) => void }) {
@@ -151,9 +130,12 @@ function ServerCard({ card, onAdd, onAddByHand }: { card: CatalogCard; onAdd: ()
   return (
     <Card>
       <View style={{ gap: 2 }}>
-        <Text numberOfLines={1} style={t.text.heading}>{card.entry.name}</Text>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: t.space.xs }}>
+          <CardIcon url={card.entry.iconUrl} />
+          <Text numberOfLines={1} style={[t.text.heading, { flexShrink: 1 }]}>{card.entry.name}</Text>
+        </View>
         <Text numberOfLines={1} style={t.text.caption}>{publisherLine(card)}{card.version ? ` · v${card.version}` : ""}</Text>
-        {card.shelf === "registry" && card.trust !== "official" ? <Text numberOfLines={2} style={t.text.caption}>{card.trustNote}</Text> : null}
+        {(card.shelf === "registry" || card.shelf === "library") && card.trust !== "official" ? <Text numberOfLines={2} style={t.text.caption}>{card.trustNote}</Text> : null}
       </View>
       <Text numberOfLines={2} style={[t.text.body, { color: t.color.muted, minHeight: t.compact ? 40 : 36 }]}>
         {card.entry.description || "No description."}
@@ -163,6 +145,7 @@ function ServerCard({ card, onAdd, onAddByHand }: { card: CatalogCard; onAdd: ()
         <Tag label={trust.label} tone={trust.tone} />
         <Tag label={card.entry.transport === "http" ? "Remote" : "Runs locally"} />
         <Tag label={authWord(card)} />
+        {sourceLabel(card) !== trust.label ? <Tag label={sourceLabel(card)} /> : null}
       </View>
       {card.added ? <Text numberOfLines={1} style={t.text.caption}>{`Added ${card.added.label}${card.added.name !== card.entry.id ? ` as ${card.added.name}` : ""}.`}</Text> : null}
       {card.warning ? <Text style={[t.text.caption, { color: t.color.warning }]}>{card.warning}</Text> : null}
@@ -173,83 +156,9 @@ function ServerCard({ card, onAdd, onAddByHand }: { card: CatalogCard; onAdd: ()
         ) : (
           <Button label={card.added ? "Add to more" : "Add"} variant="secondary" disabled={!card.installable} onPress={onAdd} />
         )}
-        {card.entry.docs ? <Button label={byHand ? "Repository" : "Docs"} variant="ghost" onPress={() => void Linking.openURL(card.entry.docs)} /> : null}
+        {card.entry.docs ? <Button label={byHand && card.shelf === "registry" ? "Repository" : "Docs"} variant="ghost" onPress={() => void Linking.openURL(card.entry.docs)} /> : null}
       </View>
     </Card>
-  );
-}
-
-// ------------------------------------------------------------ team settings
-
-function TeamSettings({ onSaved }: { onSaved: () => void }) {
-  const t = useTokens();
-  const settings = useSettings(catalogSettings);
-  const ready = settings.status === "ready" ? settings : null;
-  const [draft, setDraft] = useState<CatalogSettings | null>(null);
-  const values = draft ?? ready?.values ?? { teamSource: "", teamHeaderName: "" };
-  const set = (patch: Partial<CatalogSettings>) => setDraft({ ...values, ...patch });
-  if (settings.status === "loading") return <Loading label="Reading the team catalogue setting…" />;
-  if (!ready) return <ErrorText>{`Could not read the setting: ${"error" in settings ? settings.error : "unknown"}`}</ErrorText>;
-  return (
-    <View style={{ gap: t.space.sm }}>
-      <Text style={t.text.body}>
-        Point this at a JSON file your team keeps (a raw file in a private repo, or a path on this host). It uses the same entry shape as the recommended list. Entries holding a literal key are refused; use {"{PLACEHOLDER}"} inputs.
-      </Text>
-      <Field label="Catalogue address or file" value={values.teamSource} onChangeText={(teamSource) => set({ teamSource })} placeholder="https://raw.githubusercontent.com/you/devstack/main/mcp-catalogue.json" />
-      <Field label="Header name (private address only)" value={values.teamHeaderName} onChangeText={(teamHeaderName) => set({ teamHeaderName })} placeholder="Authorization" />
-      <View style={{ flexDirection: "row", gap: t.space.sm }}>
-        <Button
-          label="Save"
-          loading={settings.saving}
-          disabled={!draft}
-          onPress={() => {
-            void settings.save(values, ready.revision).then((ok) => {
-              if (ok) {
-                setDraft(null);
-                onSaved();
-              }
-            });
-          }}
-        />
-        {draft ? <Button label="Cancel" variant="ghost" onPress={() => setDraft(null)} /> : null}
-      </View>
-      {settings.saveError ? <ErrorText>{settings.saveError}</ErrorText> : null}
-      <TeamHeaderValue onSaved={onSaved} />
-    </View>
-  );
-}
-
-/** The header's value is write-only: the host keeps it in its own 0600 file and only says whether one is set. */
-function TeamHeaderValue({ onSaved }: { onSaved: () => void }) {
-  const t = useTokens();
-  const callTeamAuth = useRpc(mcpCatalogTeamAuth);
-  const [value, setValue] = useState("");
-  const status = useQuery({ queryKey: ["paseo-mcp", "catalog-team-auth"], queryFn: () => callTeamAuth({ action: "status", value: "" }), retry: 1 });
-  const change = useMutation({
-    mutationFn: (action: "set" | "clear") => callTeamAuth({ action, value: action === "set" ? value : "" }),
-    onSuccess: () => {
-      setValue("");
-      void status.refetch();
-      onSaved();
-    },
-  });
-  const isSet = status.data?.set === true;
-  const origin = status.data?.origin ?? "";
-  return (
-    <View style={{ gap: t.space.sm }}>
-      <SecretField
-        label="Header value"
-        value={value}
-        onChangeText={setValue}
-        placeholder={isSet ? `Saved for ${origin || "no site"}; type to replace` : "Bearer …"}
-        hint="Sent only to the site of the address saved above, never on a redirect; if the address moves to another site, the value is cleared. Kept on this host in a private file; it is never sent back to the app."
-      />
-      <View style={{ flexDirection: "row", gap: t.space.sm }}>
-        <Button label="Save value" loading={change.isPending && change.variables === "set"} disabled={!value.trim()} onPress={() => change.mutate("set")} />
-        {isSet ? <Button label="Clear value" variant="ghost" loading={change.isPending && change.variables === "clear"} onPress={() => change.mutate("clear")} /> : null}
-      </View>
-      {change.error ? <ErrorText>{plainError(change.error)}</ErrorText> : null}
-    </View>
   );
 }
 
@@ -274,36 +183,47 @@ export function CatalogGallery({
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState("all");
   const [picked, setPicked] = useState<CatalogCard | null>(null);
-  const refresh = useRef<"team" | "registry" | "both" | undefined>(undefined);
+  const refresh = useRef<{ refresh?: "team" | "registry" | "both" | "libraries" | "all"; library?: string }>({});
   const query = useDebounced(search.trim(), 400);
 
   const catalogQuery = useQuery({
     queryKey: ["paseo-mcp", "catalog", query],
     queryFn: () => {
       const once = refresh.current;
-      refresh.current = undefined;
-      return callCatalog({ query, refresh: once });
+      refresh.current = {};
+      return callCatalog({ query, ...once });
     },
-    // The host answers from memory and searches in the background; read again while it does.
-    refetchInterval: (state) => (state.state.data?.registry.state === "searching" || state.state.data?.team.state === "loading" ? 1500 : false),
+    // The host answers from memory and reads in the background; read again while it does.
+    refetchInterval: (state) => (state.state.data?.libraries.some((library) => library.state === "loading" || library.state === "searching") ? 1500 : false),
     retry: 1,
   });
   const data = catalogQuery.data;
   const cards = data?.cards ?? [];
   const shown = cards.filter((card) => (card.shelf === "registry" ? category === "all" || card.entry.category === category : cardMatches(card, query, category)));
-  const shelf = (name: CatalogCard["shelf"]) => shown.filter((card) => card.shelf === name);
-  const recommendedTotal = cards.filter((card) => card.shelf === "recommended").length;
-  const teamTotal = cards.filter((card) => card.shelf === "team").length;
+  const fromLibrary = (id: string) => shown.filter((card) => card.shelf !== "registry" && card.shelf !== "recommended" && card.library?.id === id);
+  const fromRegistry = (id: string) => shown.filter((card) => card.shelf === "registry" && card.library?.id === id);
+  const recommended = shown.filter((card) => card.shelf === "recommended");
+  const libraries = data?.libraries ?? [];
+  const documents = libraries.filter((library) => library.enabled && library.kind !== "registry");
+  const registries = libraries.filter((library) => library.enabled && library.kind === "registry");
   const categories = useMemo(() => {
     const used = new Set(cards.map((card) => card.entry.category));
     return [{ value: "all", label: "All" }, ...CATALOG_CATEGORIES.filter((entry) => used.has(entry)).map((entry) => ({ value: entry, label: CATEGORY_LABELS[entry] ?? entry }))];
   }, [cards]);
-  const summary = searchSummary({ query, recommended: recommendedTotal, team: teamTotal, registrySearched: Boolean(data && data.registry.state !== "idle"), shown });
+  const summary = searchSummary({
+    query,
+    recommended: cards.filter((card) => card.shelf === "recommended").length,
+    team: cards.filter((card) => card.shelf === "team").length,
+    library: cards.filter((card) => card.shelf === "library").length,
+    registrySearched: Boolean(data && data.registry.state !== "idle"),
+    shown,
+  });
 
-  const again = (which: "team" | "registry" | "both") => {
-    refresh.current = which;
+  const again = (next: { refresh?: "team" | "registry" | "both" | "libraries" | "all"; library?: string }) => {
+    refresh.current = next;
     void catalogQuery.refetch();
   };
+  const refreshing = catalogQuery.isFetching ? refresh.current.library ?? "" : "";
 
   if (picked) {
     return (
@@ -331,6 +251,15 @@ export function CatalogGallery({
     </Grid>
   );
 
+  const refusedList = (library: LibraryState) =>
+    library.refused.length > 0 ? (
+      <Disclosure title={`${library.refused.length} entr${library.refused.length === 1 ? "y" : "ies"} refused`}>
+        {library.refused.map((entry) => (
+          <Text key={entry.id} style={t.text.caption}>{`${entry.id}: ${entry.reason}`}</Text>
+        ))}
+      </Disclosure>
+    ) : null;
+
   return (
     <View style={{ gap: t.space.lg }}>
       <Toolbar
@@ -343,7 +272,7 @@ export function CatalogGallery({
           </>
         }
       />
-      <Field value={search} onChangeText={setSearch} placeholder="Search recommended, team and the MCP Registry (e.g. jira)" />
+      <Field value={search} onChangeText={setSearch} placeholder={registries.length > 0 ? "Search the gallery and registries (e.g. jira)" : "Search the gallery (e.g. jira)"} />
       <Pills options={categories} value={category} onChange={setCategory} />
 
       {catalogQuery.isLoading ? <Loading label="Reading the catalogue…" /> : null}
@@ -357,44 +286,42 @@ export function CatalogGallery({
         <Text style={t.text.caption}>{summary}</Text>
       ) : null}
 
-      {shelf("recommended").length > 0 ? (
+      {recommended.length > 0 ? (
         <Section title="Recommended">
-          <Text style={t.text.caption}>Official servers, each address checked against the vendor's own docs.</Text>
-          {grid(shelf("recommended"))}
+          <Text style={t.text.caption}>Official servers shipped with the plugin, each address checked against the vendor's own docs. A library's copy that differs in any way (address, headers, version, arguments) shows under that library instead.</Text>
+          {grid(recommended)}
         </Section>
       ) : null}
 
-      {data && data.team.state !== "off" ? (
-        <Section title="Team" trailing={<Button label="Refresh" variant="ghost" loading={data.team.state === "loading"} onPress={() => again("team")} />}>
-          {data.team.note ? <Notice tone="attention">{data.team.note}</Notice> : null}
-          {data.team.state === "loading" && teamTotal === 0 ? <Loading label="Reading the team catalogue…" /> : null}
-          {shelf("team").length > 0 ? grid(shelf("team")) : data.team.state === "ready" ? <Text style={t.text.caption}>{teamTotal === 0 ? "The team catalogue has no usable entries." : "No team entry matches."}</Text> : null}
-          {data.team.refused.length > 0 ? (
-            <Disclosure title={`${data.team.refused.length} entr${data.team.refused.length === 1 ? "y" : "ies"} refused`}>
-              {data.team.refused.map((entry) => (
-                <Text key={entry.id} style={t.text.caption}>{`${entry.id}: ${entry.reason}`}</Text>
-              ))}
-            </Disclosure>
-          ) : null}
-        </Section>
-      ) : null}
+      {documents.map((library) => {
+        const list = fromLibrary(library.id);
+        return (
+          <Section key={library.id} title={library.name} trailing={<Button label="Refresh" variant="ghost" loading={library.state === "loading"} onPress={() => again({ library: library.id })} />}>
+            {library.note ? <Notice tone="attention">{library.note}</Notice> : null}
+            {library.state === "loading" && library.count === 0 ? <Loading label={`Reading ${library.name}…`} /> : null}
+            {list.length > 0 ? grid(list) : library.state === "ready" ? <Text style={t.text.caption}>{library.count === 0 ? `${library.name} has no usable entries.` : `No ${library.name} entry matches, or each is shown above.`}</Text> : null}
+            {refusedList(library)}
+          </Section>
+        );
+      })}
 
-      {data && data.registry.state !== "idle" ? (
-        <Section title="MCP Registry" trailing={<Button label="Search again" variant="ghost" loading={data.registry.state === "searching"} onPress={() => again("registry")} />}>
-          <Text style={t.text.caption}>
-            Anyone can publish here. Official means every address is one a recommended server uses, checked against the vendor's docs. Everything else is Community: the registry checks that a publisher owns the domain or GitHub account it publishes as, not who runs the service.
-          </Text>
-          {data.registry.note ? <Notice tone="attention">{data.registry.note}</Notice> : null}
-          {data.registry.state === "searching" ? <Loading label={`Searching the registry for '${data.registry.query}'…`} /> : null}
-          {shelf("registry").length > 0 ? grid(shelf("registry")) : data.registry.state === "ready" ? <Text style={t.text.caption}>{`No registry server matches '${data.registry.query}' beyond the ones above.`}</Text> : null}
-        </Section>
-      ) : search.trim().length === 1 ? (
-        <Text style={t.text.caption}>Type two letters or more to search the MCP Registry too.</Text>
-      ) : null}
+      {registries.map((library) =>
+        library.state === "idle" ? null : (
+          <Section key={library.id} title={library.name} trailing={<Button label="Search again" variant="ghost" loading={library.state === "searching"} onPress={() => again({ library: library.id })} />}>
+            <Text style={t.text.caption}>
+              Anyone can publish to a registry. Official means every address is one a recommended server uses, checked against the vendor's docs. Everything else is Community: the registry checks that a publisher owns the domain or GitHub account it publishes as, not who runs the service.
+            </Text>
+            {library.note ? <Notice tone="attention">{library.note}</Notice> : null}
+            {library.state === "searching" ? <Loading label={`Searching ${library.name} for '${query}'…`} /> : null}
+            {fromRegistry(library.id).length > 0 ? grid(fromRegistry(library.id)) : library.state === "ready" ? <Text style={t.text.caption}>{`No ${library.name} server matches '${query}' beyond the ones above.`}</Text> : null}
+          </Section>
+        ),
+      )}
+      {registries.length > 0 && search.trim().length === 1 ? <Text style={t.text.caption}>{`Type two letters or more to search ${registries.map((library) => library.name).join(" and ")} too.`}</Text> : null}
 
       <Card>
-        <Disclosure title={data?.team.source ? "Team catalogue settings" : "Add a team catalogue"}>
-          <TeamSettings onSaved={() => again("team")} />
+        <Disclosure title={`Libraries (${libraries.filter((library) => library.enabled).length} of ${libraries.length} on)`}>
+          <LibrariesPanel states={libraries} refreshing={refreshing} onRefresh={(id) => again({ library: id })} onChanged={() => again({ refresh: "libraries" })} />
         </Disclosure>
       </Card>
     </View>

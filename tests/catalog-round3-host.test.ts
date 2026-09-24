@@ -35,6 +35,10 @@ setCatalogFetch(async (url, init) => {
   return new Response("[]", { status: 200 });
 });
 
+/** The last request to the team address (Team is read first, then the default libraries). */
+const lastTo = (prefix: string) => sent.filter((request) => request.url.startsWith(prefix)).at(-1);
+const TEAM_AT = "https://raw.githubusercontent.com/acme/";
+
 async function read() {
   await handleMcpCatalog({ query: "" }, context);
   await catalogSettled();
@@ -55,7 +59,7 @@ test("5: the team key goes only to the site it was set for; a moved address clea
   setTeam({ teamSource: "https://raw.githubusercontent.com/acme/private/main/catalog.json", teamHeaderName: "Authorization" });
   await handleMcpCatalogTeamAuth({ action: "set", value: KEY });
   await read();
-  assert.equal(sent.at(-1)?.authorization, KEY, "sent to the site it was set for");
+  assert.equal(lastTo(TEAM_AT)?.authorization, KEY, "sent to the site it was set for");
 
   // Any client that can edit the settings points the address at its own site.
   setTeam({ teamSource: "https://attacker.example/c.json", teamHeaderName: "Authorization" });
@@ -70,14 +74,14 @@ test("5: the team key goes only to the site it was set for; a moved address clea
   // Moving back does not bring it back: whoever moved it may not be whoever set it.
   setTeam({ teamSource: "https://raw.githubusercontent.com/acme/private/main/catalog.json", teamHeaderName: "Authorization" });
   await read();
-  assert.equal(sent.at(-1)?.authorization, null);
+  assert.equal(lastTo(TEAM_AT)?.authorization, null);
 
   // A key can only be set for an https address, and answers with its origin.
   setTeam({ teamSource: "~/team.json", teamHeaderName: "Authorization" });
   await assert.rejects(handleMcpCatalogTeamAuth({ action: "set", value: KEY }), /https team address first/);
   setTeam({ teamSource: "https://raw.githubusercontent.com/acme/private/main/catalog.json", teamHeaderName: "Authorization" });
   assert.deepEqual(await handleMcpCatalogTeamAuth({ action: "set", value: KEY }), { set: true, origin: "https://raw.githubusercontent.com" });
-  assert.equal(JSON.parse(readFileSync(store, "utf8")).origin, "https://raw.githubusercontent.com");
+  assert.equal(JSON.parse(readFileSync(store, "utf8")).keys.team.origin, "https://raw.githubusercontent.com");
   await handleMcpCatalogTeamAuth({ action: "clear" });
 });
 
@@ -87,8 +91,8 @@ test("5: a value moved from the old setting is bound to that setting's address; 
   rmSync(store, { force: true });
   setTeam({ teamSource: "https://team.example.com/catalogue.json", teamHeaderName: "Authorization", teamHeaderValue: "Bearer legacy_value_0123" });
   await read();
-  assert.equal(JSON.parse(readFileSync(store, "utf8")).origin, "https://team.example.com");
-  assert.equal(sent.at(-1)?.authorization, "Bearer legacy_value_0123");
+  assert.equal(JSON.parse(readFileSync(store, "utf8")).keys.team.origin, "https://team.example.com");
+  assert.equal(lastTo("https://team.example.com/")?.authorization, "Bearer legacy_value_0123");
 
   // A store an earlier build wrote, with no origin: never sent.
   resetCatalogCaches();

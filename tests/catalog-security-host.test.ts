@@ -65,6 +65,8 @@ test("6: an endless answer is cut off at the cap, not read until the timeout", {
   const began = Date.now();
   const team = await readTeam({ teamSource: "https://team.example.com/catalogue.json" });
   assert.match(team.team.note, /more than 1 MB/);
+  // 0.13.0: the registry is a library, off by default.
+  writeFileSync(settingsFile, JSON.stringify({ version: 2, values: { libraries: [{ id: "mcp-registry", name: "MCP Registry", source: "https://registry.modelcontextprotocol.io", format: "registry" }] } }));
   const registry = await handleMcpCatalog({ query: "endless" }, context);
   assert.equal(registry.registry.state, "searching");
   await catalogSettled();
@@ -128,8 +130,8 @@ test("7b: the team address comes back without its query or user name", async () 
 
 test("7c: the header value is write-only: moved out of settings, kept 0600, answered only as { set }", async () => {
   const seen: Array<string | null> = [];
-  setCatalogFetch(async (_url, init) => {
-    seen.push(new Headers(init?.headers).get("authorization"));
+  setCatalogFetch(async (url, init) => {
+    if (url.startsWith("https://team.example.com/")) seen.push(new Headers(init?.headers).get("authorization"));
     return new Response("[]", { status: 200 });
   });
   const VALUE = "Bearer github_pat_fixture_0123456789";
@@ -145,7 +147,7 @@ test("7c: the header value is write-only: moved out of settings, kept 0600, answ
   // Kept in the plugin's own file, 0600.
   const store = join(settingsDir, "team-auth.json");
   assert.equal(statSync(store).mode & 0o777, 0o600);
-  assert.equal(JSON.parse(readFileSync(store, "utf8")).teamHeaderValue, VALUE);
+  assert.equal(JSON.parse(readFileSync(store, "utf8")).keys.team.value, VALUE);
   // The settings schema no longer carries it, so Paseo never sends it to a client.
   const { catalogSettings } = await import("../shared/catalog");
   assert.ok(!("teamHeaderValue" in catalogSettings.schema.parse({ teamHeaderValue: "x" })));
@@ -175,7 +177,7 @@ test("a team address with a key in its query string is refused; the key belongs 
   ]) {
     const where = teamLocation(address);
     assert.equal(where.kind, "invalid", address);
-    assert.match((where as { reason: string }).reason, /team key field/, address);
+    assert.match((where as { reason: string }).reason, /key field/, address);
   }
   assert.equal(teamLocation("https://gist.githubusercontent.com/me/abc/raw/team.json?raw=true").kind, "url", "a harmless query is fine");
   assert.equal(teamLocation("https://raw.example.com/team.json").kind, "url");

@@ -21,6 +21,12 @@ writeFileSync(join(home, ".codex", "config.toml"), 'model = "gpt-5"\n\n[mcp_serv
 writeFileSync(join(other, ".mcp.json"), JSON.stringify({ mcpServers: { heroui: { type: "http", url: "https://mcp.heroui.pro/mcp" } } }, null, 2));
 process.env.HOME = home;
 process.env.PASEO_HOME = join(home, ".paseo");
+// 0.13.0: the registry is a library, off by default; these tests search it.
+mkdirSync(join(home, ".paseo", "plugin-settings", "paseo-mcp"), { recursive: true });
+writeFileSync(
+  join(home, ".paseo", "plugin-settings", "paseo-mcp", "catalog.json"),
+  JSON.stringify({ version: 2, values: { libraries: [{ id: "mcp-registry", name: "MCP Registry", source: "https://registry.modelcontextprotocol.io", format: "registry" }] } }),
+);
 delete process.env.AGENT_LINK_HOME;
 delete process.env.AGENT_AUTH_HOME;
 after(() => rmSync(home, { recursive: true, force: true }));

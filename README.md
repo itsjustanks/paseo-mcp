@@ -18,7 +18,7 @@ paseo plugin update paseo-mcp
 
 ## What it does
 
-- Adds servers from a catalogue: recommended official servers, your team's own list, and the MCP Registry with trust badges (see [Add from catalogue](#add-from-catalogue)).
+- Adds servers from a gallery: recommended official servers, libraries you subscribe to by address or file (the MCP Gallery by default, your team's own list, a private registry), and optionally the MCP Registry, with trust badges (see [Add from catalogue](#add-from-catalogue)).
 - Shows user-level MCP servers across Claude Code, Codex, Kimi Code, and Grok, one card per server with its editors, health, tools and sign-in state.
 - Adds, edits, renames, imports, and exports definitions with masked secrets; removes a server from one editor, all editors, or everywhere including project `.mcp.json` files.
 - Turns servers on or off per workspace from the workspace and agent panels, where the editor has such a switch.
@@ -34,14 +34,83 @@ paseo plugin update paseo-mcp
 ## Add from catalogue
 
 **Servers → Add server** opens a gallery. Search it, filter by category, and press **Add** on a card; **Add by hand**
-keeps the old form. Each card says who publishes it, whether it is **Official**, **Team** or **Community**, whether it
-is **Remote** or **Runs locally**, and whether it signs in with **OAuth**, needs a **Key**, or has **No auth**.
+keeps the old form. Each card says who publishes it, whether it is **Official**, **Library**, **Team** or **Community**,
+whether it is **Remote** or **Runs locally**, whether it signs in with **OAuth**, needs a **Key**, or has **No auth**,
+and which library it came from.
 
 | Shelf | Where it comes from |
 | --- | --- |
-| Recommended | 31 official servers shipped with the plugin (`shared/catalog-curated.ts`), each URL copied from the vendor's docs, which the card links to |
-| Team | A JSON file you point it at: an https URL (optionally with one header, for a private repo) or a path on the host. Set it under **Add a team catalogue** at the bottom of the gallery. The header's value is write-only: the host keeps it in `$PASEO_HOME/plugin-settings/paseo-mcp/team-auth.json` (0600), bound to the site of the address it was set for, and never sends it back to the app. It goes only to that site; if the address moves to another site, the value is deleted and you set it again |
-| MCP Registry | A search of `registry.modelcontextprotocol.io` once you type two letters, latest versions only, cached a day per search. Only remote servers are added in one click. A server that only ships a package (npm, PyPI, an image) is shown, marked "Runs code on this server", with its **Repository** and **Add by hand** (the form opens with its name filled in, nothing else) |
+| Recommended | 31 official servers shipped with the plugin (`shared/catalog-curated.ts`), each URL copied from the vendor's docs, which the card links to. Always shown; a library never hides one (see Merging) |
+| Libraries | Every library in **Libraries** at the bottom of the gallery, most trusted first (see Merging). By default that is the **MCP Gallery** (`https://raw.githubusercontent.com/itsjustanks/mcp-gallery/main/v0.1/servers.json`). Add your own by address or file; the 0.12.0 team catalogue is now the library called **Team** |
+| Registries | A library whose address is a registry, searched once you type two letters, latest versions only, cached a day per search, up to three pages of 100. The official **MCP Registry** (`registry.modelcontextprotocol.io`) is listed but off; switch it on in **Libraries**. Only remote servers are added in one click. A server that only ships a package (npm, PyPI, an image) is shown, marked "Runs code on this server", with its **Repository** and **Add by hand** (the form opens with its name filled in, nothing else) |
+
+### Libraries
+
+A library is JSON in the official MCP Registry's list shape: `{ "servers": [ { "server": <server.json>, "_meta": { … } } ],
+"metadata": { "count": N } }`, each `server` a [server.json](https://github.com/modelcontextprotocol/registry/blob/main/docs/reference/server-json/generic-server-json.md)
+(`name`, `description`, `version`, `remotes` or `packages`). The gallery's curation is optional, in
+`_meta["io.github.itsjustanks/mcp-gallery"]`: `{ "id", "displayName", "category", "publisher", "iconUrl", "auth":
+"oauth" | "token" | "none", "docsUrl", "verifiedAt" }`. Without it the card uses `title`, `websiteUrl`, `repository` and
+`icons` from server.json; a field that doesn't fit (an http icon, one over 2048 characters) is ignored on its own. The
+category is one of the gallery filter's names (`developer`, `data`, `docs`, `productivity`, `design`, `crm`, `support`,
+`marketing`, `analytics`, `payments`, `automation`); the older words map to the closest (`database` → data,
+`documentation` → docs, `observability` and `ai` → developer, `websites` → design) and anything else is Other. A 0.12.0
+team catalogue file (a list of entries) reads as a library too, its text cleaned of hidden characters like any other.
+
+```json
+{
+  "servers": [
+    {
+      "server": {
+        "name": "com.acme/mcp",
+        "description": "Acme orders and invoices.",
+        "version": "2.1.0",
+        "remotes": [{
+          "type": "streamable-http",
+          "url": "https://mcp.acme.com/mcp",
+          "headers": [{ "name": "Authorization", "value": "Bearer {ACME_TOKEN}", "isRequired": true, "isSecret": true,
+                        "variables": { "ACME_TOKEN": { "description": "Acme API token", "isRequired": true, "isSecret": true } } }]
+        }]
+      },
+      "_meta": { "io.github.itsjustanks/mcp-gallery": { "displayName": "Acme", "category": "payments", "auth": "token" } }
+    }
+  ],
+  "metadata": { "count": 1 }
+}
+```
+
+- **Where a library lives.** An https address ending in `.json` is read as one document; any other address is a
+  registry, searched through `GET {address}/v0.1/servers?search=…` (**Read as** picks either by hand). A path on the
+  host (absolute, or starting with `~/`) is a private library that is never hosted. Plain http is read only from this
+  machine (`localhost`, `127.0.0.1`). An address with a user name, a password or a key in its query is refused; a
+  private address takes a header name, and its value is set in the panel, write-only, kept in
+  `$PASEO_HOME/plugin-settings/paseo-mcp/team-auth.json` (0600), bound to the site of the address it was set for and
+  never sent back to the app. It goes only to that site; if the address moves to another site, the value is deleted.
+- **Reading.** A library is read in the background and kept for 15 minutes; **Refresh** reads it again. A failed read
+  keeps the last good copy, says why, and waits a minute before it is tried again. Until the MCP Gallery is published
+  its read fails with "HTTP 404: nothing is published at that address (yet)", and the recommended servers stand in.
+- **Merging.** A server name is shown once, and a clash goes by trust, not by the order of the list: **Team** first,
+  then libraries you added (by address or file), then the default public ones (MCP Gallery, MCP Registry). The order
+  in **Libraries** only matters within each group. A Recommended card is never hidden. A library's copy of a
+  Recommended server shows as the Recommended card itself, with the shipped text, docs link and auth, but only when it
+  is exactly the same server: for a remote, the same address (query included), header names and templates, values to
+  fill in and auth; for a package, the same command and arguments word for word (so the same version and flags) and
+  the same environment variables. Anything less (another path, a `?via=…`, an extra header, another version) is its own
+  **Library** card beside the Recommended one ("whoever can change that library can change this entry"). A library
+  card is never **Official** by itself.
+- **Rules.** Every server passes the team catalogue's rules (below): https only, no literal key, no `${…}`, no control
+  characters, exact package versions (`npx name@1.2.3`, `uvx name==1.2.3`), no runner flags or runtime variables. One
+  that fails is refused, listed by name with the reason, and the rest still show. A package the plugin doesn't start
+  (an image, `mcpb`, NuGet) is shown with **Add by hand**. Header, env and argument values are `{PLACEHOLDER}` inputs
+  asked for when you add the server, and secret unless their name is on the short public list; a header may be a
+  template such as `Bearer {token}`. A library, and the plugin's cache of it, never holds a stored value. A document is
+  capped at 1 MB and 500 servers. A server that would not fit a card (an address over 2048 characters, more than 64
+  arguments, an argument over 1024) is refused with that reason, listed on the library's row.
+- **Rolling back to 0.12.0.** 0.12.0 can't read the version 2 `catalog.json` and would show no team catalogue.
+  Paseo rewrites that file in place when it migrates, without a backup, so the plugin keeps the version 1 document
+  beside it as `catalog.v1.json` first. Before downgrading, copy it back:
+  `cp $PASEO_HOME/plugin-settings/paseo-mcp/catalog.v1.json $PASEO_HOME/plugin-settings/paseo-mcp/catalog.json`.
+  The Team key needs nothing; `team-auth.json` also keeps it in 0.12.0's shape.
 
 Anyone can publish to the registry. **Official** is kept for the Recommended shelf and for a registry entry whose every
 address is a recommended one, since those addresses were checked against the vendor's own docs. Every other registry
@@ -80,7 +149,7 @@ database, schema, env, locale, timezone, mode) is written as typed, and not even
 line named otherwise, anywhere in a team or registry entry's address or arguments, or when the value looks like a
 credential (`postgres://user:pass@…`, `sk-…`, `ghp_…`, a Slack webhook). Codex does not read `.mcp.json`, and **Add project servers to agents** passes the reference on unexpanded.
 
-A team file is a list of entries, or `{ "entries": [ … ] }`:
+The 0.12.0 team file shape still reads: a list of entries, or `{ "entries": [ … ] }`:
 
 ```json
 [

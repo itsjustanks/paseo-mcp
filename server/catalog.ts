@@ -1,8 +1,6 @@
 import type { PluginHandlerContext } from "@getpaseo/plugin/server";
-import { constants, existsSync } from "node:fs";
-import { open, stat } from "node:fs/promises";
-import { homedir } from "node:os";
-import { isAbsolute, join, resolve } from "node:path";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import {
   CATALOG_DEFAULTS,
   addedFor,
@@ -13,28 +11,23 @@ import {
   commandLine,
   curatedCard,
   entryFromDefinition,
-  latestRegistryServers,
   nameClash,
-  normaliseUrl,
-  parseTeamCatalogue,
   planHash,
   planInstall,
-  registryCard,
-  registrySearchUrl,
-  SECRETISH_NAME,
   SERVER_NAME,
-  TEAM_MAX_BYTES,
-  teamCard,
   validateEntry,
   type CatalogCard,
-  type CatalogEntry,
   type AddedPlace,
   type CatalogSettings,
+  type EntryOrigin,
   type InstallScope,
+  type LibraryState,
 } from "../shared/catalog";
 import { CURATED_CATALOG } from "../shared/catalog-curated";
 import type { Destination } from "../shared/contracts";
 import { probeMcp } from "../shared/health";
+import { libraryCard, mergeGallery, schemaReason } from "../shared/library";
+import { GALLERY_LIBRARY_ID, TEAM_LIBRARY_ID, libraryLocation, type LibraryLocation, type LibrarySource } from "../shared/library-source";
 import {
   DIALECTS,
   binaryOnPath,
@@ -52,220 +45,78 @@ import {
   tomlApply,
   type McpDef,
 } from "./handlers";
+import {
+  cachedDocument,
+  cachedSearches,
+  catalogFetch,
+  documentFor,
+  forgetDocument,
+  librariesSettled,
+  registryFor,
+  resetLibraryCaches,
+  type LibraryCache,
+  type RegistrySearch,
+} from "./library";
 import { handleMcpImportApply } from "./mcpjson";
-import { readSettingsDocument } from "./settings";
-import { readTeamAuth, teamOrigin, writeTeamHeaderValue } from "./team-auth";
+import { keepVersionCopy, readSettingsDocument } from "./settings";
+import { libraryAuthIds, readLibraryAuth, teamOrigin, writeLibraryHeaderValue } from "./team-auth";
+
+export { readCappedBody, readCappedFile, setCatalogFetch } from "./library";
 
 /**
- * Add from catalogue, host side. Two things here talk to the network, the
- * registry search and a team catalogue at a URL, and neither ever runs while
- * an RPC waits: a read answers from memory and starts the fetch in the
- * background, and the panel reads again while the state says it is running.
- * Writes go through the writers every other add uses (backup, atomic write,
- * read-back); a project's `.mcp.json` goes through editProjectFile, the
- * writer removeFromProjectFile uses. Every read from the network or a file is
- * capped before it is held in memory.
+ * Add from catalogue, host side. The gallery is the Recommended list shipped
+ * with the plugin merged with every library the settings name (0.13.0; the
+ * team catalogue is the library called Team) and, for a search, every
+ * registry library. Reads and searches run in the background (server/library.ts);
+ * a read answers from memory. Writes go through the writers every other add
+ * uses (backup, atomic write, read-back); a project's `.mcp.json` goes through
+ * editProjectFile, the writer removeFromProjectFile uses.
  */
-
-const TAG = "[paseo-mcp]";
-export const REGISTRY_TTL_MS = 24 * 60 * 60_000;
-export const REGISTRY_RETRY_MS = 60_000;
-export const TEAM_TTL_MS = 60 * 60_000;
-const FETCH_TIMEOUT_MS = 8_000;
-const REGISTRY_CACHE_MAX = 200;
-export const REGISTRY_MAX_BYTES = 8 * 1024 * 1024;
-
-type FetchLike = (url: string, init?: RequestInit) => Promise<Response>;
-let fetchImpl: FetchLike = (url, init) => globalThis.fetch(url, init);
-
-/** For tests: answer network calls from a fake. */
-export function setCatalogFetch(next: FetchLike | null): void {
-  fetchImpl = next ?? ((url, init) => globalThis.fetch(url, init));
-}
-
-function tooBig(maxBytes: number): Error {
-  return new Error(`answered more than ${maxBytes / (1024 * 1024)} MB, more than a catalogue should be`);
-}
-
-/**
- * A response body as text, never more than `maxBytes`: a declared length over
- * the cap is refused unread, and the body is counted as it streams and
- * dropped the moment it passes the cap, so an endless answer costs one chunk.
- */
-export async function readCappedBody(response: Response, maxBytes: number): Promise<string> {
-  const declared = Number(response.headers.get("content-length") ?? "");
-  if (Number.isFinite(declared) && declared > maxBytes) {
-    await response.body?.cancel().catch(() => undefined);
-    throw tooBig(maxBytes);
-  }
-  if (!response.body) return "";
-  const reader = response.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    total += value.byteLength;
-    if (total > maxBytes) {
-      await reader.cancel().catch(() => undefined);
-      throw tooBig(maxBytes);
-    }
-    chunks.push(value);
-  }
-  return Buffer.concat(chunks).toString("utf8");
-}
-
-/**
- * A team file as text. Only a regular file under the cap is read: stat first
- * (a directory, a FIFO or /dev/zero is refused before it is opened), then
- * open without blocking and check the opened file again, in case the path
- * changed in between, and never read past the cap.
- */
-export async function readCappedFile(path: string, maxBytes = TEAM_MAX_BYTES): Promise<string> {
-  const refuse = (info: { isFile(): boolean; size: number }) => {
-    if (!info.isFile()) throw new Error("not a regular file");
-    if (info.size > maxBytes) throw new Error(`the file is ${Math.round(info.size / 1024)} KB; a catalogue should be well under 1 MB`);
-  };
-  refuse(await stat(path));
-  const handle = await open(path, constants.O_RDONLY | constants.O_NONBLOCK);
-  try {
-    refuse(await handle.stat());
-    const buffer = Buffer.alloc(maxBytes + 1);
-    let total = 0;
-    while (total <= maxBytes) {
-      const { bytesRead } = await handle.read(buffer, total, buffer.length - total, null);
-      if (bytesRead === 0) break;
-      total += bytesRead;
-    }
-    if (total > maxBytes) throw new Error("the file is over 1 MB; a catalogue should be well under that");
-    return buffer.subarray(0, total).toString("utf8");
-  } finally {
-    await handle.close();
-  }
-}
-
-async function fetchText(url: string, headers: Record<string, string>, maxBytes: number): Promise<string> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-  try {
-    // No redirects: a header meant for the catalogue's host must not follow a hop elsewhere.
-    const response = await fetchImpl(url, { headers: { accept: "application/json", ...headers }, signal: controller.signal, redirect: "manual" });
-    if (response.status >= 300 && response.status < 400) throw new Error(`answered with a redirect (HTTP ${response.status}); use the final address`);
-    if (!response.ok) throw new Error(`answered HTTP ${response.status}`);
-    return await readCappedBody(response, maxBytes);
-  } catch (error) {
-    if (controller.signal.aborted) throw new Error(`no answer in ${FETCH_TIMEOUT_MS / 1000} s`);
-    throw error instanceof Error ? error : new Error(String(error));
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-const knownOfficialUrls = new Map(
-  CURATED_CATALOG.filter((entry) => entry.url).map((entry) => [normaliseUrl(entry.url ?? ""), entry.name] as const),
-);
-
-// ----------------------------------------------------------------- registry
-
-type RegistrySearch = {
-  cards: CatalogCard[];
-  fetchedAt: number | null;
-  failedAt: number | null;
-  error: string;
-  inFlight: Promise<void> | null;
-};
-
-const searches = new Map<string, RegistrySearch>();
-
-function registryKey(query: string): string {
-  return query.trim().toLowerCase().replace(/\s+/g, " ");
-}
-
-function startRegistrySearch(query: string, search: RegistrySearch): Promise<void> {
-  if (search.inFlight) return search.inFlight;
-  search.inFlight = (async () => {
-    try {
-      const text = await fetchText(registrySearchUrl(query), {}, REGISTRY_MAX_BYTES);
-      const servers = latestRegistryServers(JSON.parse(text));
-      // One answer the card builder chokes on is left out, not the whole search.
-      search.cards = servers.flatMap((server) => {
-        try {
-          return [registryCard(server, knownOfficialUrls)];
-        } catch (error) {
-          console.warn(`${TAG} registry result left out: ${error instanceof Error ? error.message : String(error)}`);
-          return [];
-        }
-      });
-      search.fetchedAt = Date.now();
-      search.failedAt = null;
-      search.error = "";
-    } catch (error) {
-      search.failedAt = Date.now();
-      search.error = error instanceof Error ? error.message : String(error);
-      console.warn(`${TAG} registry search failed: ${search.error}`);
-    } finally {
-      search.inFlight = null;
-    }
-  })();
-  return search.inFlight;
-}
-
-/** The cached answer for a query, starting a background search when there is none, it is a day old, or `force`. */
-export function registryFor(query: string, force = false): RegistrySearch | null {
-  const key = registryKey(query);
-  if (key.length < 2) return null;
-  let search = searches.get(key);
-  if (!search) {
-    if (searches.size >= REGISTRY_CACHE_MAX) {
-      const oldest = [...searches.entries()].sort((a, b) => (a[1].fetchedAt ?? 0) - (b[1].fetchedAt ?? 0))[0];
-      if (oldest) searches.delete(oldest[0]);
-    }
-    search = { cards: [], fetchedAt: null, failedAt: null, error: "", inFlight: null };
-    searches.set(key, search);
-  }
-  const now = Date.now();
-  const stale = search.fetchedAt === null || now - search.fetchedAt > REGISTRY_TTL_MS;
-  const resting = search.failedAt !== null && now - search.failedAt < REGISTRY_RETRY_MS;
-  if (force || (stale && !resting)) void startRegistrySearch(key, search);
-  return search;
-}
-
-// --------------------------------------------------------------------- team
-
-type TeamCache = {
-  source: string;
-  entries: CatalogEntry[];
-  refused: Array<{ id: string; reason: string }>;
-  fetchedAt: number | null;
-  error: string;
-  inFlight: Promise<void> | null;
-};
-
-let team: TeamCache = { source: "", entries: [], refused: [], fetchedAt: null, error: "", inFlight: null };
 
 export const TEAM_KEY_MOVED = "The key was cleared because the team address moved to another site; set it again.";
-/** Said in the team note from the moment a key is cleared for a moved address until a key is set or cleared by hand. */
-let teamKeyNote = "";
+export const LIBRARY_KEY_MOVED = "The key was cleared because the library's address moved to another site; set it again.";
+/** Said in a library's note from the moment its key is cleared for a moved address until a key is set or cleared by hand. */
+const keyNotes = new Map<string, string>();
 
 /**
- * A stored key goes only to the origin it was set for. When the team address
- * now points at another site (or at a file), the key is deleted, not kept for
- * a move back: whoever moved the address may not be whoever set the key.
+ * The catalogue settings as the host registers them: the same definition,
+ * with a migration that first keeps the version 1 document as
+ * `catalog.v1.json` (keepVersionCopy). Paseo rewrites the file in place when
+ * it migrates and keeps no backup; that copy is what a rollback to 0.12.0
+ * restores.
  */
-function unbindMovedKey(source: string): void {
-  const auth = readTeamAuth(); // first, so a value an older build kept in settings is moved even with no address
-  if (!auth || !source.trim() || auth.origin === teamOrigin(source)) return;
-  writeTeamHeaderValue(null);
-  teamKeyNote = TEAM_KEY_MOVED;
-}
+export const hostCatalogSettings: typeof catalogSettings = {
+  ...catalogSettings,
+  migrate: (values, fromVersion) => {
+    if (fromVersion === 1) keepVersionCopy("catalog", 1);
+    return catalogSettings.migrate ? catalogSettings.migrate(values, fromVersion) : values;
+  },
+};
 
 export function readCatalogSettings(): CatalogSettings {
+  keepVersionCopy("catalog", 1);
   return readSettingsDocument(catalogSettings, CATALOG_DEFAULTS);
 }
 
 /**
- * The team source as it may be shown: an address without its user name,
- * password, query or fragment (a `?token=` stays on the host); a path as is.
+ * A stored key goes only to the origin it was set for. When a library's
+ * address now points at another site (or at a file), its key is deleted, not
+ * kept for a move back: whoever moved the address may not be whoever set the
+ * key. A key whose library is not listed is left alone; it is sent nowhere.
+ */
+function unbindMovedKeys(libraries: LibrarySource[]): void {
+  for (const id of libraryAuthIds()) {
+    const library = libraries.find((candidate) => candidate.id === id);
+    const auth = readLibraryAuth(id);
+    if (!library || !auth || !library.source.trim() || auth.origin === teamOrigin(library.source)) continue;
+    writeLibraryHeaderValue(id, null);
+    keyNotes.set(id, id === TEAM_LIBRARY_ID ? TEAM_KEY_MOVED : LIBRARY_KEY_MOVED);
+  }
+}
+
+/**
+ * A library address as it may be shown: without its user name, password,
+ * query or fragment (a `?token=` stays on the host); a path as is.
  */
 export function redactSource(source: string): string {
   const trimmed = source.trim();
@@ -278,83 +129,24 @@ export function redactSource(source: string): string {
   }
 }
 
-function expandHome(path: string): string {
-  if (path === "~") return homedir();
-  if (path.startsWith("~/")) return join(homedir(), path.slice(2));
-  return path;
-}
-
-/** Where the team file lives, as the user wrote it, or why it cannot be read. */
+/** Where the team file lives, as 0.12.0 read it (an address is always a document), or why it cannot be read. */
 export function teamLocation(source: string): { kind: "url" | "file"; target: string } | { kind: "invalid"; reason: string } {
-  const trimmed = source.trim();
-  if (/^https:\/\//i.test(trimmed)) {
-    try {
-      const url = new URL(trimmed);
-      if (url.username || url.password) return { kind: "invalid", reason: "put credentials in the header setting, not in the address" };
-      // The address is an ordinary setting every connected app can read; a key
-      // in its query string would reach them all. The header setting is write-only.
-      const keyed = [...url.searchParams.keys()].find((name) => SECRETISH_NAME.test(name) || /^(code|sig|sv|se|sp|x-amz-.*)$/i.test(name));
-      if (keyed) return { kind: "invalid", reason: `take '${keyed}' out of the address and put the key in the team key field: the address is visible to every connected app, the key field is not` };
-      return { kind: "url", target: url.toString() };
-    } catch {
-      return { kind: "invalid", reason: "not a valid address" };
-    }
-  }
-  if (/^[a-z]+:\/\//i.test(trimmed)) return { kind: "invalid", reason: "only https addresses or file paths are read" };
-  const path = expandHome(trimmed);
-  if (!isAbsolute(path)) return { kind: "invalid", reason: "use an absolute path (or one starting with ~/)" };
-  return { kind: "file", target: resolve(path) };
+  const location = libraryLocation(source, "json");
+  if (location.kind === "json") return { kind: "url", target: location.url };
+  if (location.kind === "file") return { kind: "file", target: location.path };
+  if (location.kind === "invalid") return location;
+  return { kind: "invalid", reason: "not a document address" };
 }
 
-function startTeamFetch(settings: CatalogSettings): Promise<void> {
-  if (team.inFlight && team.source === settings.teamSource) return team.inFlight;
-  if (team.source !== settings.teamSource) team = { source: settings.teamSource, entries: [], refused: [], fetchedAt: null, error: "", inFlight: null };
-  const current = team;
-  current.inFlight = (async () => {
-    try {
-      const location = teamLocation(settings.teamSource);
-      if (location.kind === "invalid") throw new Error(location.reason);
-      const headers: Record<string, string> = {};
-      const auth = location.kind === "url" && settings.teamHeaderName.trim() ? readTeamAuth() : null;
-      // Checked again here, at the moment of sending: only to the origin the key was set for.
-      if (auth?.value && auth.origin && new URL(location.target).origin === auth.origin) headers[settings.teamHeaderName.trim()] = auth.value;
-      const text = location.kind === "url" ? await fetchText(location.target, headers, TEAM_MAX_BYTES) : await readCappedFile(location.target, TEAM_MAX_BYTES);
-      const parsed = parseTeamCatalogue(text);
-      if (parsed.error) throw new Error(parsed.error);
-      current.entries = parsed.entries;
-      current.refused = parsed.refused;
-      current.fetchedAt = Date.now();
-      current.error = "";
-    } catch (error) {
-      // Keep the last good list; say why the new read failed.
-      current.error = error instanceof Error ? error.message : String(error);
-      if (current.fetchedAt === null) current.fetchedAt = Date.now();
-      console.warn(`${TAG} team catalogue: ${current.error}`);
-    } finally {
-      current.inFlight = null;
-    }
-  })();
-  return current.inFlight;
-}
-
-export function teamFor(settings: CatalogSettings, force = false): TeamCache | null {
-  if (!settings.teamSource.trim()) return null;
-  if (team.source !== settings.teamSource) team = { source: settings.teamSource, entries: [], refused: [], fetchedAt: null, error: "", inFlight: null };
-  const stale = team.fetchedAt === null || Date.now() - team.fetchedAt > TEAM_TTL_MS;
-  if (force || stale) void startTeamFetch(settings);
-  return team;
-}
-
-/** For tests: forget every cached search and team read. */
+/** For tests: forget every cached read, search and note. */
 export function resetCatalogCaches(): void {
-  searches.clear();
-  team = { source: "", entries: [], refused: [], fetchedAt: null, error: "", inFlight: null };
-  teamKeyNote = "";
+  resetLibraryCaches();
+  keyNotes.clear();
 }
 
 /** For tests: wait for whatever is fetching now. */
 export async function catalogSettled(): Promise<void> {
-  await Promise.all([...[...searches.values()].map((search) => search.inFlight), team.inFlight].filter(Boolean));
+  await librariesSettled();
 }
 
 // -------------------------------------------------------------------- read
@@ -363,55 +155,184 @@ function iso(ms: number | null): string | null {
   return ms === null ? null : new Date(ms).toISOString();
 }
 
-function shortSource(source: string): string {
-  const location = teamLocation(source);
-  if (location.kind === "url") {
+/** A library's address, short, for a card's note. */
+function shortSource(library: LibrarySource): string {
+  const location = libraryLocation(library.source, library.format);
+  const address = location.kind === "json" ? location.url : location.kind === "registry" ? location.base : "";
+  if (address) {
     try {
-      const url = new URL(location.target);
+      const url = new URL(address);
       return `${url.host}${url.pathname.length > 30 ? `…${url.pathname.slice(-24)}` : url.pathname}`;
     } catch {
-      return redactSource(source);
+      return redactSource(library.source);
     }
   }
+  const source = library.source.trim();
   return source.length > 48 ? `…${source.slice(-44)}` : source;
 }
+
+function refOf(library: LibrarySource) {
+  return { id: library.id, name: library.name, label: shortSource(library) };
+}
+
+export type DroppedCard = { id: string; reason: string };
 
 /**
  * Every card checked against the schema the app parses the answer with, the
  * last step before it goes out: one card that fails would make the app refuse
- * the whole catalogue. A card that fails is left out and counted per shelf.
+ * the whole catalogue. A card that fails is left out, counted per shelf, and
+ * listed per library with the reason in words (schemaReason), for the
+ * library's row.
  */
-export function cardsThatParse(cards: CatalogCard[]): { shown: CatalogCard[]; dropped: Record<CatalogCard["shelf"], number> } {
-  const dropped = { recommended: 0, team: 0, registry: 0 };
+export function cardsThatParse(cards: CatalogCard[]): { shown: CatalogCard[]; dropped: Record<CatalogCard["shelf"], number>; byLibrary: Map<string, DroppedCard[]> } {
+  const dropped = { recommended: 0, team: 0, library: 0, registry: 0 };
+  const byLibrary = new Map<string, DroppedCard[]>();
   const shown = cards.filter((card) => {
-    const ok = CatalogCardSchema.safeParse(card).success;
-    if (!ok) {
+    const parsed = CatalogCardSchema.safeParse(card);
+    if (!parsed.success) {
       dropped[card.shelf] += 1;
-      console.warn(`${TAG} catalogue card left out, it does not fit the schema: ${card.key.slice(0, 120)}`);
+      const reason = schemaReason(parsed.error.issues[0]);
+      if (card.library) byLibrary.set(card.library.id, [...(byLibrary.get(card.library.id) ?? []), { id: (card.registryName ?? card.entry.id ?? card.key).slice(0, 80), reason }]);
+      console.warn(`[paseo-mcp] catalogue card left out, it does not fit the schema (${reason}): ${card.key.slice(0, 120)}`);
     }
-    return ok;
+    return parsed.success;
   });
-  return { shown, dropped };
+  return { shown, dropped, byLibrary };
+}
+
+type LibraryRead = {
+  library: LibrarySource;
+  location: LibraryLocation;
+  document: LibraryCache | null;
+  search: RegistrySearch | null;
+  cards: CatalogCard[];
+};
+
+type Refresh = "team" | "registry" | "both" | "libraries" | "all";
+
+/** Read (or start reading) every enabled library; registries only for a search of two letters or more. */
+function readLibraries(libraries: LibrarySource[], query: string, refresh?: Refresh, only?: string): LibraryRead[] {
+  return libraries.map((library) => {
+    const location = libraryLocation(library.source, library.format);
+    const read: LibraryRead = { library, location, document: null, search: null, cards: [] };
+    if (!library.enabled) return read;
+    const forced = only === library.id || refresh === "all";
+    if (location.kind === "registry") {
+      read.search = registryFor(library, location.base, query, forced || refresh === "registry" || refresh === "both");
+      read.cards = read.search?.cards ?? [];
+    } else if (location.kind === "json" || location.kind === "file") {
+      const teamAsked = library.id === TEAM_LIBRARY_ID && (refresh === "team" || refresh === "both");
+      read.document = documentFor(library, location, forced || teamAsked || refresh === "libraries");
+      read.cards = read.document.items.map((item) => libraryCard(item, refOf(library)));
+    }
+    return read;
+  });
+}
+
+function documentState(document: LibraryCache): "loading" | "ready" | "error" {
+  if (document.inFlight && document.items.length === 0 && !document.error) return "loading";
+  if (document.error) return "error";
+  return document.inFlight ? "loading" : "ready";
+}
+
+/** A library as the Libraries panel shows it. */
+function libraryState(read: LibraryRead, droppedCards: DroppedCard[]): LibraryState {
+  const { library, location, document, search } = read;
+  const dropped = droppedCards.length;
+  const base = {
+    id: library.id,
+    name: library.name,
+    source: redactSource(library.source),
+    kind: location.kind,
+    enabled: library.enabled,
+    headerName: library.headerName,
+    refused: [...(document?.refused ?? []), ...droppedCards],
+    fetchedAt: iso(document?.fetchedAt ?? search?.fetchedAt ?? null),
+  };
+  const notes = [keyNotes.get(library.id) ?? ""];
+  let state: LibraryState["state"] = "off";
+  let count = read.cards.length - dropped;
+  if (!library.enabled) {
+    state = "off";
+    count = 0;
+  } else if (location.kind === "invalid") {
+    state = "error";
+    notes.push(`Could not read the ${library.name} library: ${location.reason}.`);
+  } else if (document) {
+    state = documentState(document);
+    if (document.error) {
+      const fallback = document.items.length
+        ? " Showing the last good copy."
+        : library.id === GALLERY_LIBRARY_ID
+          ? " The recommended servers shipped with the plugin are shown instead."
+          : "";
+      notes.push(`Could not read the ${library.name} library: ${document.error}.${fallback}`);
+    }
+  } else if (search) {
+    state = search.inFlight ? "searching" : search.error && search.fetchedAt === null ? "error" : "ready";
+    if (search.error) notes.push(`The ${library.name} search failed: ${search.error}.${search.fetchedAt ? " Showing the last answer." : ""}`);
+    if (search.truncated) notes.push(`Only the first ${read.cards.length} results are shown; narrow the search.`);
+  } else {
+    state = "idle";
+  }
+  if (dropped > 0) {
+    const reasons = [...new Set(droppedCards.map((card) => card.reason))].slice(0, 3).join("; ");
+    notes.push(`${dropped} entr${dropped === 1 ? "y" : "ies"} couldn't be shown (${reasons}).`);
+  }
+  return { ...base, state, count: Math.max(0, count), note: notes.filter(Boolean).join(" ") };
+}
+
+/** The Team library in the 0.12.0 shape of `team`: "off" when there is none. */
+function teamStateOf(states: LibraryState[]) {
+  const team = states.find((state) => state.id === TEAM_LIBRARY_ID);
+  if (!team || !team.enabled) return { source: team?.source ?? "", state: "off" as const, count: 0, refused: [], fetchedAt: null, note: "" };
+  const state = team.state === "searching" ? ("loading" as const) : team.state === "idle" || team.state === "off" ? ("ready" as const) : team.state;
+  return { source: team.source, state, count: team.count, refused: team.refused, fetchedAt: team.fetchedAt, note: team.note };
+}
+
+/** Every registry library's search together, in the 0.12.0 shape of `registry`. */
+function registryStateOf(reads: LibraryRead[], query: string, droppedRegistry: number) {
+  const searched = reads.filter((read) => read.search);
+  const state = searched.length === 0
+    ? ("idle" as const)
+    : searched.some((read) => read.search?.inFlight)
+      ? ("searching" as const)
+      : searched.every((read) => read.search?.error && read.search.fetchedAt === null)
+        ? ("error" as const)
+        : ("ready" as const);
+  const fetched = searched.map((read) => read.search?.fetchedAt ?? 0).filter(Boolean);
+  const failed = searched.filter((read) => read.search?.error);
+  return {
+    query: query.trim(),
+    state,
+    fetchedAt: fetched.length ? iso(Math.max(...fetched)) : null,
+    note: [
+      ...failed.map((read) =>
+        searched.length === 1
+          ? `The registry search failed: ${read.search?.error}.${read.search?.fetchedAt ? " Showing the last answer." : ""}`
+          : `The ${read.library.name} search failed: ${read.search?.error}.`,
+      ),
+      droppedRegistry > 0 ? `${droppedRegistry} registry result${droppedRegistry === 1 ? "" : "s"} couldn't be shown.` : "",
+      searched.some((read) => read.search?.truncated) ? "Only the first pages of results are shown; narrow the search." : "",
+    ]
+      .filter(Boolean)
+      .join(" "),
+    count: searched.reduce((sum, read) => sum + read.cards.length, 0) - droppedRegistry,
+  };
 }
 
 export async function handleMcpCatalog(
-  { query = "", refresh }: { query?: string; refresh?: "team" | "registry" | "both" },
+  { query = "", refresh, library }: { query?: string; refresh?: Refresh; library?: string },
   context?: PluginHandlerContext,
 ) {
   const settings = readCatalogSettings();
-  unbindMovedKey(settings.teamSource);
-  const teamCache = teamFor(settings, refresh === "team" || refresh === "both");
-  const search = registryFor(query, refresh === "registry" || refresh === "both");
-
-  const cards: CatalogCard[] = CURATED_CATALOG.map(curatedCard);
-  const teamLabel = shortSource(settings.teamSource);
-  for (const entry of teamCache?.entries ?? []) cards.push(teamCard(entry, teamLabel));
-  // A registry result for an endpoint already on a shelf adds nothing but a second card.
-  const shelved = new Set(cards.map((card) => normaliseUrl(card.entry.url ?? "")).filter(Boolean));
-  for (const card of search?.cards ?? []) {
-    if (card.entry.url && shelved.has(normaliseUrl(card.entry.url))) continue;
-    cards.push(card);
-  }
+  unbindMovedKeys(settings.libraries);
+  const reads = readLibraries(settings.libraries, query, refresh, library);
+  const cards = mergeGallery(
+    CURATED_CATALOG.map(curatedCard),
+    reads.filter((read) => read.document).map((read) => read.cards),
+    reads.filter((read) => read.search).flatMap((read) => read.cards),
+  );
 
   const discovered = (await discoverProjects(context?.paseo ?? null)).map((project) => ({ ...project, defs: jsonMcpRead(join(project.path, ".mcp.json")) }));
   const projects = discovered.map((project) => ({ name: project.name, path: project.path, servers: Object.keys(project.defs).length }));
@@ -426,36 +347,14 @@ export async function handleMcpCatalog(
     const added = addedFor(card.entry, index, destinations.length);
     if (added) card.added = added;
   }
-  const { shown, dropped } = cardsThatParse(cards);
+  const { shown, dropped, byLibrary } = cardsThatParse(cards);
+  const libraries = reads.map((read) => libraryState(read, byLibrary.get(read.library.id) ?? []));
 
   return {
     cards: shown,
-    team: {
-      source: redactSource(settings.teamSource),
-      state: !teamCache ? ("off" as const) : teamCache.inFlight && teamCache.entries.length === 0 && !teamCache.error ? ("loading" as const) : teamCache.error ? ("error" as const) : teamCache.inFlight ? ("loading" as const) : ("ready" as const),
-      count: teamCache?.entries.length ?? 0,
-      refused: teamCache?.refused ?? [],
-      fetchedAt: iso(teamCache?.fetchedAt ?? null),
-      note: [
-        teamKeyNote,
-        teamCache?.error ? `Could not read the team catalogue: ${teamCache.error}.${teamCache.entries.length ? " Showing the last good copy." : ""}` : "",
-        dropped.team > 0 ? `${dropped.team} team entr${dropped.team === 1 ? "y" : "ies"} couldn't be shown.` : "",
-      ]
-        .filter(Boolean)
-        .join(" "),
-    },
-    registry: {
-      query: query.trim(),
-      state: !search ? ("idle" as const) : search.inFlight ? ("searching" as const) : search.error && search.fetchedAt === null ? ("error" as const) : ("ready" as const),
-      fetchedAt: iso(search?.fetchedAt ?? null),
-      note: [
-        search?.error ? `The registry search failed: ${search.error}.${search.fetchedAt ? " Showing the last answer." : ""}` : "",
-        dropped.registry > 0 ? `${dropped.registry} registry result${dropped.registry === 1 ? "" : "s"} couldn't be shown.` : "",
-      ]
-        .filter(Boolean)
-        .join(" "),
-      count: (search?.cards.length ?? 0) - dropped.registry,
-    },
+    team: teamStateOf(libraries),
+    registry: registryStateOf(reads, query, dropped.registry),
+    libraries,
     projects,
   };
 }
@@ -472,21 +371,39 @@ type InstallInput = {
   planHash?: string;
 };
 
+/** The rules a card's entry is held to: ours for Recommended, the registry's for registry results, a team file's for every library. */
+function originOf(card: CatalogCard): EntryOrigin {
+  if (card.shelf === "recommended") return "curated";
+  return card.shelf === "registry" ? "registry" : "team";
+}
+
+/**
+ * The card an install names, from what is already read (nothing is fetched
+ * here): a Recommended entry, a library's server (`team:<name>`,
+ * `library:<id>:<name>`), or a registry result, looked up in library order
+ * so the card found is the one the gallery showed.
+ */
 function resolveCard(key: string): CatalogCard | null {
-  const [shelf, ...rest] = key.split(":");
-  const id = rest.join(":");
+  const [shelf = "", ...rest] = key.split(":");
   if (shelf === "recommended") {
-    const entry = CURATED_CATALOG.find((candidate) => candidate.id === id);
+    const entry = CURATED_CATALOG.find((candidate) => candidate.id === rest.join(":"));
     return entry ? curatedCard(entry) : null;
   }
-  if (shelf === "team") {
-    const entry = team.entries.find((candidate) => candidate.id === id);
-    return entry ? teamCard(entry, shortSource(team.source)) : null;
+  const libraries = readCatalogSettings().libraries.filter((library) => library.enabled);
+  if (shelf === "team" || shelf === "library") {
+    const [id, name] = shelf === "team" ? [TEAM_LIBRARY_ID, rest.join(":")] : [rest[0] ?? "", rest.slice(1).join(":")];
+    const library = libraries.find((candidate) => candidate.id === id);
+    const item = library ? cachedDocument(library)?.items.find((candidate) => candidate.name === name) : undefined;
+    return library && item ? libraryCard(item, refOf(library)) : null;
   }
   if (shelf === "registry") {
-    for (const search of searches.values()) {
-      const card = search.cards.find((candidate) => candidate.key === key);
-      if (card) return card;
+    for (const library of libraries) {
+      const location = libraryLocation(library.source, library.format);
+      if (location.kind !== "registry") continue;
+      for (const search of cachedSearches(location.base)) {
+        const card = search.cards.find((candidate) => candidate.key === key);
+        if (card) return card;
+      }
     }
   }
   return null;
@@ -559,11 +476,11 @@ async function prepare(input: InstallInput, paseo: PluginHandlerContext["paseo"]
   result.card = card;
   if (!card.installable) result.issues.push(card.blockedReason);
   // Re-check on the host: a card is only as good as the rules it passed.
-  if (card.shelf !== "registry") result.issues.push(...validateEntry(card.entry, card.shelf === "recommended" ? "curated" : "team"));
+  if (card.shelf !== "registry") result.issues.push(...validateEntry(card.entry, originOf(card)));
   const name = input.name.trim();
   if (!SERVER_NAME.test(name)) result.issues.push("The name must be letters, numbers, hyphens and underscores (up to 64).");
 
-  const plan = planInstall(card.entry, input.scope, input.values ?? {}, card.shelf === "recommended" ? "curated" : card.shelf);
+  const plan = planInstall(card.entry, input.scope, input.values ?? {}, originOf(card));
   result.issues.push(...plan.issues);
   result.definition = plan.definition;
   result.envToSet = plan.envToSet;
@@ -668,7 +585,7 @@ async function healthOf(definition: Record<string, unknown>, scope: InstallScope
     // Project scope holds ${VAR} references the host cannot expand for Claude,
     // so the probe goes without them and an OAuth-style 401 is the expected answer.
     const headers = scope === "user" ? (definition.headers as Record<string, string> | undefined) : undefined;
-    return probeMcp(definition.url, headers, { fetch: (url, init) => fetchImpl(url, init) });
+    return probeMcp(definition.url, headers, { fetch: (url, init) => catalogFetch(url, init) });
   }
   if (typeof definition.command === "string") {
     return binaryOnPath(definition.command)
@@ -759,26 +676,32 @@ export async function handleMcpCatalogEntry({ name }: { name: string }, { paseo 
   return { ok: true, json, message: notes.join(" ") };
 }
 
-// ---------------------------------------------------------- team header value
+// ------------------------------------------------------- library header value
 
 /**
- * Write-only: set or clear the team catalogue's header value, or ask whether
- * one is set. Never returns it; `origin` (not secret) says which site it goes
- * to. A value is set for the origin of the team address saved at that moment.
+ * Write-only: set or clear a library's header value (the Team library's by
+ * default, as in 0.12.0), or ask whether one is set. Never returns it;
+ * `origin` (not secret) says which site it goes to. A value is set for the
+ * origin of the library address saved at that moment.
  */
-export async function handleMcpCatalogTeamAuth({ action = "status", value = "" }: { action?: "status" | "set" | "clear"; value?: string }) {
+export async function handleMcpCatalogTeamAuth({ action = "status", value = "", library = TEAM_LIBRARY_ID }: { action?: "status" | "set" | "clear"; value?: string; library?: string }) {
+  const settings = readCatalogSettings();
+  unbindMovedKeys(settings.libraries);
   if (action === "set" || action === "clear") {
-    const settings = readCatalogSettings();
-    unbindMovedKey(settings.teamSource);
-    const origin = teamOrigin(settings.teamSource);
-    if (action === "set" && !origin) throw new Error("Save an https team address first: the key is only ever sent to that address's site.");
-    const result = writeTeamHeaderValue(action === "set" ? value.trim() : null, undefined, origin);
-    teamKeyNote = "";
-    team.fetchedAt = null; // the next read fetches with the new header
+    const source = settings.libraries.find((candidate) => candidate.id === library)?.source ?? "";
+    const origin = teamOrigin(source);
+    if (action === "set" && !origin) {
+      throw new Error(
+        library === TEAM_LIBRARY_ID
+          ? "Save an https team address first: the key is only ever sent to that address's site."
+          : "Save an https address for this library first: the key is only ever sent to that address's site.",
+      );
+    }
+    const result = writeLibraryHeaderValue(library, action === "set" ? value.trim() : null, undefined, origin);
+    keyNotes.delete(library);
+    forgetDocument(library); // the next read fetches with the new header
     return result;
   }
-  const settings = readCatalogSettings();
-  unbindMovedKey(settings.teamSource);
-  const auth = readTeamAuth();
+  const auth = readLibraryAuth(library);
   return auth ? { set: true, origin: auth.origin } : { set: false, origin: "" };
 }

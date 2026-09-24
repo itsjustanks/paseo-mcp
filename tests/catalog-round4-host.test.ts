@@ -36,7 +36,11 @@ const grok = join(home, ".grok", "config.toml");
 const teamFile = join(home, "team.json");
 const settingsDir = join(home, ".paseo", "plugin-settings", "paseo-mcp");
 mkdirSync(settingsDir, { recursive: true });
-writeFileSync(join(settingsDir, "catalog.json"), JSON.stringify({ version: 1, values: { teamSource: teamFile, teamHeaderName: "" } }));
+// 0.13.0: the registry is a library, off by default; these tests search it.
+writeFileSync(
+  join(settingsDir, "catalog.json"),
+  JSON.stringify({ version: 2, values: { libraries: [{ id: "mcp-registry", name: "MCP Registry", source: "https://registry.modelcontextprotocol.io", format: "registry" }, { id: "team", name: "Team", source: teamFile }] } }),
+);
 
 const TOKEN = "acme_live_Zx9Qw8Er7Ty6Ui5Op4";
 const teamEntry = (url: string) => ({
