@@ -53,6 +53,7 @@ import {
   type RawDefRow,
 } from "../shared/mcpjson";
 import { WorkspaceContext, pickLoad } from "./budget";
+import { CatalogGallery, CopyCatalogEntryButton } from "./catalog";
 import { HealthSummary, ServerHealthTag, healthCheckedLabel, healthStatus, healthWord, splitIssues, useHealth } from "./health";
 import { canOpenMcp, openMcp, takePendingServer } from "./navigate";
 import { SectionHeading, TabBar, type SectionId } from "./navigation";
@@ -1020,6 +1021,8 @@ function McpBody({ layout, host }: PluginSurfaceProps) {
   const [exportRevealed, setExportRevealed] = useState(false);
   const [renameTo, setRenameTo] = useState("");
   const [syncLog, setSyncLog] = useState("");
+  // 0.12.0: "Add server" opens the catalogue gallery in place of the list.
+  const [catalogOpen, setCatalogOpen] = useState(false);
 
   const [addName, setAddName] = useState("");
   const [addKind, setAddKind] = useState<Kind>("http");
@@ -1741,6 +1744,7 @@ function McpBody({ layout, host }: PluginSurfaceProps) {
                     onPress={() => applyMutation.mutate({ name: entry.name, targets: missingHere.map((dest) => dest.id) })}
                   />
                 ) : null}
+                <CopyCatalogEntryButton name={entry.name} />
               </View>
               {/* Quiet on the list: three red buttons on every card drowned out everything else. The server's own page shows them open. */}
               <Disclosure title="Remove…" open={armedRemove?.server === entry.name || removeResult?.server === entry.name}>
@@ -2018,12 +2022,28 @@ function McpBody({ layout, host }: PluginSurfaceProps) {
     </View>
   ) : null;
 
-  const serversSection = server ? serverPane : (
+  const serversSection = server ? serverPane : catalogOpen ? (
+    <CatalogGallery
+      destinations={destinations}
+      onClose={() => setCatalogOpen(false)}
+      onAddByHand={(name) => {
+        setCatalogOpen(false);
+        // The name only: nothing else from a registry answer is carried into the form.
+        if (name) setAddName(name);
+        go("transfer", { mode: "add" });
+      }}
+      onInstalled={refreshDefinitions}
+      onOpenServer={(name) => {
+        setCatalogOpen(false);
+        selectServer(name);
+      }}
+    />
+  ) : (
     <View style={{ gap: t.space.lg }}>
       <Toolbar
         actions={
           <>
-            <Button label="Add server" variant="primary" onPress={() => go("transfer", { mode: "add" })} />
+            <Button label="Add server" variant="primary" onPress={() => setCatalogOpen(true)} />
             <Button label="Import" onPress={() => go("transfer", { mode: "import" })} />
             <Button label="Refresh tools" variant="ghost" loading={toolsQuery.isFetching} onPress={() => void toolsQuery.refetch()} />
             <Button

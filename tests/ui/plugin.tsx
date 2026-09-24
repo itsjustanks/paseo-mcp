@@ -3,6 +3,8 @@ import React, { useCallback } from "react";
 import { Text, View } from "react-native";
 import { buildPaseoToolsPatch, paseoToolProviders, readDaemonToolsConfig, resolvePaseoTools } from "../../shared/paseo-tools";
 import { toolSearch } from "../../shared/tool-search";
+import { curatedCard, planInstall, registryCard, teamCard, budgetImpact, type CatalogCard } from "../../shared/catalog";
+import { CURATED_CATALOG } from "../../shared/catalog-curated";
 export function defineRpc<T>(contract: T) { return contract; }
 export function defineSettings<T>(definition: T) { return definition; }
 const params = new URLSearchParams(location.search);
@@ -135,6 +137,54 @@ const cold = () => params.has("cold") && Date.now() < coldUntil;
 const restored = params.has("restored") ? { reason: "saved before the plugin restarted", asOf: checkedAt } : undefined;
 const restoredTools = () => (restored ? tools.map((t: any) => (t.kind === "listed" ? { ...t, stale: { ...restored, restored: true } } : t)) : tools);
 
+// Add from catalogue. ?team shows a team shelf with one refused entry; the
+// registry answers "supabase" and "jira" from real 2026-09-24 examples.
+const registryFixtures: Record<string, any[]> = {
+  supabase: [
+    { name: "ai.smithery/MisterSandFR-supabase-mcp-selfhosted", version: "1.14.1", description: "Manage Supabase projects end to end across database, auth, storage, realtime, and migrations.", remotes: [{ type: "streamable-http", url: "https://server.smithery.ai/@MisterSandFR/supabase-mcp-selfhosted/mcp", headers: [{ name: "Authorization", isRequired: true, isSecret: true, value: "Bearer {smithery_api_key}", description: "Smithery API key" }] }] },
+    { name: "ai.waystation/supabase", version: "0.3.1", description: "Connect to your Supabase database to query data and schemas.", remotes: [{ type: "streamable-http", url: "https://waystation.ai/supabase/mcp" }] },
+    { name: "io.github.sadri-dridi/supabase-url-shape", version: "1.0.0", description: "Checks the shape of Supabase URLs.", remotes: [{ type: "streamable-http", url: "https://agent-observatory-sensor.nolimit-observatory.workers.dev/s/supabase-url-shape/mcp" }] },
+    { name: "io.github.mcp-dir/supabase-mcp", version: "0.1.0", description: "Supabase through mcp.ai.", remotes: [{ type: "streamable-http", url: "https://api.mcp.ai/p_supabase" }] },
+  ],
+  jira: [
+    { name: "io.github.acme/jira-helper", version: "0.2.0", description: "Search and update Jira issues.", packages: [{ registryType: "npm", identifier: "jira-helper-mcp", version: "0.2.0", transport: { type: "stdio" }, environmentVariables: [{ name: "JIRA_API_TOKEN", isSecret: true, isRequired: true }] }] },
+    { name: "app.vercel.jira-bridge/jira", version: "1.0.0", description: "A Jira bridge on vercel.app.", remotes: [{ type: "streamable-http", url: "https://jira-bridge.vercel.app/api/mcp" }] },
+    { name: "ai.smithery/someone-jira", version: "1.0.0", description: "Jira through Smithery.", remotes: [{ type: "streamable-http", url: "https://server.smithery.ai/@someone/jira/mcp", headers: [{ name: "Authorization", isRequired: true, isSecret: true, value: "Bearer {smithery_api_key}" }] }] },
+  ],
+};
+const teamEntries = [
+  { id: "ikit-n8n", name: "Team n8n", publisher: "InvestorKit", description: "Our workflows as tools.", category: "automation", transport: "http", url: "https://n8n.example.ondigitalocean.app/mcp/team", headers: { Authorization: "Bearer {N8N_TOKEN}" }, inputs: [{ id: "N8N_TOKEN", label: "n8n token", secret: true, required: true }], auth: "header", docs: "", verifiedAt: "2026-09-24" },
+  { id: "ikit-metabase", name: "Metabase", publisher: "InvestorKit", description: "Questions and dashboards from our warehouse.", category: "data", transport: "http", url: "https://data.example.app/mcp", headers: { "x-api-key": "{METABASE_KEY}" }, inputs: [{ id: "METABASE_KEY", label: "Metabase key", secret: true, required: true }], auth: "header", docs: "", verifiedAt: "2026-09-24" },
+] as any[];
+const catalogCards = (query: string): CatalogCard[] => {
+  const known = new Map(CURATED_CATALOG.filter((e) => e.url).map((e) => [e.url!.replace(/\/+$/, "").toLowerCase(), e.name]));
+  const cards = CURATED_CATALOG.map(curatedCard);
+  if (params.has("team")) cards.push(...teamEntries.map((e) => teamCard(e, "raw.githubusercontent.com/…/mcp-catalogue.json")));
+  const q = query.trim().toLowerCase();
+  if (q.length >= 2) cards.push(...Object.entries(registryFixtures).filter(([k]) => k.includes(q) || q.includes(k)).flatMap(([, list]) => list.map((server) => registryCard(server, known))));
+  return cards;
+};
+const catalogProjects = [
+  { name: "data-glue", path: `${HOME}/projects/data-glue`, servers: 2 },
+  { name: "unfold-mobile", path: `${HOME}/projects/unfold-mobile`, servers: 2 },
+];
+const catalogPlan = (input: any) => {
+  const card = catalogCards("supabase jira").concat(catalogCards("jira")).find((c) => c.key === input.key) ?? catalogCards("").find((c) => c.key === input.key)!;
+  const plan = planInstall(card.entry, input.scope, input.values ?? {}, card.shelf === "recommended" ? "curated" : card.shelf);
+  const taken = input.scope === "user" ? servers.filter((s) => input.targets.some((t: string) => s.presentIn.includes(t))).map((s) => s.name) : ["supabase", "jam"];
+  const clash = taken.includes(input.name) ? { files: input.scope === "user" ? input.targets.map((t: string) => destinations.find((d) => d.id === t)?.label ?? t) : [`${input.projectPath}/.mcp.json`], suggestion: `${input.name}-2` } : null;
+  const previews = input.scope === "user"
+    ? input.targets.map((t: string) => { const d = destinations.find((x) => x.id === t)!; const { type: _t, ...rest } = plan.masked as any; return { file: d.configPath, label: d.label, text: d.format === "toml-mcp" ? `[mcp_servers.${input.name}]\n${rest.url ? `url = "${rest.url}"` : `command = "${rest.command}"\nargs = ${JSON.stringify(rest.args ?? [])}`}${rest.headers ? `\n[mcp_servers.${input.name}.http_headers]\n${Object.entries(rest.headers).map(([k, v]) => `${k} = "${v}"`).join("\n")}` : ""}${rest.env ? `\n[mcp_servers.${input.name}.env]\n${Object.entries(rest.env).map(([k, v]) => `${k} = "${v}"`).join("\n")}` : ""}` : JSON.stringify({ mcpServers: { [input.name]: plan.masked } }, null, 2) }; })
+    : [{ file: `${input.projectPath}/.mcp.json`, label: "data-glue · .mcp.json", text: JSON.stringify({ mcpServers: { [input.name]: plan.masked } }, null, 2) }];
+  const notes = [
+    ...(card.entry.auth === "oauth" ? ["After adding, sign in with Connect OAuth."] : []),
+    ...(card.warning ? [card.warning] : []),
+    ...(input.scope === "project" ? [".mcp.json is usually in git: the change shows in git status, and everyone who pulls it gets this server.", ...(plan.envToSet.length ? [`The key is not written into the file. It says \${${plan.envToSet[0]!.name}} instead, which Claude Code fills in from its environment when it loads the file. Set ${plan.envToSet.map((e) => e.name).join(", ")} where Claude Code starts: for Paseo agents, the daemon's environment or the provider's env in Paseo's settings.`] : []), "Claude Code asks once before it uses a new project server; approve it at launch or in the workspace's MCP connections tab."] : []),
+  ];
+  const issues = [...plan.issues, ...(input.scope === "user" && input.targets.length === 0 ? ["Pick at least one editor."] : [])];
+  return { card, plan, ok: issues.length === 0 && !clash, issues, clash, previews, envToSet: plan.envToSet, notes, budget: input.scope === "user" ? budgetImpact("user", 7, "Claude · demo@example.com (primary) and 2 more") : budgetImpact("project", 9, "data-glue's .mcp.json") };
+};
+
 async function call(contract: any, input: any) {
   const name = String(contract.name).replace("paseo-mcp.", "");
   calls.push(name);
@@ -219,13 +269,33 @@ async function call(contract: any, input: any) {
       if (patch) Object.assign(paseoConfig, merge(paseoConfig, patch));
       return { ok: true, message: patch ? "Saved. Agents started from now on get it; a running agent keeps the tools it started with." : "Already set that way; nothing was written.", state: paseoState() };
     }
+    case "catalog": return {
+      // ?added: Notion reads as already added (as ikit-notion) in one of the fixture editors and data-glue.
+      cards: catalogCards(input.query ?? "").map((card) => (params.has("added") && card.key === "recommended:notion" ? { ...card, added: { label: `in 1 of ${destinations.length} editors and data-glue`, name: "ikit-notion", editors: [destinations[0]?.id ?? ""], projects: [catalogProjects[0]?.path ?? ""] } } : card)),
+      team: params.has("team") ? { source: "https://raw.githubusercontent.com/you/devstack/main/mcp-catalogue.json", state: "ready", count: 2, refused: [{ id: "ikit-attio", reason: "header Authorization holds what looks like a literal key; use a {PLACEHOLDER} the user fills in" }], fetchedAt: checkedAt, note: "" } : { source: "", state: "off", count: 0, refused: [], fetchedAt: null, note: "" },
+      registry: (input.query ?? "").trim().length >= 2 ? { query: input.query.trim(), state: "ready", fetchedAt: checkedAt, note: "", count: 4 } : { query: "", state: "idle", fetchedAt: null, note: "", count: 0 },
+      projects: catalogProjects,
+    };
+    case "catalog-plan": { const { card: _c, plan: _p, ...out } = catalogPlan(input); return out; }
+    case "catalog-install": {
+      const planned = catalogPlan(input);
+      if (!planned.ok) return { ok: false, message: planned.clash ? `A server called '${input.name}' is already in ${planned.clash.files.join(", ")}. Nothing was written. Use '${planned.clash.suggestion}' instead, or skip it.` : planned.issues[0], written: [], skipped: [], health: null, oauth: false, envToSet: planned.envToSet, budget: planned.budget };
+      return { ok: true, message: `Added '${input.name}' to ${input.scope === "user" ? `${input.targets.length} places` : `${input.projectPath}/.mcp.json`} (backups saved).`, written: input.scope === "user" ? input.targets.map((t: string) => destinations.find((d) => d.id === t)?.label ?? t) : [`${input.projectPath}/.mcp.json`], skipped: [], health: planned.card.entry.auth === "oauth" ? { status: "auth-required", note: "HTTP 401 — OAuth server; sign in through your editor" } : { status: "ok", note: "" }, oauth: planned.card.entry.auth === "oauth", envToSet: planned.envToSet, budget: planned.budget };
+    }
+    case "catalog-team-auth": {
+      if (input.action === "set") teamAuthSet = Boolean(input.value);
+      if (input.action === "clear") teamAuthSet = false;
+      return { set: teamAuthSet, origin: teamAuthSet ? "https://raw.githubusercontent.com" : "" };
+    }
+    case "catalog-entry": return { ok: true, json: JSON.stringify({ id: input.name, name: input.name, publisher: "", transport: "http", url: "https://example.com/mcp", headers: { Authorization: "Bearer {AUTHORIZATION}" }, inputs: [{ id: "AUTHORIZATION", label: "Authorization", secret: true, required: true }], auth: "header", docs: "", verifiedAt: "2026-09-24" }, null, 2), message: "No stored value is in this text: every header and env value is a {PLACEHOLDER}." };
     default: throw new Error(`Fixture has no answer for ${name}`);
   }
 }
 export function useRpc(contract: any) { return useCallback((input: unknown) => call(contract, input), [contract]); }
 export function useWorkspace<T>(_id: string, select: (workspace: { name: string; directory: string }) => T): T { return select({ name: "data-glue", directory: `${HOME}/projects/data-glue` }); }
 export function useAgent<T>(_id: string, select: (agent: { provider: string; model: string | null }) => T): T { return select({ provider: params.get("provider") ?? "codex", model: "gpt-5-codex" }); }
-const settingsValues: Record<string, unknown> = { injectWorkspaceServers: !params.has("inject-off"), providers: ["codex"], skipInlineCredentialServers: true, backgroundChecks: true, intervalMinutes: 10, showComposerPill: true, hideAiRouter: params.has("promo-hidden") };
+const settingsValues: Record<string, unknown> = { injectWorkspaceServers: !params.has("inject-off"), providers: ["codex"], skipInlineCredentialServers: true, backgroundChecks: true, intervalMinutes: 10, showComposerPill: true, hideAiRouter: params.has("promo-hidden"), teamSource: params.has("team") ? "https://raw.githubusercontent.com/you/devstack/main/mcp-catalogue.json" : "", teamHeaderName: params.has("team") ? "Authorization" : "" };
+let teamAuthSet = params.has("team");
 export function useSettings(_definition: unknown) {
   return { status: "ready" as const, values: settingsValues, revision: "fixture", saving: false, saveError: null, async save(values: Record<string, unknown>) { Object.assign(settingsValues, values); return true; }, async reset() { return true; }, async reload() {} };
 }

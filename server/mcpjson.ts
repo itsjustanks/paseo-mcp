@@ -25,7 +25,9 @@ import {
   tomlApply,
   tomlMcpNamesFromText,
   tomlMcpReadOneFromText,
+  tomlKey,
   tomlReadForWrite,
+  tomlString,
   writeTextAtomic,
   TOML_SAFE_NAME,
   type McpDef,
@@ -100,11 +102,15 @@ function tomlScalar(raw: string): unknown {
 }
 
 function tomlScalarText(value: unknown): string | null {
-  if (typeof value === "string") return JSON.stringify(value);
-  if (typeof value === "boolean") return value ? "true" : "false";
-  if (typeof value === "number" && Number.isFinite(value)) return String(value);
-  if (Array.isArray(value) && value.every((item) => typeof item === "string")) {
-    return `[${value.map((item) => JSON.stringify(item)).join(", ")}]`;
+  try {
+    if (typeof value === "string") return tomlString(value);
+    if (typeof value === "boolean") return value ? "true" : "false";
+    if (typeof value === "number" && Number.isFinite(value)) return String(value);
+    if (Array.isArray(value) && value.every((item) => typeof item === "string")) {
+      return `[${value.map((item) => tomlString(item)).join(", ")}]`;
+    }
+  } catch {
+    // A lone surrogate: no TOML file can hold it.
   }
   return null;
 }
@@ -325,7 +331,7 @@ function toNative(
   for (const [key, value] of Object.entries(kept)) {
     if (COMMON_KEYS.has(key)) continue;
     const text = tomlScalarText(value);
-    if (text !== null) extra.push(`${key} = ${text}`);
+    if (text !== null) extra.push(`${tomlKey(key)} = ${text}`);
   }
   if (extra.length > 0) def.extra = extra;
   return { native: { format: "toml-mcp", def }, dropped };

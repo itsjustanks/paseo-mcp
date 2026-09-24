@@ -12,6 +12,7 @@ import {
   handleMcpRename,
   handleMcpSync,
 } from "./server/handlers";
+import { handleMcpCatalog, handleMcpCatalogEntry, handleMcpCatalogInstall, handleMcpCatalogPlan, handleMcpCatalogTeamAuth } from "./server/catalog";
 import { handleMcpAgentServers, handleMcpSetEnabled } from "./server/enabled";
 import { handleMcpHealth, handleMcpHealthCached } from "./server/health";
 import { registerHooks } from "./server/hooks";
@@ -68,6 +69,7 @@ import {
   mcpRawGet,
   mcpRawPut,
 } from "./shared/mcpjson";
+import { catalogSettings, mcpCatalog, mcpCatalogEntry, mcpCatalogInstall, mcpCatalogPlan, mcpCatalogTeamAuth } from "./shared/catalog";
 import { healthSettings, injectionSettings, promoSettings } from "./shared/settings";
 
 /** Slow enough to be worth a line in the daemon log. */
@@ -95,6 +97,7 @@ export default function contribute(server: PluginServerContext) {
   server.registerSettings(injectionSettings);
   server.registerSettings(healthSettings);
   server.registerSettings(promoSettings);
+  server.registerSettings(catalogSettings);
   registerHooks(server);
   handle(mcpMatrix, handleMcpMatrix);
   handle(mcpAdd, handleMcpAdd);
@@ -126,6 +129,11 @@ export default function contribute(server: PluginServerContext) {
   handle(mcpSiblings, handleMcpSiblings);
   handle(mcpPaseoTools, handleMcpPaseoTools);
   handle(mcpSetPaseoTools, handleMcpSetPaseoTools);
+  handle(mcpCatalog, handleMcpCatalog);
+  handle(mcpCatalogPlan, handleMcpCatalogPlan);
+  handle(mcpCatalogInstall, handleMcpCatalogInstall);
+  handle(mcpCatalogEntry, handleMcpCatalogEntry);
+  handle(mcpCatalogTeamAuth, handleMcpCatalogTeamAuth);
 
   runStart();
   return runShutdown;

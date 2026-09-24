@@ -1,7 +1,7 @@
 import type { PluginHandlerContext } from "@getpaseo/plugin/server";
 import { randomBytes } from "node:crypto";
 import { copyFileSafely, writeFileSafely } from "./safe-write";
-import { existsSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
+import { chmodSync, existsSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import type { AuthState } from "../shared/accounts";
@@ -307,8 +307,32 @@ function jsonMcpWrite(path: string, name: string, def: McpDef | null): void {
 }
 
 // toml-mcp: [mcp_servers.<name>] tables. Codex and Grok both use this shape.
-function tomlString(value: string): string {
-  return JSON.stringify(value);
+
+/**
+ * A TOML basic string. JSON's escapes are all TOML escapes, but JSON leaves
+ * U+007F as is, which TOML refuses unescaped, and writes a lone surrogate as
+ * `\ud800`, which TOML refuses at all (a \u escape must be a whole
+ * character). So DEL is escaped here and a lone surrogate is refused: the
+ * file is never written with either.
+ */
+export function tomlString(value: string): string {
+  if (/[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/.test(value)) {
+    throw new Error("a value holds half of a character pair (a lone surrogate), which a TOML file can't hold");
+  }
+  return JSON.stringify(value).replace(/\u007f/g, "\\u007f");
+}
+
+/** A key as written: bare when TOML reads it as that one word, quoted otherwise (a `.` in a bare key nests a table). */
+export function tomlKey(key: string): string {
+  return /^[A-Za-z0-9_-]+$/.test(key) ? key : tomlString(key);
+}
+
+// One `key = value` line: a bare key (dotted too, for the lines kept verbatim) or a quoted one.
+const TOML_PAIR = /^[ \t]*("(?:[^"\\]|\\.)*"|'[^']*'|[A-Za-z0-9_.-]+)\s*=\s*(.+?)\s*$/;
+
+/** A pair's key as TOML reads it: a quoted key unquoted, a bare one as is. */
+function tomlPairKey(raw: string): string | null {
+  return raw.startsWith('"') || raw.startsWith("'") ? tomlUnquote(raw) : raw;
 }
 
 // Table headers may be indented — valid TOML, and missing it once caused a
@@ -374,9 +398,10 @@ export function tomlMcpReadOneFromText(text: string, name: string): McpDef | nul
   const topLines = (subStart === -1 ? bodyLines : bodyLines.slice(0, subStart)).slice(1);
   const extra: string[] = [];
   for (const line of topLines) {
-    const pair = /^[ \t]*([A-Za-z0-9_.-]+)\s*=\s*(.+?)\s*$/.exec(line);
+    const pair = TOML_PAIR.exec(line);
     if (!pair) continue;
-    const [, key, rawValue] = pair;
+    const [, rawKey, rawValue] = pair;
+    const key = tomlPairKey(rawKey);
     if (key === "url" || key === "command") {
       const value = tomlUnquote(rawValue);
       if (value !== null) def[key] = value;
@@ -402,10 +427,12 @@ export function tomlMcpReadOneFromText(text: string, name: string): McpDef | nul
     const record: Record<string, string> = {};
     for (const line of subBody) {
       if (/^[ \t]*\[/.test(line)) break;
-      const pair = /^[ \t]*([A-Za-z0-9_.-]+)\s*=\s*(.+?)\s*$/.exec(line);
+      const pair = TOML_PAIR.exec(line);
       if (!pair) continue;
+      // A bare dotted key is a nested table to TOML, not a header or variable called "a.b".
+      const key = /^[A-Za-z0-9_-]+$/.test(pair[1]) ? pair[1] : pair[1].startsWith('"') || pair[1].startsWith("'") ? tomlUnquote(pair[1]) : null;
       const value = tomlUnquote(pair[2]);
-      if (value !== null) record[pair[1]] = value;
+      if (key !== null && value !== null) record[key] = value;
     }
     if (Object.keys(record).length === 0) continue;
     if (sub === "env") def.env = record;
@@ -471,7 +498,8 @@ export function tomlApply(
     ] as const) {
       if (record && Object.keys(record).length > 0) {
         lines.push(`[mcp_servers.${name}.${sub}]`);
-        for (const [key, value] of Object.entries(record)) lines.push(`${key} = ${tomlString(value)}`);
+        // Always quoted: a header or variable name is data, and `X.Api-Key` bare would nest a table.
+        for (const [key, value] of Object.entries(record)) lines.push(`${tomlString(key)} = ${tomlString(value)}`);
       }
     }
     next = `${next.replace(/\n*$/, "\n")}${lines.join("\n")}\n`;
@@ -790,19 +818,52 @@ export async function handleMcpApply(
  * exist. The rewritten file is read back and must parse.
  */
 export function removeFromProjectFile(path: string, name: string): "removed" | "absent" {
-  if (!existsSync(path)) throw new Error("file does not exist");
-  const config = readJson(path);
+  const changed = editProjectFile(path, {
+    create: false,
+    change: (servers) => {
+      if (!(name in servers)) return false;
+      delete servers[name];
+      return true;
+    },
+    check: (servers) => (name in servers ? "written file still defines the server" : ""),
+  });
+  return changed ? "removed" : "absent";
+}
+
+/**
+ * The one way a project's `.mcp.json` is rewritten. `change` edits its
+ * `mcpServers` in place and says whether anything changed; nothing is written
+ * when it did not. Otherwise: backup, atomic write, read back, then `check`
+ * on what was read ("" when it is right). Every other key in the file is
+ * kept, and an emptied `mcpServers` stays as `{}`: the repo may expect the
+ * file. With `create`, a missing file is made, readable (0644) like any other
+ * file in a repo; an existing file keeps its mode.
+ */
+export function editProjectFile(
+  path: string,
+  { create, change, check }: { create: boolean; change: (servers: Record<string, unknown>) => boolean; check: (servers: Record<string, unknown>) => string },
+): boolean {
+  const existed = existsSync(path);
+  if (!existed && !create) throw new Error("file does not exist");
+  const config = existed ? readJson(path) : {};
   if (config === null) throw new Error("not valid JSON; refusing to overwrite it");
-  const servers = (config.mcpServers as Record<string, McpDef> | undefined) ?? {};
-  if (!(name in servers)) return "absent";
-  delete servers[name];
+  const servers = (config.mcpServers as Record<string, unknown> | undefined) ?? {};
+  if (!change(servers)) return false;
   config.mcpServers = servers;
   backupFile(path);
   writeJsonAtomic(path, config);
+  if (!existed) {
+    try {
+      chmodSync(path, 0o644);
+    } catch {
+      // Mode is cosmetic here; the content check below is what matters.
+    }
+  }
   const after = readJson(path);
   if (after === null) throw new Error("written file does not parse; restore it from the .bak-paseo-mcp copy beside it");
-  if (name in ((after.mcpServers as Record<string, unknown> | undefined) ?? {})) throw new Error("written file still defines the server");
-  return "removed";
+  const problem = check((after.mcpServers as Record<string, unknown> | undefined) ?? {});
+  if (problem) throw new Error(problem);
+  return true;
 }
 
 export async function handleMcpRemove(

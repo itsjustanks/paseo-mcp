@@ -18,6 +18,7 @@ paseo plugin update paseo-mcp
 
 ## What it does
 
+- Adds servers from a catalogue: recommended official servers, your team's own list, and the MCP Registry with trust badges (see [Add from catalogue](#add-from-catalogue)).
 - Shows user-level MCP servers across Claude Code, Codex, Kimi Code, and Grok, one card per server with its editors, health, tools and sign-in state.
 - Adds, edits, renames, imports, and exports definitions with masked secrets; removes a server from one editor, all editors, or everywhere including project `.mcp.json` files.
 - Turns servers on or off per workspace from the workspace and agent panels, where the editor has such a switch.
@@ -29,6 +30,91 @@ paseo plugin update paseo-mcp
 - Shows and switches Paseo's own built-in tools (the `mcp__paseo__*` tools the daemon adds to agents): for the whole host, per provider, and per tool.
 - Syncs MCP definitions and Claude project trust to discovered account directories without copying OAuth grants.
 - Keeps backups before config writes and preserves destination-specific credentials.
+
+## Add from catalogue
+
+**Servers → Add server** opens a gallery. Search it, filter by category, and press **Add** on a card; **Add by hand**
+keeps the old form. Each card says who publishes it, whether it is **Official**, **Team** or **Community**, whether it
+is **Remote** or **Runs locally**, and whether it signs in with **OAuth**, needs a **Key**, or has **No auth**.
+
+| Shelf | Where it comes from |
+| --- | --- |
+| Recommended | 31 official servers shipped with the plugin (`shared/catalog-curated.ts`), each URL copied from the vendor's docs, which the card links to |
+| Team | A JSON file you point it at: an https URL (optionally with one header, for a private repo) or a path on the host. Set it under **Add a team catalogue** at the bottom of the gallery. The header's value is write-only: the host keeps it in `$PASEO_HOME/plugin-settings/paseo-mcp/team-auth.json` (0600), bound to the site of the address it was set for, and never sends it back to the app. It goes only to that site; if the address moves to another site, the value is deleted and you set it again |
+| MCP Registry | A search of `registry.modelcontextprotocol.io` once you type two letters, latest versions only, cached a day per search. Only remote servers are added in one click. A server that only ships a package (npm, PyPI, an image) is shown, marked "Runs code on this server", with its **Repository** and **Add by hand** (the form opens with its name filled in, nothing else) |
+
+Anyone can publish to the registry. **Official** is kept for the Recommended shelf and for a registry entry whose every
+address is a recommended one, since those addresses were checked against the vendor's own docs. Every other registry
+entry is **Community**. Its card shows the namespace as plain text ("published as supabase.com", "published as
+github.com/<user>") with one line: the registry checks that the publisher owns that domain or GitHub account, not who
+runs the service. `com.supabase/mcp` at `mcp.supabase.com/mcp` is Official; the same name at any other address is
+Community. Community cards say what that costs:
+"A third party relays your traffic and any key you give it", or "Runs code on this server" for a package. A registry
+server that lists no headers reads "Sign-in unclear": the registry can't tell OAuth from no sign-in, so the card says to use
+Connect OAuth if the server asks once it is added.
+
+Adding asks where: **My editors** (the same editor configs as Apply) or **One project** (its `.mcp.json`). It shows the
+exact change per file with secrets masked, and writes nothing until you press Add. A server that runs locally shows the
+exact command line on its own line first (`npx @playwright/mcp@latest`). The install is bound to that preview: if the
+entry or the change moved since you read it (a team file edited in between), nothing is written and the sheet asks you to
+review again. Writes use the same writers as Import
+(backup, atomic write, read back). A name that is already taken is never replaced; the sheet offers the next free name or
+Skip. Afterwards it runs a health check, offers **Open server to connect** for an OAuth server, and says what the server
+adds to the context budget.
+
+A card whose server is already defined somewhere says **Added** and where ("in 3 of 4 editors", "in data-glue"). It
+matches the address or the package and its ecosystem (npm, PyPI, OCI), not the name, so an `ikit-notion` at
+`mcp.notion.com` counts as Notion, and an npm package never counts as a PyPI one of the same name. Its button reads
+**Add to more** and starts with only the missing places picked.
+
+A project's `.mcp.json` is usually in git, so a key never goes into it. Claude Code expands `${VAR}` in `.mcp.json`
+(in `command`, `args`, `env`, `url` and `headers`), so a secret becomes a `${VAR}` reference and the sheet names the
+variable to set where Claude Code starts (for Paseo agents, the daemon's environment or the provider's env in Paseo's
+settings); if one is already set on this host, the sheet says so (by name, never the value). The plugin names every
+variable itself, so an entry can't choose which of your variables is sent to its server: `MCP_<ID>_<INPUT>` for a
+recommended entry (for example `MCP_HEROUI_PRO_HEROUI_PERSONAL_TOKEN`), and `MCP_TEAM__<ID>__<HASH6>__<INPUT>` or
+`MCP_REG__…` for a team or registry entry, where HASH6 comes from the SHA-256 of its address or package, so it can't reuse
+a recommended entry's variable. A name Claude Code uses itself (`MCP_CLIENT_SECRET`, `MCP_TIMEOUT` …) is refused.
+Inputs are secret by default: only one named on a short list (region, project, workspace, org, team, site, host, port,
+database, schema, env, locale, timezone, mode) is written as typed, and not even then when it sits in a header or env
+line named otherwise, anywhere in a team or registry entry's address or arguments, or when the value looks like a
+credential (`postgres://user:pass@…`, `sk-…`, `ghp_…`, a Slack webhook). Codex does not read `.mcp.json`, and **Add project servers to agents** passes the reference on unexpanded.
+
+A team file is a list of entries, or `{ "entries": [ … ] }`:
+
+```json
+[
+  {
+    "id": "team-n8n",
+    "name": "Team n8n",
+    "publisher": "Your team",
+    "description": "Our workflows as tools.",
+    "category": "automation",
+    "transport": "http",
+    "url": "https://n8n.example.com/mcp/team",
+    "headers": { "Authorization": "Bearer {N8N_TOKEN}" },
+    "inputs": [{ "id": "N8N_TOKEN", "label": "n8n token", "secret": true }],
+    "auth": "header",
+    "docs": "https://wiki.example.com/n8n-mcp"
+  }
+]
+```
+
+`transport` is `http` (with `url` and `headers`) or `stdio` (with `command`, `args` and `env`); `auth` is `oauth`,
+`header`, `env` or `none`; values the user fills in are `{INPUT}` placeholders declared in `inputs` (secret and required
+unless they say otherwise). Addresses must be https. An entry holding a literal key, a password in its URL, a `${…}`
+reference, an undeclared placeholder, a control character, or a header name with a `.` is refused and listed with the
+reason. A `stdio` entry that runs a package through `npx`, `bunx`, `pnpx`, `npm exec`, `uvx` or `pipx run` must name it
+plainly with an exact version (`acme-mcp@1.2.3`, `mcp-server-fetch==1.0.0`): not `latest`, a range, `*`, an address or
+no version, and no runner flag that picks another source or runs a shell command (`-p`, `--registry`, `--index-url`,
+`--with`, `-c`, `--call`). Its `env` may not set what changes how the runner starts: `NODE_OPTIONS`, `NPM_CONFIG_*`,
+`UV_*`, `PIP_*`, `PYTHON*`, `PATH`, `LD_*`, `DYLD_*`, `HOME`, `SHELL`, or a name the plugin reserves (`AWS_*`,
+`ANTHROPIC_*`, `HTTPS_PROXY` …). Names, publishers, descriptions and labels are shown without bidi controls, zero-width
+or control characters. An `envVar` on an input is ignored. The file must be under 1 MB. **Copy as catalogue entry** on any server card writes that server in this shape, templated so no
+stored value is in it: of an address only the scheme and host stay (a host's first label becomes `{HOST_PREFIX}` unless
+it is a plain word like `mcp`; a path that is not plain lowercase words becomes `{PATH}`; query keys become `PARAM_1…n`
+with their values as inputs); every header and env value is a placeholder; of a command, only the command, its package
+and flag names stay.
 
 ## Add project servers to agents
 
