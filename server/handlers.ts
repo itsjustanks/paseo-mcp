@@ -1,5 +1,6 @@
 import type { PluginHandlerContext } from "@getpaseo/plugin/server";
-import { copyFileSync, existsSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { copyFileSafely, writeFileSafely } from "./safe-write";
+import { existsSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import type { AuthState } from "../shared/accounts";
@@ -76,7 +77,7 @@ const BACKUP_KEEP = 20;
 export function backupFile(path: string): void {
   if (!existsSync(path)) return;
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-  copyFileSync(path, `${path}.bak-paseo-mcp-${stamp}`);
+  copyFileSafely(path, `${path}.bak-paseo-mcp-${stamp}`);
   // Keep the most recent few so config dirs do not fill with backups. The count
   // is per file and generous on purpose: applying one server to seven
   // destinations is a single user action that writes seven files, and a tighter
@@ -100,10 +101,7 @@ export function backupFile(path: string): void {
  * an existing 0600 config is never widened by being edited here.
  */
 export function writeTextAtomic(path: string, text: string): void {
-  const mode = existsSync(path) ? statSync(path).mode & 0o777 : 0o600;
-  const tmp = `${path}.tmp-paseo-mcp`;
-  writeFileSync(tmp, text, { mode });
-  renameSync(tmp, path);
+  writeFileSafely(path, text);
   forgetFile(path);
 }
 

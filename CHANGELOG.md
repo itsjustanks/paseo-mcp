@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.11.4 — 2026-09-24
+
+Security fix. A project checkout could make paseo-mcp overwrite another file the user owns, such as `~/.claude/settings.json`, and so run commands through its hooks.
+
+### Fixed
+- Every write replaced the file through a temporary file with a fixed name, `<file>.tmp-paseo-mcp`. A repository could commit a symbolic link with that name next to its `.mcp.json`. `writeFileSync` followed the link, `renameSync` moved it into place, and the content, including every other key the repository's `.mcp.json` carried such as `hooks`, landed in the link's target. That happened on Remove from this project or everywhere, which writes every registered project's `.mcp.json`. A committed `.mcp.json` that was itself a link was written through in the same way, and a backup copied its target's content into the checkout.
+- All writes now go through one writer (`server/safe-write.ts`):
+  - The temporary file has a random name and is created with `O_CREAT | O_EXCL | O_NOFOLLOW`, so nothing planted can catch the write.
+  - A target that is a symbolic link is refused, with a message naming it.
+  - A backup refuses a linked source and never overwrites an existing file (`COPYFILE_EXCL`).
+  - This covers editor configs, project `.mcp.json` files, `~/.claude.json` switches, exports to Downloads and the saved report cache.
+- If one of your own editor configs is a symbolic link (a dotfiles setup, say), paseo-mcp now says so and leaves it alone. Before, it replaced the link with a regular file.
+- Found by a security review of the upcoming Add from catalogue feature, which would have made adding to a fresh checkout the normal path.
+
+### Tests
+216 tests (was 212). `tests/safe-write.test.ts` replays the attack with a real symlink. Against 0.11.3, three of its four tests fail: the target gets rewritten, a linked `.mcp.json` is written through, and a backup copies the target into the checkout.
+
 ## 0.11.3 — 2026-09-24
 
 The first MCP panel open after the plugin starts answers at once. It used to wait 6 to 13 seconds while every server was probed; on a daemon with 36 servers the log showed `paseo-mcp.health took 8.2 s` and `paseo-mcp.tools took 13.4 s` after each reload.

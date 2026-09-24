@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { writeFileSafely } from "./safe-write";
+import { mkdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { z } from "zod";
 import {
@@ -142,9 +143,7 @@ function write(path: string): boolean {
   if (!clientSeenWithin()) return false;
   try {
     mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-    const tmp = `${path}.tmp-${process.pid}`;
-    writeFileSync(tmp, serializeReports(current), { mode: 0o600 });
-    renameSync(tmp, path);
+    writeFileSafely(path, serializeReports(current), 0o600);
     return true;
   } catch (error) {
     if (!warned) console.warn(`[paseo-mcp] could not save the health and tools cache to ${path}: ${error instanceof Error ? error.message : String(error)}`);

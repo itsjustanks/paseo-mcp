@@ -1,7 +1,8 @@
 import type { PluginHandlerContext } from "@getpaseo/plugin/server";
+import { writeFileSafely } from "./safe-write";
 import { spawn, type ChildProcess } from "node:child_process";
 import { request as httpRequest } from "node:http";
-import { chmodSync, existsSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync } from "node:fs";
 import { homedir, hostname } from "node:os";
 import { basename, delimiter, dirname, join, resolve, sep } from "node:path";
 import type { Destination } from "../shared/contracts";
@@ -1071,9 +1072,7 @@ export async function handleMcpExportFile({ text, filename }: { text: string; fi
   if (!path.startsWith(`${HOME}${sep}`)) return { ok: false, path: "", message: "refusing to write outside your home directory" };
   try {
     mkdirSync(directory, { recursive: true });
-    const temporary = `${path}.tmp-paseo-mcp`;
-    writeFileSync(temporary, text, { mode: 0o600 });
-    renameSync(temporary, path);
+    writeFileSafely(path, text, 0o600);
     chmodSync(path, 0o600); // an existing file keeps its old mode through a rename
     return { ok: true, path, message: `wrote ${path} (readable only by you)` };
   } catch (error) {
