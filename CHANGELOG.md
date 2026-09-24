@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.11.5 — 2026-09-24
+
+Fixes a regression in 0.11.4, which was published but never deployed to a daemon.
+
+### Fixed
+- 0.11.4 made backups refuse to overwrite (`COPYFILE_EXCL`), but backup names were only unique to the millisecond. Two writes to the same file within one millisecond failed the second write with `EEXIST`. The test suite hit it in about half its runs. Backup names now carry a random suffix, so the no-overwrite rule holds without the clash.
+
+### Tests
+217 tests (was 216). Twenty-five backups of one file in a tight loop all succeed and are pruned to twenty. The full suite passed 8 runs in a row. 0.11.4 failed in 3 of 6 runs of `tests/enabled-write.test.ts`, and 0.11.3 in none.
+
 ## 0.11.4 — 2026-09-24
 
 Security fix. A project checkout could make paseo-mcp overwrite another file the user owns, such as `~/.claude/settings.json`, and so run commands through its hooks.

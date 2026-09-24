@@ -1,4 +1,5 @@
 import type { PluginHandlerContext } from "@getpaseo/plugin/server";
+import { randomBytes } from "node:crypto";
 import { copyFileSafely, writeFileSafely } from "./safe-write";
 import { existsSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import { homedir } from "node:os";
@@ -77,7 +78,9 @@ const BACKUP_KEEP = 20;
 export function backupFile(path: string): void {
   if (!existsSync(path)) return;
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-  copyFileSafely(path, `${path}.bak-paseo-mcp-${stamp}`);
+  // A random suffix keeps two backups in the same millisecond apart: the copy
+  // never overwrites (COPYFILE_EXCL), so a repeated name would fail the write.
+  copyFileSafely(path, `${path}.bak-paseo-mcp-${stamp}-${randomBytes(3).toString("hex")}`);
   // Keep the most recent few so config dirs do not fill with backups. The count
   // is per file and generous on purpose: applying one server to seven
   // destinations is a single user action that writes seven files, and a tighter

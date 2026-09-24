@@ -58,3 +58,12 @@ test("a new file is private, an existing file keeps its mode", () => {
   writeTextAtomic(shared, '{"a":1}\n');
   assert.equal(lstatSync(shared).mode & 0o777, 0o644);
 });
+
+test("two backups of one file in the same millisecond both succeed (no overwrite, no clash)", () => {
+  const { repo } = scene("same-ms");
+  const file = join(repo, "config.json");
+  writeFileSync(file, "{}\n");
+  for (let i = 0; i < 25; i += 1) backupFile(file);
+  const backups = readdirSync(repo).filter((f) => f.startsWith("config.json.bak-paseo-mcp-"));
+  assert.equal(backups.length, 20, "all written, then pruned to the newest 20");
+});
