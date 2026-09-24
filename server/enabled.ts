@@ -2,7 +2,8 @@ import type { PluginHandlerContext } from "@getpaseo/plugin/server";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { loadFor, scopeForProvider, type LoadedServer } from "../shared/budget";
-import type { AgentServer, McpAuthAccount } from "../shared/contracts";
+import { unexplainedServers } from "../shared/agent-record";
+import type { AgentServer, McpAuthAccount, PluginServer } from "../shared/contracts";
 import {
   EMPTY_INJECTION_STORE,
   SWITCH_EFFECT_NOTE,
@@ -18,6 +19,7 @@ import {
   type ClaudeProjectEntry,
   type InjectionDisabledStore,
 } from "../shared/enabled";
+import { addedToolCount, readAgentServers } from "./agent-record";
 import { readJsonCached } from "./files";
 import {
   backupFile,
@@ -115,7 +117,7 @@ function projectEntry(configPath: string, directory: string): ClaudeProjectEntry
 }
 
 export async function handleMcpAgentServers(
-  { workspaceId, providerId }: { workspaceId: string; providerId: string },
+  { workspaceId, providerId, agentId }: { workspaceId: string; providerId: string; agentId?: string },
   { paseo }: PluginHandlerContext,
 ) {
   const workspace = await findWorkspace(paseo, workspaceId);
@@ -154,6 +156,17 @@ export async function handleMcpAgentServers(
     };
   });
 
+  // What the agent was actually started with, after every plugin's hook:
+  // anything no editor config above explains is listed as added when the agent was created (a plugin hook or the creator).
+  const recorded = agentId ? readAgentServers(agentId, candidates) : null;
+  const explained = new Set(load.servers.map((entry) => entry.name));
+  const pluginServers: PluginServer[] | undefined = recorded
+    ? unexplainedServers(recorded, explained).map((entry) => {
+        const count = addedToolCount(entry);
+        return { name: entry.name, transport: entry.transport, ...(count.tools !== undefined ? { tools: count.tools } : {}), note: count.note };
+      })
+    : undefined;
+
   // Only this agent's own account, and only its own Codex check (answered
   // from memory; a background refresh starts when the last answer is old).
   let account: McpAuthAccount | null = null;
@@ -175,6 +188,7 @@ export async function handleMcpAgentServers(
       ? { paseoTools: { tools: paseoTools.tools[providerId] ?? 0, blocker: paseoTools.blocker, asOf: paseoTools.asOf, ...(paseoTools.source ? { source: paseoTools.source } : {}) } }
       : {}),
     ...(toolSearch ? { toolSearch } : {}),
+    ...(pluginServers ? { pluginServers } : {}),
   };
 }
 

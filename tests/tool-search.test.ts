@@ -6,6 +6,7 @@ import test, { after } from "node:test";
 import { BUDGET_ATTENTION, BUDGET_PROBLEM, costProfile, loadFor, loadsForWorkspace, type ProfileScope, type WorkspaceProfile } from "../shared/budget";
 import {
   AI_ROUTER_REASON,
+  MANAGED_OVERRIDE_MIN_VERSION,
   TOOL_SEARCH_ON_LINE,
   aiRouterRoutesAgents,
   baseCli,
@@ -18,7 +19,7 @@ import {
 } from "../shared/tool-search";
 import { forgetAllFiles } from "../server/files";
 import { resetPaseoToolsCache } from "../server/paseo-tools";
-import { aiRouterSettingsPath, toolSearchVerdicts } from "../server/tool-search";
+import { aiRouterSettingsPath, managedSettingsDir, managedSettingsEnv, toolSearchVerdicts } from "../server/tool-search";
 
 const claude = (inputs: Omit<Parameters<typeof toolSearch>[1], "base"> = {}, id = "claude") => toolSearch(id, { base: "claude", ...inputs });
 
@@ -127,6 +128,68 @@ test("Codex is unknown, other CLIs off, an unknown CLI unknown", () => {
   assert.equal(toolSearch("mystery", { base: "" }).state, "unknown");
 });
 
+// ------------------------------------------------------------------ managed settings (0.11.2)
+
+const MANAGED = "Managed settings (/etc/claude-code/managed-settings.json)";
+const managedOn = { label: MANAGED, env: { ENABLE_TOOL_SEARCH: "true" } };
+
+test("managed ENABLE_TOOL_SEARCH keeps it on under the betas flag, naming the file and the minimum version", () => {
+  const verdict = claude({ daemonEnv: { CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS: "1", ENABLE_TOOL_SEARCH: "false" }, managedEnv: [managedOn] });
+  assert.equal(verdict.state, "on");
+  assert.equal(verdict.managed, true);
+  assert.equal(
+    verdict.reason,
+    `${MANAGED} keep tool search on, even with CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS set (this needs Claude Code v${MANAGED_OVERRIDE_MIN_VERSION} or later)`,
+  );
+  assert.equal(MANAGED_OVERRIDE_MIN_VERSION, "2.1.227");
+  const plain = claude({ managedEnv: [{ label: MANAGED, env: { ENABLE_TOOL_SEARCH: "auto" } }] });
+  assert.equal(plain.reason, `${MANAGED} keep tool search on`, "no version clause without the betas flag");
+  const proxy = claude({ daemonEnv: { ANTHROPIC_BASE_URL: "https://proxy.example.com" }, managedEnv: [managedOn] });
+  assert.equal(proxy.state, "on", "overrides a custom base URL too");
+});
+
+test("managed ENABLE_TOOL_SEARCH=false turns it off, over a user or project value", () => {
+  const verdict = claude({ settingsEnv: [{ label: "The project's .claude/settings.local.json", env: { ENABLE_TOOL_SEARCH: "true" } }], managedEnv: [{ label: MANAGED, env: { ENABLE_TOOL_SEARCH: "false" } }] });
+  assert.deepEqual(verdict, { state: "off", reason: `${MANAGED} set ENABLE_TOOL_SEARCH=false`, cli: "claude", managed: true });
+  const high = claude({ managedEnv: [{ label: MANAGED, env: { ENABLE_TOOL_SEARCH: "auto:50" } }] });
+  assert.equal(high.state, "unknown");
+  assert.match(high.reason, /set ENABLE_TOOL_SEARCH=auto:50, which defers tools only once they fill 50%/);
+});
+
+test("managed settings on plus a routed AI Router session: on", () => {
+  for (const [id, routes] of [["claude", true], ["ai-router", false]] as const) {
+    const verdict = claude({ aiRouterRoutes: routes, managedEnv: [managedOn] }, id);
+    assert.equal(verdict.state, "on", id);
+    assert.match(verdict.reason, /even with CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS set \(this needs Claude Code v2\.1\.227 or later\)$/);
+  }
+  assert.equal(claude({ aiRouterRoutes: true }).state, "off", "without managed settings routing still turns it off");
+});
+
+test("under the betas flag a cloud provider ignores the managed override, so tool search stays off", () => {
+  for (const flag of ["CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_MANTLE", "CLAUDE_CODE_USE_ANTHROPIC_AWS", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY"]) {
+    const verdict = claude({ daemonEnv: { [flag]: "1", CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS: "1" }, managedEnv: [managedOn] });
+    assert.equal(verdict.state, "off", flag);
+    assert.notEqual(verdict.managed, true, `${flag}: the managed file did not decide it`);
+  }
+  // Without the betas flag, Bedrock with managed on is Claude Code's normal deferral.
+  assert.equal(claude({ daemonEnv: { CLAUDE_CODE_USE_BEDROCK: "1" }, managedEnv: [managedOn] }).state, "on");
+});
+
+test("managed settings: no layer, an undocumented value, a cloud provider, other CLIs", () => {
+  assert.equal(claude({ daemonEnv: { CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS: "1" }, managedEnv: [] }).state, "off", "missing: no layer");
+  assert.equal(claude({ daemonEnv: { CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS: "1" }, managedEnv: [{ label: MANAGED, env: { ENABLE_TOOL_SEARCH: "maybe" } }] }).state, "off", "an undocumented value is ignored");
+  const vertex = claude({ daemonEnv: { CLAUDE_CODE_USE_VERTEX: "1" }, managedEnv: [managedOn] });
+  assert.equal(vertex.state, "unknown", "the override has no effect on a cloud provider");
+  assert.equal(toolSearch("codex", { base: "codex", managedEnv: [managedOn] }).state, "unknown", "Claude-based providers only");
+  const emptied = claude({ daemonEnv: { ENABLE_TOOL_SEARCH: "false" }, managedEnv: [{ label: MANAGED, env: { ENABLE_TOOL_SEARCH: "" } }] });
+  assert.equal(emptied.state, "on", "an empty managed value cancels one set lower down");
+});
+
+test("the on line names managed settings", () => {
+  const verdict = claude({ managedEnv: [managedOn] });
+  assert.equal(toolSearchLine(verdict, 76), `${MANAGED} keep tool search on. ${TOOL_SEARCH_ON_LINE}`);
+});
+
 test("first-party host means api.anthropic.com only", () => {
   assert.equal(isFirstPartyBaseUrl("https://api.anthropic.com/"), true);
   assert.equal(isFirstPartyBaseUrl("https://api.anthropic.com.evil.example"), false);
@@ -168,8 +231,10 @@ async function verdicts(providers: Record<string, unknown>, env: Record<string, 
   resetPaseoToolsCache();
   forgetAllFiles();
   const ids = [{ id: "claude", base: "claude" }, { id: "claude-work", base: "claude" }, { id: "codex", base: "codex" }];
-  return toolSearchVerdicts(fakePaseo(providers), ids, { daemonEnv: env, home, userHome, directory });
+  return toolSearchVerdicts(fakePaseo(providers), ids, { daemonEnv: env, home, userHome, directory, managedDir });
 }
+
+const managedDir = join(home, "managed");
 
 function writeJson(path: string, value: unknown) {
   mkdirSync(join(path, ".."), { recursive: true });
@@ -241,6 +306,53 @@ test("host: project and local settings count only where the workspace is known",
   writeJson(join(workspace, ".claude", "settings.local.json"), "][");
   assert.equal((await verdicts({}, {}, workspace))?.claude?.state, "off", "a broken local file is no layer");
   rmSync(workspace, { recursive: true, force: true });
+});
+
+test("host: managed settings file and drop-ins, above everything, missing or broken is no layer", async () => {
+  const betas = { CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS: "1" };
+  assert.equal((await verdicts({}, betas))?.claude?.state, "off", "missing: no layer");
+  const file = join(managedDir, "managed-settings.json");
+  writeJson(file, { env: { ENABLE_TOOL_SEARCH: "true" } });
+  const on = await verdicts({}, betas);
+  assert.equal(on?.claude?.state, "on");
+  assert.match(on!.claude!.reason, new RegExp(`^Managed settings \\(${file.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\) keep tool search on, even with`));
+  assert.equal(on?.codex?.state, "unknown", "not read for Codex");
+
+  writeJson(join(managedDir, "managed-settings.d", "10-a.json"), { env: { ENABLE_TOOL_SEARCH: "auto" } });
+  writeJson(join(managedDir, "managed-settings.d", "20-b.json"), { env: { ENABLE_TOOL_SEARCH: "false" } });
+  writeJson(join(managedDir, "managed-settings.d", ".30-hidden.json"), { env: { ENABLE_TOOL_SEARCH: "true" } });
+  writeJson(join(managedDir, "managed-settings.d", "40-notes.txt"), { env: { ENABLE_TOOL_SEARCH: "true" } });
+  const dropIns = await verdicts({}, betas);
+  assert.equal(dropIns?.claude?.state, "off", "drop-ins merge after the file, alphabetically; hidden and non-.json files skipped");
+  assert.match(dropIns!.claude!.reason, /managed-settings\.d\/20-b\.json\) set ENABLE_TOOL_SEARCH=false$/);
+  rmSync(join(managedDir, "managed-settings.d"), { recursive: true, force: true });
+
+  writeJson(file, "{broken");
+  assert.equal((await verdicts({}, betas))?.claude?.state, "off", "broken: no layer");
+  rmSync(managedDir, { recursive: true, force: true });
+});
+
+test("host: managed settings with AI Router routing the built-in claude provider", async () => {
+  const path = aiRouterSettingsPath(home);
+  writeJson(path, { version: 1, values: { routeAgents: true } });
+  writeJson(join(managedDir, "managed-settings.json"), { env: { ENABLE_TOOL_SEARCH: "true" } });
+  const result = await verdicts({});
+  assert.equal(result?.claude?.state, "on");
+  assert.equal(result?.claude?.managed, true);
+  rmSync(path);
+  rmSync(managedDir, { recursive: true, force: true });
+});
+
+test("host: the managed settings directory per platform", () => {
+  assert.equal(managedSettingsDir("darwin"), "/Library/Application Support/ClaudeCode");
+  assert.equal(managedSettingsDir("linux"), "/etc/claude-code");
+  assert.equal(managedSettingsDir("win32"), "C:\\Program Files\\ClaudeCode");
+  // The macOS path as a real layout: a directory with a space in its name.
+  const mac = join(home, "Library", "Application Support", "ClaudeCode");
+  writeJson(join(mac, "managed-settings.json"), { env: { ENABLE_TOOL_SEARCH: "true" } });
+  forgetAllFiles();
+  assert.deepEqual(managedSettingsEnv(mac), [{ label: `Managed settings (${join(mac, "managed-settings.json")})`, env: { ENABLE_TOOL_SEARCH: "true" } }]);
+  rmSync(join(home, "Library"), { recursive: true, force: true });
 });
 
 // ------------------------------------------------------------------ budget

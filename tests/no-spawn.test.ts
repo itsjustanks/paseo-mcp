@@ -28,6 +28,15 @@ for (const email of ["one@example.com", "two@example.com"]) {
   writeFileSync(join(dir, "auth.json"), JSON.stringify({ tokens: { id_token: idToken } }));
 }
 writeFileSync(join(project, ".mcp.json"), JSON.stringify({ mcpServers: { tool: { command: "node", args: [] } } }));
+// The daemon's record of an agent after every plugin hook ran: the project's
+// server (explained by .mcp.json), one a plugin added, and an HTTP one whose
+// background tool probe hits a closed port.
+const agentDir = join(home, ".paseo", "agents", project.replace(/^\//, "").replace(/\//g, "-"));
+mkdirSync(agentDir, { recursive: true });
+writeFileSync(
+  join(agentDir, "agent-1.json"),
+  JSON.stringify({ id: "agent-1", config: { mcpServers: { tool: { type: "stdio", command: "node" }, "shared-browser": { type: "stdio", command: "node" }, remote: { type: "http", url: "http://127.0.0.1:9/mcp" } } } }),
+);
 writeFileSync(
   join(home, ".local", "bin", "codex"),
   `#!/bin/sh\necho "$CODEX_HOME" >> "${codexLog}"\necho "WARNING: failed to clean up stale arg0 temp dirs: Permission denied (os error 13)" >&2\necho '[{"name":"docs","auth_status":"not_logged_in"}]'\n`,
@@ -87,6 +96,8 @@ test("panel reads start no process at all", async () => {
   for (let round = 0; round < 10; round += 1) {
     await handleMcpWorkspace({ workspaceId: "ws" }, context);
     await handleMcpAgentServers({ workspaceId: "ws", providerId: "claude" }, context);
+    const agent = await handleMcpAgentServers({ workspaceId: "ws", providerId: "claude", agentId: "agent-1" }, context);
+    assert.deepEqual(agent.pluginServers?.map((entry) => `${entry.name}:${entry.transport}`), ["remote:http", "shared-browser:stdio"], "the .mcp.json server is explained; the others are a plugin's");
     await handleMcpMatrix({} as never, context);
     await handleMcpHealthCached({} as never, context);
     await handleMcpToolsCached({} as never, context);

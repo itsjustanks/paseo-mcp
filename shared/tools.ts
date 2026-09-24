@@ -10,7 +10,7 @@
  * either what the server said or absent — never guessed.
  */
 import type { McpServerTools, McpTool, McpToolsKind, McpToolsReport } from "./contracts";
-import { INITIALIZE_REQUEST, PROBE_TIMEOUT_MS, classifyProbe, describeError, parseJsonRpc, redactNote } from "./health";
+import { INITIALIZE_REQUEST, PROBE_TIMEOUT_MS, classifyProbe, describeError, fetchSameOrigin, parseJsonRpc, redactNote } from "./health";
 
 /** Servers asked at once during a refresh; 29 HTTP servers in 5 batches, not 29 sockets. */
 export const TOOLS_CONCURRENCY = 6;
@@ -161,7 +161,7 @@ async function post(
   signal: AbortSignal,
 ): Promise<RpcReply> {
   try {
-    const response = await fetchImpl(url, {
+    const response = await fetchSameOrigin(fetchImpl, url, {
       method: "POST",
       headers: {
         "content-type": "application/json",
@@ -171,7 +171,6 @@ async function post(
       },
       body: JSON.stringify(request),
       signal,
-      redirect: "follow",
     });
     const contentType = response.headers.get("content-type") ?? "";
     if (response.status < 200 || response.status >= 300) {
@@ -215,6 +214,9 @@ function fromHttp(reply: Extract<RpcReply, { kind: "http" | "timeout" | "error" 
   // HTML is a wrong URL path, not an MCP endpoint that declined.
   if (reply.code >= 200 && reply.code < 300 && /text\/html/i.test(reply.contentType)) {
     return unavailable("unavailable", `answered a web page, not MCP (HTTP ${reply.code}); check the URL path`);
+  }
+  if (reply.code >= 300 && reply.code < 400) {
+    return unavailable("unavailable", `redirects to another address (HTTP ${reply.code}); not followed, so this server's headers stay with it`);
   }
   const verdict = classifyProbe({ kind: "response", code: reply.code, body: reply.body, contentType: reply.contentType });
   return unavailable("unavailable", verdict.status === "ok" ? `reachable, but did not answer JSON-RPC (HTTP ${reply.code})` : verdict.note);

@@ -1,4 +1,4 @@
-import { readFileSync, statSync } from "node:fs";
+import { readFileSync, readdirSync, statSync } from "node:fs";
 
 /**
  * Read-only views of config files, re-read only when the file changes.
@@ -21,6 +21,7 @@ type JsonEntry = { stamp: Stamp; value: unknown; parsedAt: number };
 
 const texts = new Map<string, TextEntry>();
 const jsons = new Map<string, JsonEntry>();
+const listings = new Map<string, { stamp: Stamp; names: string[] }>();
 
 /** A file that fails to parse right after a good read is most likely mid-write; keep the good copy this long. */
 export const PARSE_GRACE_MS = 60_000;
@@ -80,6 +81,29 @@ export function readJsonCached(path: string, now = Date.now()): unknown {
   }
 }
 
+/**
+ * A directory's entry names, sorted, or [] when it is missing or unreadable.
+ * Re-read only when the directory's stamp changes (adding, removing or
+ * renaming an entry changes its mtime).
+ */
+export function listDirCached(path: string): string[] {
+  const stamp = fileStamp(path);
+  if (stamp === "missing") {
+    listings.delete(path);
+    return [];
+  }
+  const hit = listings.get(path);
+  if (hit && hit.stamp === stamp) return hit.names;
+  try {
+    const names = readdirSync(path).sort();
+    listings.set(path, { stamp, names });
+    return names;
+  } catch {
+    listings.delete(path);
+    return [];
+  }
+}
+
 /** A private copy of the parsed JSON, safe to change. */
 export function readJsonCopy<T = unknown>(path: string): T | null {
   const value = readJsonCached(path);
@@ -96,4 +120,5 @@ export function forgetFile(path: string): void {
 export function forgetAllFiles(): void {
   texts.clear();
   jsons.clear();
+  listings.clear();
 }

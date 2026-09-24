@@ -152,6 +152,34 @@ export function redactNote(note: string, url: string, headers: Record<string, st
 
 type FetchLike = (input: string, init: RequestInit) => Promise<Response>;
 
+const MAX_SAME_ORIGIN_REDIRECTS = 3;
+
+/**
+ * POST with the configured headers, following a redirect only while it stays
+ * on the same origin (scheme, host and port). fetch's own `redirect: "follow"`
+ * drops `Authorization` on a cross-origin hop but keeps custom headers such as
+ * `X-Api-Key`, so a server that redirected elsewhere would hand its token to
+ * another host. A cross-origin redirect is returned as-is (a 3xx the callers
+ * read as "reachable") and never followed.
+ */
+export async function fetchSameOrigin(fetchImpl: FetchLike, url: string, init: RequestInit): Promise<Response> {
+  let current = url;
+  for (let hop = 0; ; hop += 1) {
+    const response = await fetchImpl(current, { ...init, redirect: "manual" });
+    const location = response.status >= 300 && response.status < 400 ? response.headers.get("location") : null;
+    if (!location || hop >= MAX_SAME_ORIGIN_REDIRECTS) return response;
+    let next: URL;
+    try {
+      next = new URL(location, current);
+    } catch {
+      return response;
+    }
+    if (next.origin !== new URL(current).origin) return response;
+    await response.body?.cancel().catch(() => undefined);
+    current = next.href;
+  }
+}
+
 /**
  * Ask the endpoint to initialize and classify the answer. The configured URL is
  * sent intact — a token in the query string is part of how the server
@@ -170,7 +198,7 @@ export async function probeMcp(
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   let outcome: ProbeOutcome;
   try {
-    const response = await fetchImpl(url, {
+    const response = await fetchSameOrigin(fetchImpl, url, {
       method: "POST",
       headers: {
         "content-type": "application/json",
@@ -179,7 +207,6 @@ export async function probeMcp(
       },
       body: JSON.stringify(INITIALIZE_REQUEST),
       signal: controller.signal,
-      redirect: "follow",
     });
     outcome = {
       kind: "response",

@@ -71,7 +71,15 @@ export type WorkspaceLoad = {
   paseoTools: number;
   /** Whether this provider's CLI defers tool definitions; absent when the host did not say (0.11.0). */
   toolSearch?: ToolSearchVerdict;
+  /**
+   * Servers the agent was started with that no editor config explains, added
+   * by another plugin (0.11.2). Only an agent has these; absent for a
+   * workspace. `tools` is a probed count; without one, five as for any server.
+   */
+  added?: AddedServer[];
 };
+
+export type AddedServer = { name: string; transport: Transport; tools?: number };
 
 // ------------------------------------------------------------------ thresholds
 
@@ -179,6 +187,12 @@ export function loadFor(
   return { providerId, provider, label: scope?.label ?? "", servers, projectIncluded, projectNote, paseoTools, ...(toolSearch ? { toolSearch } : {}) };
 }
 
+/** One agent's load with the servers other plugins added to it; names the load already has are not counted twice. */
+export function withAdded(load: WorkspaceLoad, added: readonly AddedServer[]): WorkspaceLoad {
+  const have = new Set(load.servers.map((entry) => entry.name));
+  return { ...load, added: added.filter((entry) => !have.has(entry.name)).map((entry) => ({ ...entry })) };
+}
+
 /** Scopes an agent can actually run as: a destination wired to a Paseo provider id. */
 export function wiredScopes(profile: WorkspaceProfile): ProfileScope[] {
   return profile.scopes.filter((scope) => scope.providerId !== "");
@@ -221,6 +235,8 @@ export type CostProfile = {
   paseoTools: number;
   /** Tool estimate the tier reads: five per MCP server plus the real Paseo count. */
   tools: number;
+  /** Servers other plugins added to this agent (0.11.2); present only when the load carries them. */
+  added?: number;
   /**
    * True when tool search is on, so `tools` did not count towards the tier.
    * Present only when the load carries a verdict (0.11.0), so a load without
@@ -239,19 +255,24 @@ export type CostProfile = {
 /** Counts by transport and by where the definition lives. */
 export function costProfile(load: WorkspaceLoad): CostProfile {
   const count = (predicate: (entry: LoadedServer) => boolean) => load.servers.filter(predicate).length;
+  const added = load.added ?? [];
+  const byTransport = (transport: Transport) => count((entry) => entry.transport === transport) + added.filter((entry) => entry.transport === transport).length;
+  const servers = load.servers.length + added.length;
   const builtIn = load.paseoTools > 0 ? 1 : 0;
-  const tools = load.servers.length * TOOLS_PER_SERVER_GUESS + load.paseoTools;
+  const addedTools = added.reduce((sum, entry) => sum + (entry.tools ?? TOOLS_PER_SERVER_GUESS), 0);
+  const tools = load.servers.length * TOOLS_PER_SERVER_GUESS + addedTools + load.paseoTools;
   const deferred = load.toolSearch?.state === "on";
-  const serverTier = budgetTier(load.servers.length);
+  const serverTier = budgetTier(servers);
   return {
-    total: load.servers.length + builtIn,
+    total: servers + builtIn,
     builtIn,
     paseoTools: load.paseoTools,
     tools,
+    ...(load.added ? { added: added.length } : {}),
     ...(load.toolSearch ? { deferred } : {}),
-    stdio: count((entry) => entry.transport === "stdio"),
-    http: count((entry) => entry.transport === "http"),
-    unknown: count((entry) => entry.transport === "unknown"),
+    stdio: byTransport("stdio"),
+    http: byTransport("http"),
+    unknown: byTransport("unknown"),
     project: count((entry) => entry.scope === "project"),
     local: count((entry) => entry.scope === "local"),
     user: count((entry) => entry.scope === "user"),

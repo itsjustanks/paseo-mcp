@@ -94,7 +94,7 @@ test("probe sends a JSON-RPC initialize POST with the configured URL and headers
   assert.equal(headers["content-type"], "application/json");
   assert.match(headers.accept, /text\/event-stream/);
   assert.deepEqual(JSON.parse(seen.init.body as string).method, INITIALIZE_REQUEST.method);
-  assert.equal(seen.init.redirect, "follow");
+  assert.equal(seen.init.redirect, "manual", "redirects are followed by hand, same origin only (tests/redirect.test.ts)");
 });
 
 test("probe verdicts for each stubbed status", async () => {

@@ -21,8 +21,18 @@
  *    An empty value cancels a shell export. Paseo's Claude sessions read all
  *    three (agent.js `CLAUDE_SETTING_SOURCES`).
  *  - `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS`: "MCP tool search is disabled and
- *    all MCP tools load upfront, even when you set `ENABLE_TOOL_SEARCH`" (only
- *    managed settings on v2.1.227+ can keep it on; the plugin cannot see those).
+ *    all MCP tools load upfront, even when you set `ENABLE_TOOL_SEARCH`. On
+ *    Claude Code v2.1.227 or later, managed settings can keep tool search on"
+ *    (env-vars); for `ENABLE_TOOL_SEARCH`, "A value you set yourself is ignored
+ *    when `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS` is set". Through
+ *    `ANTHROPIC_BASE_URL` the override keeps the tool-search beta header,
+ *    `defer_loading` and `tool_reference`; on a cloud provider it has no
+ *    effect (llm-gateway-protocol#disable-pre-release-capabilities).
+ *  - No page names a managed key for that override (read 2026-09-24), so a
+ *    managed `env.ENABLE_TOOL_SEARCH` is taken as it: the highest-precedence
+ *    layer, and the only one the betas flag does not silence. The plugin
+ *    cannot see the CLI version without starting it, so an "on" from managed
+ *    settings under the betas flag names the v2.1.227 minimum instead.
  *  - Google Cloud's Agent Platform models earlier than Claude 4.5 and
  *    Microsoft Foundry deployments hosted on Azure load everything up front.
  *    The plugin cannot see the model or the deployment, so those are unknown.
@@ -39,11 +49,15 @@ import { PASEO_BUILTIN_PROVIDERS } from "./paseo-tools";
 
 export type ToolSearchState = "on" | "off" | "unknown";
 
-/** `reason` is a clause naming the deciding fact, for `toolSearchLine`; `cli` the base CLI it was judged for ("" unknown). */
-export type ToolSearchVerdict = { state: ToolSearchState; reason: string; cli: string };
+/**
+ * `reason` is a clause naming the deciding fact, for `toolSearchLine`; `cli`
+ * the base CLI it was judged for ("" unknown). `managed` (0.11.2) is set when
+ * managed settings decided it, so the panel names the file even for "on".
+ */
+export type ToolSearchVerdict = { state: ToolSearchState; reason: string; cli: string; managed?: boolean };
 
-/** Where a variable came from, most specific last: the daemon, the provider entry, AI Router's session hook, Claude Code's settings files. */
-export type EnvSource = "daemon" | "provider" | "ai-router" | "settings";
+/** Where a variable came from, most specific last: the daemon, the provider entry, AI Router's session hook, Claude Code's settings files, managed settings. */
+export type EnvSource = "daemon" | "provider" | "ai-router" | "settings" | "managed";
 
 /** One settings file's `env`; `label` names the file in a reason ("~/.claude/settings.json"). */
 export type SettingsEnv = { label: string; env: Record<string, string> };
@@ -57,6 +71,8 @@ export type ToolSearchInputs = {
   baseEnv?: Record<string, string> | null;
   /** Claude Code's settings files' `env`, lowest precedence first: user, project, local. */
   settingsEnv?: ReadonlyArray<SettingsEnv> | null;
+  /** Managed settings files' `env` in the order Claude Code merges them (`managed-settings.json`, then `managed-settings.d/*.json`); above everything. */
+  managedEnv?: ReadonlyArray<SettingsEnv> | null;
   /** AI Router's `routeAgents`; it only reroutes the built-in `claude` provider (its own `ai-router` provider always is). */
   aiRouterRoutes?: boolean;
   /** The daemon's own environment (the plugin process inherits it). */
@@ -66,7 +82,16 @@ export type ToolSearchInputs = {
 /** AI Router's Claude-based provider id (its shared/logic.ts `AI_ROUTER_PROVIDER_ID`). */
 export const AI_ROUTER_PROVIDER_ID = "ai-router";
 
-export const TOOL_SEARCH_VARS = ["ANTHROPIC_BASE_URL", "ENABLE_TOOL_SEARCH", "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY"] as const;
+export const TOOL_SEARCH_VARS = [
+  "ANTHROPIC_BASE_URL",
+  "ENABLE_TOOL_SEARCH",
+  "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS",
+  "CLAUDE_CODE_USE_VERTEX",
+  "CLAUDE_CODE_USE_FOUNDRY",
+  "CLAUDE_CODE_USE_BEDROCK",
+  "CLAUDE_CODE_USE_MANTLE",
+  "CLAUDE_CODE_USE_ANTHROPIC_AWS",
+] as const;
 
 type Var = (typeof TOOL_SEARCH_VARS)[number];
 
@@ -76,7 +101,8 @@ type Resolved = Partial<Record<Var, { value: string; source: EnvSource; label: s
  * The env Claude Code runs with. Paseo launches it with the daemon's env, then
  * the base entry's and the provider entry's (provider-registry.js
  * `mergeRuntimeSettings`), then AI Router's session hook; Claude Code then
- * writes its settings files' `env` over that, user, project, local.
+ * writes its settings files' `env` over that, user, project, local, and
+ * managed settings last ("Managed settings have the highest precedence").
  */
 export function effectiveEnv(providerId: string, inputs: ToolSearchInputs): Resolved {
   const out: Resolved = {};
@@ -86,7 +112,7 @@ export function effectiveEnv(providerId: string, inputs: ToolSearchInputs): Reso
       if (typeof value !== "string") continue;
       if (value.trim() !== "") out[name] = { value: value.trim(), source, label };
       // An empty value in a settings file cancels a shell export (settings-reference#env).
-      else if (source === "settings") delete out[name];
+      else if (source === "settings" || source === "managed") delete out[name];
     }
   };
   layer(inputs.daemonEnv, "daemon", "The daemon's environment");
@@ -98,6 +124,7 @@ export function effectiveEnv(providerId: string, inputs: ToolSearchInputs): Reso
     layer({ ANTHROPIC_BASE_URL: "ai-router", CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS: "1" }, "ai-router", "AI Router");
   }
   for (const file of inputs.settingsEnv ?? []) layer(file.env, "settings", file.label);
+  for (const file of inputs.managedEnv ?? []) layer(file.env, "managed", file.label);
   return out;
 }
 
@@ -149,6 +176,8 @@ export function toolSearch(providerId: string, inputs: ToolSearchInputs): ToolSe
   if (cli !== "claude") return verdict("off", `${CLI_LABELS[cli] ?? cli} has no documented tool search`);
 
   const env = effectiveEnv(providerId, inputs);
+  const managed = managedVerdict(env, cli);
+  if (managed) return managed;
   const betas = env.CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS;
   const url = env.ANTHROPIC_BASE_URL;
   const custom = url && (url.source === "ai-router" || !isFirstPartyBaseUrl(url.value)) ? url : undefined;
@@ -164,15 +193,61 @@ export function toolSearch(providerId: string, inputs: ToolSearchInputs): ToolSe
     return verdict("unknown", `${env.ENABLE_TOOL_SEARCH!.label} sets ENABLE_TOOL_SEARCH=${env.ENABLE_TOOL_SEARCH!.value}, ${threshold}`);
   }
   if (custom && !forcedOn) return verdict("off", `${custom.label} sets a custom ANTHROPIC_BASE_URL (${hostOf(custom.value)})`);
-  if (truthy(env.CLAUDE_CODE_USE_FOUNDRY?.value)) {
-    return verdict("unknown", "Claude Code runs on Microsoft Foundry, where a deployment hosted on Azure turns tool search off");
-  }
-  if (truthy(env.CLAUDE_CODE_USE_VERTEX?.value)) {
-    return verdict("unknown", "Claude Code runs on Google Cloud's Agent Platform, where models before Claude 4.5 have no tool search");
-  }
+  const cloud = cloudProvider(env);
+  if (cloud) return verdict("unknown", cloud);
   return forcedOn
     ? verdict("on", `ENABLE_TOOL_SEARCH=${env.ENABLE_TOOL_SEARCH!.value} is set`)
     : verdict("on", "Claude Code's default");
+}
+
+/** Foundry and Agent Platform keep some deployments and models off whatever is set; the clause saying so, or null. */
+function cloudProvider(env: Resolved): string | null {
+  if (truthy(env.CLAUDE_CODE_USE_FOUNDRY?.value)) return "Claude Code runs on Microsoft Foundry, where a deployment hosted on Azure turns tool search off";
+  if (truthy(env.CLAUDE_CODE_USE_VERTEX?.value)) return "Claude Code runs on Google Cloud's Agent Platform, where models before Claude 4.5 have no tool search";
+  return null;
+}
+
+/** Claude Code set to run on a cloud provider (https://code.claude.com/docs/en/env-vars). */
+function onCloudProvider(env: Resolved): boolean {
+  return (
+    truthy(env.CLAUDE_CODE_USE_BEDROCK?.value) ||
+    truthy(env.CLAUDE_CODE_USE_MANTLE?.value) ||
+    truthy(env.CLAUDE_CODE_USE_ANTHROPIC_AWS?.value) ||
+    truthy(env.CLAUDE_CODE_USE_VERTEX?.value) ||
+    truthy(env.CLAUDE_CODE_USE_FOUNDRY?.value)
+  );
+}
+
+/** The first Claude Code release where managed settings keep tool search on under the betas flag. */
+export const MANAGED_OVERRIDE_MIN_VERSION = "2.1.227";
+
+/**
+ * A managed `ENABLE_TOOL_SEARCH` decides before anything below it, the betas
+ * flag and AI Router's routing included. Null when managed settings do not set
+ * a documented value, so the ordinary rules apply.
+ */
+function managedVerdict(env: Resolved, cli: string): ToolSearchVerdict | null {
+  const set = env.ENABLE_TOOL_SEARCH;
+  if (set?.source !== "managed") return null;
+  const value = set.value.toLowerCase();
+  const threshold = autoThreshold(value);
+  const verdict = (state: ToolSearchState, reason: string): ToolSearchVerdict => ({ state, reason, cli, managed: true });
+  if (value === "false") return verdict("off", `${set.label} set ENABLE_TOOL_SEARCH=false`);
+  if (threshold !== null && threshold !== "on") return verdict("unknown", `${set.label} set ENABLE_TOOL_SEARCH=${set.value}, ${threshold}`);
+  if (value !== "true" && threshold !== "on") return null;
+  const betas = env.CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS;
+  const underBetas = betas !== undefined && (betas.source === "ai-router" || truthy(betas.value));
+  // "On a cloud provider … the override has no effect" (llm-gateway-protocol):
+  // under the betas flag that leaves tool search off, which the ordinary rules say.
+  if (underBetas && onCloudProvider(env)) return null;
+  const cloud = cloudProvider(env);
+  if (cloud) return verdict("unknown", cloud);
+  return verdict(
+    "on",
+    underBetas
+      ? `${set.label} keep tool search on, even with CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS set (this needs Claude Code v${MANAGED_OVERRIDE_MIN_VERSION} or later)`
+      : `${set.label} keep tool search on`,
+  );
 }
 
 export const AI_ROUTER_REASON = "AI Router re-routes this provider through OmniRoute (custom ANTHROPIC_BASE_URL) whenever its endpoint is up";
@@ -196,9 +271,14 @@ function autoThreshold(explicit: string | undefined): string | null {
 
 export const TOOL_SEARCH_ON_LINE = "Claude Code's tool search is on: tool definitions load up front only while they fit in 10% of the context window, and on demand past that.";
 
+/** The "on" line; managed settings are named in front of it, since that verdict turns on a file most users never see. */
+export function toolSearchOnLine(verdict: ToolSearchVerdict): string {
+  return verdict.managed ? `${verdict.reason}. ${TOOL_SEARCH_ON_LINE}` : TOOL_SEARCH_ON_LINE;
+}
+
 /** The one line the budget panel shows for a verdict, with the load's tool estimate. */
 export function toolSearchLine(verdict: ToolSearchVerdict, tools: number): string {
-  if (verdict.state === "on") return TOOL_SEARCH_ON_LINE;
+  if (verdict.state === "on") return toolSearchOnLine(verdict);
   const all = `all ${tools} tool ${tools === 1 ? "definition loads" : "definitions load"} with the first prompt`;
   if (verdict.state === "unknown") return `${verdict.reason}, so this counts as if ${all}.`;
   if (verdict.cli === "claude") return `${verdict.reason}, so Claude Code's tool search is off and ${all}.`;

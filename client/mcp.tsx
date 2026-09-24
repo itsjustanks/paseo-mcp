@@ -25,6 +25,7 @@ import {
   type McpAuthAccount,
   type McpDefRow,
   type McpServerTools,
+  type PluginServer,
   type ProjectMcpServer,
   type McpServerRow,
 } from "../shared/contracts";
@@ -745,7 +746,7 @@ function AgentServers({
       <View style={{ gap: t.space.sm }}>
         <Facts
           items={[
-            { value: plural(data.servers.length + (data.paseoTools && data.paseoTools.tools > 0 ? 1 : 0), "server") },
+            { value: plural(data.servers.length + (data.paseoTools && data.paseoTools.tools > 0 ? 1 : 0) + (data.pluginServers?.length ?? 0), "server") },
             offCount > 0 ? { value: `${offCount} off for this workspace`, tone: "attention" } : null,
             data.scope ? { value: data.scope.label } : { value: "no editor config wired to this provider" },
           ]}
@@ -759,7 +760,7 @@ function AgentServers({
         </Text>
         {!data.projectIncluded && data.projectNote ? <Text style={t.text.caption}>{data.projectNote}.</Text> : null}
         <Card padded={false}>
-          {data.servers.length === 0 && !data.paseoTools ? <EmptyState title="Nothing loads here" body="No editor config wired to this provider defines an MCP server for this workspace." /> : null}
+          {data.servers.length === 0 && !data.paseoTools && !data.pluginServers?.length ? <EmptyState title="Nothing loads here" body="No editor config wired to this provider defines an MCP server for this workspace." /> : null}
           {data.paseoTools ? <PaseoToolsAgentRow info={data.paseoTools} providerLabel={providerLabel} first /> : null}
           {data.servers.map((entry, index) => {
             const tools = toolsByName?.get(entry.name);
@@ -806,9 +807,39 @@ function AgentServers({
               />
             );
           })}
+          {(data.pluginServers ?? []).map((entry, index) => (
+            <PluginServerRow key={`plugin:${entry.name}`} entry={entry} first={index === 0 && data.servers.length === 0 && !data.paseoTools} />
+          ))}
         </Card>
       </View>
     </Section>
+  );
+}
+
+/**
+ * A server the agent was started with that no editor config explains: another
+ * plugin's `agent.create` hook added it. No switch: it is that plugin's to turn off.
+ */
+function PluginServerRow({ entry, first }: { entry: PluginServer; first: boolean }) {
+  const t = useTokens();
+  return (
+    <Row
+      first={first}
+      title={
+        <View style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: t.space.sm, minWidth: 0 }}>
+          <Text numberOfLines={1} style={[t.text.bodyStrong, { flexShrink: 1 }]}>{entry.name}</Text>
+          <Tag label={entry.transport} />
+          <Tag label="Added when created" />
+          {entry.tools !== undefined ? <Tag label={plural(entry.tools, "tool")} tone="ok" /> : null}
+        </View>
+      }
+      meta={
+        <Text style={t.text.caption}>
+          {`${entry.tools !== undefined ? "" : `${entry.note.charAt(0).toUpperCase()}${entry.note.slice(1)}. `}Not in any editor config now: it was added when this agent was created, by a plugin (or this plugin's Add project servers setting at the time) or by whoever created the agent. A new agent gets whatever those add then.`}
+        </Text>
+      }
+      trailing={<Tag label="on" tone="ok" />}
+    />
   );
 }
 
@@ -2360,11 +2391,14 @@ export function WorkspaceBody({
   caption = "project MCP servers and sign-in",
   intro,
   providerId,
+  agentId,
 }: Pick<PluginWorkspacePanelProps, "host" | "workspaceId"> & {
   caption?: string;
   intro?: React.ReactNode;
   /** The agent panel names its provider so the load shown is that agent's, not the heaviest editor's. */
   providerId?: string;
+  /** The agent panel's agent, so servers other plugins added to it are listed and counted. */
+  agentId?: string;
 }) {
   const t = useTokens();
   const toast = useToast();
@@ -2396,8 +2430,8 @@ export function WorkspaceBody({
   // wired editor, the same one its count leads with.
   const switchProvider = providerId ?? (workspaceQuery.data ? pickLoad(workspaceQuery.data)?.providerId || "" : "");
   const agentServersQuery = useQuery({
-    queryKey: ["paseo-mcp", "agent-servers", workspaceId, switchProvider],
-    queryFn: () => callAgentServers({ workspaceId, providerId: switchProvider }),
+    queryKey: ["paseo-mcp", "agent-servers", workspaceId, switchProvider, agentId ?? ""],
+    queryFn: () => callAgentServers({ workspaceId, providerId: switchProvider, ...(agentId ? { agentId } : {}) }),
     enabled: Boolean(workspace) && switchProvider !== "",
     // Read fresh on every visit: a /mcp disable in a terminal must show here.
     // The host's defaults turn refetch-on-mount off, so it is asked for here.
@@ -2692,7 +2726,7 @@ export function WorkspaceBody({
           pill={<StatusPill status={pill.status} label={pill.label} />}
         />
         {intro}
-        {data && !server ? <WorkspaceContext data={data} providerId={providerId} attention={attention} /> : null}
+        {data && !server ? <WorkspaceContext data={data} providerId={providerId} attention={attention} added={agentId ? agentServersQuery.data?.pluginServers : undefined} /> : null}
         <HealthSummary directory={workspace?.directory ?? ""} names={loaded} />
         <View style={{ flexDirection: "row" }}>
           <Button label="Refresh" variant="ghost" loading={workspaceQuery.isFetching || healthQuery.isFetching} onPress={refresh} />

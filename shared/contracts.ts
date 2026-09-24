@@ -165,6 +165,8 @@ export const ToolSearchVerdictSchema = z.object({
   state: z.enum(["on", "off", "unknown"]),
   reason: z.string(),
   cli: z.string(),
+  /** 0.11.2: true when Claude Code's managed settings decided it. */
+  managed: z.boolean().optional(),
 });
 
 // ------------------------------------------------------------ agent servers
@@ -198,9 +200,24 @@ export type AgentServer = z.infer<typeof AgentServerSchema>;
  * server read fresh from the editor's config on every call, so a toggle made
  * from `/mcp` in a terminal shows here on the next read.
  */
+/**
+ * 0.11.2: a server the agent was started with that no editor config or Paseo
+ * tools explain, from the daemon's record of the agent (shared/agent-record.ts):
+ * added by another plugin's hook, or by whoever created the agent. `tools` is
+ * the HTTP probe's count when known; `note` says why there is none.
+ */
+export const PluginServerSchema = z.object({
+  name: z.string(),
+  transport: TransportSchema,
+  tools: z.number().optional(),
+  note: z.string(),
+});
+export type PluginServer = z.infer<typeof PluginServerSchema>;
+
 export const mcpAgentServers = defineRpc({
   name: "paseo-mcp.agent-servers",
-  input: z.object({ workspaceId: z.string().min(1), providerId: z.string() }),
+  // 0.11.2: `agentId` (the agent panel's) adds `pluginServers`.
+  input: z.object({ workspaceId: z.string().min(1), providerId: z.string(), agentId: z.string().optional() }),
   output: z.object({
     /** The directory Claude Code keys the project entry by: the workspace's own directory. */
     directory: z.string(),
@@ -214,6 +231,8 @@ export const mcpAgentServers = defineRpc({
     paseoTools: z.object({ tools: z.number(), blocker: z.enum(["", "mcp-off", "inject-off"]), asOf: z.string(), source: z.enum(["catalogue", "live"]).optional() }).optional(),
     /** 0.11.0: whether this provider's CLI defers tool definitions; absent from older hosts. */
     toolSearch: ToolSearchVerdictSchema.optional(),
+    /** 0.11.2: with an `agentId` whose record the host could read, the servers other plugins added to it. */
+    pluginServers: z.array(PluginServerSchema).optional(),
   }),
 });
 

@@ -10,7 +10,7 @@ import {
   type SettingsEnv,
   type ToolSearchVerdict,
 } from "../shared/tool-search";
-import { readJsonCached } from "./files";
+import { listDirCached, readJsonCached } from "./files";
 import { readDaemon } from "./paseo-tools";
 import { paseoHome } from "./settings";
 
@@ -62,6 +62,41 @@ export function claudeSettingsEnv(configDir: string, directory: string | undefin
   });
 }
 
+/**
+ * Claude Code's system directory for file-based managed settings
+ * (https://code.claude.com/docs/en/managed-settings, "Where each mechanism
+ * stores the policy"): `/Library/Application Support/ClaudeCode/` on macOS,
+ * `/etc/claude-code/` on Linux and WSL, `C:\Program Files\ClaudeCode\` on Windows.
+ */
+export function managedSettingsDir(platform: NodeJS.Platform = process.platform): string {
+  if (platform === "darwin") return "/Library/Application Support/ClaudeCode";
+  if (platform === "win32") return "C:\\Program Files\\ClaudeCode";
+  return "/etc/claude-code";
+}
+
+/**
+ * The managed settings files' `env`, in the order Claude Code merges them:
+ * `managed-settings.json` first, then every `*.json` in `managed-settings.d/`
+ * alphabetically, hidden files skipped; `env` merges key by key, the later
+ * file winning (managed-settings#split-a-file-based-policy-across-teams). Each
+ * file is its own layer so a reason names the one that set the value. A
+ * missing or broken file is no layer. The macOS profile, the Windows registry
+ * and server-managed settings are not files here and are not read.
+ */
+export function managedSettingsEnv(dir: string): SettingsEnv[] {
+  const dropIns = join(dir, "managed-settings.d");
+  const paths = [
+    join(dir, "managed-settings.json"),
+    ...listDirCached(dropIns)
+      .filter((name) => name.endsWith(".json") && !name.startsWith("."))
+      .map((name) => join(dropIns, name)),
+  ];
+  return paths.flatMap((path) => {
+    const env = settingsFileEnv(path);
+    return env ? [{ label: `Managed settings (${path})`, env }] : [];
+  });
+}
+
 export type ToolSearchWhere = {
   /** The workspace directory the agent runs in, when known; adds the project settings files. */
   directory?: string;
@@ -69,6 +104,8 @@ export type ToolSearchWhere = {
   daemonEnv?: Record<string, string | undefined>;
   home?: string;
   userHome?: string;
+  /** Where managed settings live; the platform's system directory by default. */
+  managedDir?: string;
 };
 
 /**
@@ -79,13 +116,14 @@ export type ToolSearchWhere = {
  * environment, which the daemon passes to every plugin it starts (a `fork`
  * without `env` inherits it) and to every agent. The user settings file sits
  * in the provider's `CLAUDE_CONFIG_DIR`, else `~/.claude`. `base` is what the
- * caller knows about an id's CLI from the editor list. Undefined when the
+ * caller knows about an id's CLI from the editor list. Managed settings sit
+ * above all of it, read for Claude-based providers only. Undefined when the
  * daemon config cannot be read, so the panels count as before.
  */
 export async function toolSearchVerdicts(
   paseo: PluginHandlerContext["paseo"],
   providers: ReadonlyArray<{ id: string; base: string }>,
-  { directory, daemonEnv = process.env, home = paseoHome(), userHome = homedir() }: ToolSearchWhere = {},
+  { directory, daemonEnv = process.env, home = paseoHome(), userHome = homedir(), managedDir = managedSettingsDir() }: ToolSearchWhere = {},
 ): Promise<Record<string, ToolSearchVerdict> | undefined> {
   let launch;
   try {
@@ -102,7 +140,8 @@ export async function toolSearchVerdicts(
     const env = { daemonEnv, baseEnv: inheritedEnv(id, launch), providerEnv: launch[id]?.env };
     const configDir = expandHome(launchValue("CLAUDE_CONFIG_DIR", env) ?? join(userHome, ".claude"), userHome);
     const settingsEnv = cli === "claude" ? claudeSettingsEnv(configDir, directory, userHome) : undefined;
-    out[id] = toolSearch(id, { base: cli, ...env, settingsEnv, aiRouterRoutes });
+    const managedEnv = cli === "claude" ? managedSettingsEnv(managedDir) : undefined;
+    out[id] = toolSearch(id, { base: cli, ...env, settingsEnv, managedEnv, aiRouterRoutes });
   }
   return out;
 }

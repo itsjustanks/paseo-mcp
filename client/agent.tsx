@@ -58,6 +58,7 @@ export function McpAgentPanel(props: PluginAgentPanelProps) {
         caption="MCP servers this agent loads"
         intro={<AgentIntro agentId={props.agentId} />}
         providerId={provider ?? undefined}
+        agentId={props.agentId}
       />
     </TokensProvider>
   );

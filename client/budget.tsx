@@ -11,11 +11,13 @@ import {
   loadsForWorkspace,
   scopeForProvider,
   userLevelNames,
+  withAdded,
+  type AddedServer,
   type WorkspaceLoad,
 } from "../shared/budget";
 import type { mcpWorkspace } from "../shared/contracts";
 import { PASEO_TOOLS_LABEL } from "../shared/paseo-tools";
-import { TOOL_SEARCH_ON_LINE, toolSearchLine } from "../shared/tool-search";
+import { toolSearchLine, toolSearchOnLine } from "../shared/tool-search";
 import { formatMemory } from "../shared/processes";
 import { canOpenMcp, openMcp } from "./navigate";
 import { Button, Card, Disclosure, Facts, Notice, Tag, useTokens, type Status } from "./ui";
@@ -35,14 +37,18 @@ function tierStatus(tier: "ok" | "attention" | "problem"): Status {
  * workspace panel shows the heaviest wired editor, since that is the agent
  * most likely to fall over.
  */
-export function pickLoad(data: WorkspaceData, providerId?: string): WorkspaceLoad | null {
+export function pickLoad(data: WorkspaceData, providerId?: string, added?: readonly AddedServer[]): WorkspaceLoad | null {
   if (!data.profile) return null;
   const injection = data.injection ?? null;
   const paseo = data.paseoTools ?? null;
   const search = data.toolSearch ?? null;
   if (providerId) {
     const scope = scopeForProvider(data.profile, providerId);
-    if (scope) return loadFor(data.profile, scope, injection, paseo, search);
+    // Only an agent has servers other plugins added; the agent panel passes them.
+    if (scope) {
+      const load = loadFor(data.profile, scope, injection, paseo, search);
+      return added ? withAdded(load, added) : load;
+    }
   }
   return loadsForWorkspace(data.profile, injection, paseo, search)[0] ?? null;
 }
@@ -63,8 +69,8 @@ function ContextBudget({ load, providerId }: { load: WorkspaceLoad; providerId?:
     : severe
       ? `${loads}${cost.builtIn ? ` and about ${cost.tools} tools` : ""} — enough to exhaust its context before it starts`
       : `${loads}${cost.builtIn ? ` and about ${cost.tools} tools` : ""} — a real share of its context goes to tool definitions`;
-  const why = cost.deferred
-    ? `${TOOL_SEARCH_ON_LINE} The count still matters: each stdio server is a child process per agent session and each server a connection, so past ${BUDGET_ATTENTION} servers the cost shows and past ${BUDGET_PROBLEM} it is heavy.`
+  const why = cost.deferred && load.toolSearch
+    ? `${toolSearchOnLine(load.toolSearch)} The count still matters: each stdio server is a child process per agent session and each server a connection, so past ${BUDGET_ATTENTION} servers the cost shows and past ${BUDGET_PROBLEM} it is heavy.`
     : load.toolSearch
       ? `${toolSearchLine(load.toolSearch, cost.tools)} Cursor stops at 40 tools. Past ${BUDGET_ATTENTION} servers the cost shows, past ${BUDGET_PROBLEM} agents can fail with "Prompt is too long" before their first tool call.`
       : `Every server's tool definitions are sent with the first prompt. Claude Code defers them past 10% of the window; Cursor stops at 40 tools. Past ${BUDGET_ATTENTION} servers the cost shows, past ${BUDGET_PROBLEM} agents can fail with "Prompt is too long" before their first tool call.`;
@@ -147,13 +153,16 @@ export function WorkspaceContext({
   data,
   providerId,
   attention,
+  added,
 }: {
   data: WorkspaceData;
   providerId?: string;
   attention: { here: number; elsewhere: number } | null;
+  /** Servers other plugins added to this agent (agent panel only). */
+  added?: readonly AddedServer[];
 }) {
   const t = useTokens();
-  const load = pickLoad(data, providerId);
+  const load = pickLoad(data, providerId, added);
   if (!load) return null;
   const cost = costProfile(load);
   const scope = cost.local > 0 ? ` · ${cost.local} local` : "";
@@ -172,6 +181,7 @@ export function WorkspaceContext({
             { value: `${cost.project} from this project's .mcp.json${scope}` },
             { value: `${cost.user} from user-level config` },
             cost.builtIn ? { value: `${PASEO_TOOLS_LABEL}: ${cost.paseoTools} tools` } : null,
+            cost.added ? { value: `${cost.added} added when created` } : null,
             attention
               ? attention.here > 0
                 ? { value: `${attention.here} need attention here`, tone: "attention" }

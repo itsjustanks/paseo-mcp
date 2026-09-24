@@ -245,7 +245,17 @@ workspace actually loads, counted from the same files the CLI reads:
   every workspace.
 
 A name defined at two levels is counted once. The workspace tab shows the heaviest wired editor;
-the agent tab shows the agent's own provider. Under the count: how many are **stdio** (a child
+the agent tab shows the agent's own provider.
+
+The agent tab also lists servers the agent was actually started with that no editor config or Paseo
+tools explain, tagged **Added when created**: other plugins add these from their own `agent.create`
+hooks (Shared Browser's `shared-browser`, for one), and whoever creates an agent can pass its own. Each shows its name and transport; an HTTP one
+shows its tool count from the same probe the Tools view uses (asked in the background, at most
+every ten minutes), a stdio one says "runs on demand". They count towards that agent's budget, at
+their real tool count where the probe has one and five otherwise. They come from the record the
+daemon writes after every hook ran (`$PASEO_HOME/agents/<project dir>/<agent id>.json`, read-only);
+Paseo's agent API does not return an agent's servers, and a hook only sees what plugins earlier in
+id order added. The workspace tab has no agent, so it cannot know these and does not count them. Under the count: how many are **stdio** (a child
 process per agent session) versus **http** (no local process), how many need attention here versus
 elsewhere, and a **Running now** section listing the MCP server processes currently running for
 this workspace with their resident memory. That section reads the daemon host's process table
@@ -277,7 +287,7 @@ only when needed, so a long tool list costs little context. The host judges it p
 | Verdict | When | Budget |
 | --- | --- | --- |
 | **on** | A Claude-based provider with none of the settings below, or `ENABLE_TOOL_SEARCH` set to `true`, `auto`, or `auto:N` with N up to 10 (`auto`'s own threshold) | The tool check does not raise the tier; the server check still does (stdio processes and connections are real). One line: "Claude Code's tool search is on: tool definitions load up front only while they fit in 10% of the context window, and on demand past that." |
-| **off** | A custom `ANTHROPIC_BASE_URL` (any host but `api.anthropic.com`), `ENABLE_TOOL_SEARCH=false`, or `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS`, which Claude Code says keeps tool search off even with `ENABLE_TOOL_SEARCH` set. Also every non-Claude CLI except Codex. | As before, and the warning names the reason: "AI Router re-routes this provider through OmniRoute (custom ANTHROPIC_BASE_URL) whenever its endpoint is up, so Claude Code's tool search is off and all 76 tool definitions load with the first prompt." |
+| **off** | A custom `ANTHROPIC_BASE_URL` (any host but `api.anthropic.com`), `ENABLE_TOOL_SEARCH=false`, or `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS`, which Claude Code says keeps tool search off even with `ENABLE_TOOL_SEARCH` set, unless managed settings set it (source 5). Also every non-Claude CLI except Codex. | As before, and the warning names the reason: "AI Router re-routes this provider through OmniRoute (custom ANTHROPIC_BASE_URL) whenever its endpoint is up, so Claude Code's tool search is off and all 76 tool definitions load with the first prompt." |
 | **unknown** | Codex (it defers MCP tools only when the model supports tool search), Claude on Google Cloud's Agent Platform or Microsoft Foundry, `ENABLE_TOOL_SEARCH=auto:N` with N above 10 (tools load up front until they fill N% of the context window) or outside 0-100, or a provider whose CLI is not known | As before, with the reason |
 
 Sources, later ones winning:
@@ -299,7 +309,21 @@ Sources, later ones winning:
    beats project beats user ([settings precedence](https://code.claude.com/docs/en/settings#settings-precedence)).
    An empty value cancels one set lower down. A missing or broken file counts as not there.
 
-Managed settings are not read, so a value set only there is not counted.
+5. Claude Code's managed settings, above everything: `managed-settings.json` and then every `*.json`
+   in `managed-settings.d/` (alphabetical, hidden files skipped), in
+   `/Library/Application Support/ClaudeCode/` on macOS, `/etc/claude-code/` on Linux and WSL
+   ([managed settings](https://code.claude.com/docs/en/managed-settings)). Read for Claude-based
+   providers only. A managed `ENABLE_TOOL_SEARCH` decides even over
+   `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS` and AI Router's routing: Claude Code ignores "a value you
+   set yourself" under that flag, but "on Claude Code v2.1.227 or later, managed settings can keep
+   tool search on" ([env vars](https://code.claude.com/docs/en/env-vars)). The docs name no other
+   key for this, so the plugin takes a managed `env.ENABLE_TOOL_SEARCH` as the override. It cannot
+   see the CLI version without starting it, so the panel says the override needs v2.1.227 or later:
+   "Managed settings (/etc/claude-code/managed-settings.json) keep tool search on, even with
+   CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS set (this needs Claude Code v2.1.227 or later)." On Google
+   Cloud's Agent Platform or Microsoft Foundry the override "has no effect", so those stay unknown.
+   A missing or broken file counts as not there. The macOS configuration profile, the Windows
+   registry and server-managed settings are not files and are not read.
 
 Health issues under the count are split the same way: servers this workspace loads first, each with
 an **Open** button that lands on that server in MCP management, and problems elsewhere folded away.

@@ -115,9 +115,16 @@ const paseoLoad = () => { const state = paseoState(); return { tools: Object.fro
 // Tool search per provider, from the real resolver. Default: Claude Code's
 // default (on). ?routed: AI Router routes claude agents (off);
 // ?proxy: every Claude provider behind a custom ANTHROPIC_BASE_URL (off);
-// ?no-tool-search: a 0.10 host that sends no verdict.
+// ?no-tool-search: a 0.10 host that sends no verdict. ?managed: managed
+// settings keep it on under AI Router's betas flag (use with ?routed).
+// ?plugin-servers: the agent panel's agent has two servers other plugins added.
 const toolSearchFor = (id: string, base: string) =>
-  toolSearch(id, { base, aiRouterRoutes: params.has("routed"), daemonEnv: params.has("proxy") ? { ANTHROPIC_BASE_URL: "https://gateway.example.com" } : {} });
+  toolSearch(id, {
+    base,
+    aiRouterRoutes: params.has("routed"),
+    daemonEnv: params.has("proxy") ? { ANTHROPIC_BASE_URL: "https://gateway.example.com" } : {},
+    managedEnv: params.has("managed") ? [{ label: "Managed settings (/etc/claude-code/managed-settings.json)", env: { ENABLE_TOOL_SEARCH: "true" } }] : [],
+  });
 const toolSearchMap = () => params.has("no-tool-search") ? undefined : Object.fromEntries(destinations.map((d) => [d.providerId, toolSearchFor(d.providerId, d.provider)]));
 
 async function call(contract: any, input: any) {
@@ -178,7 +185,7 @@ async function call(contract: any, input: any) {
         { name: "jam", transport: "http", detail: "https://mcp.jam.dev/mcp", scope: "project", configPath: profile.projectConfigPath, inlineCredentials: false },
         ...userList.filter((s) => !["jam", "supabase"].includes(s.name)).map((s) => ({ name: s.name, transport: s.transport, detail: s.detail, scope: "user", configPath: scopeId, inlineCredentials: s.inlineCredentialsIn.includes(scopeId) })),
       ].map((row) => ({ ...row, enabled: verdict(row.scope, row.name) }));
-      return { directory: `${HOME}/projects/data-glue`, scope: { id: scopeId, label: destinations.find((d) => d.id === scopeId)!.label, provider: claudeP ? "claude" : "codex", providerId: provider, configPath: scopeId }, projectIncluded: true, projectNote: "", servers: rows, account: accounts.find((a) => a.provider === (claudeP ? "claude" : "codex")) ?? null, paseoTools: (() => { const load = paseoLoad(); return { tools: load.tools[provider] ?? 0, blocker: load.blocker, asOf: load.asOf, source: load.source }; })(), toolSearch: toolSearchMap()?.[provider] };
+      return { directory: `${HOME}/projects/data-glue`, scope: { id: scopeId, label: destinations.find((d) => d.id === scopeId)!.label, provider: claudeP ? "claude" : "codex", providerId: provider, configPath: scopeId }, projectIncluded: true, projectNote: "", servers: rows, account: accounts.find((a) => a.provider === (claudeP ? "claude" : "codex")) ?? null, paseoTools: (() => { const load = paseoLoad(); return { tools: load.tools[provider] ?? 0, blocker: load.blocker, asOf: load.asOf, source: load.source }; })(), toolSearch: toolSearchMap()?.[provider], ...(input.agentId && params.has("plugin-servers") ? { pluginServers: [{ name: "shared-browser", transport: "stdio", note: "runs on demand" }, { name: "linear-remote", transport: "http", tools: 23, note: "23 tools" }] } : {}) };
     }
     case "set-enabled": {
       const disabledHere = (window as any).__disabled ??= new Set<string>();
