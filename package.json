@@ -2,12 +2,13 @@
   "name": "paseo-mcp",
   "private": true,
   "type": "module",
-  "version": "0.11.2",
+  "version": "0.11.3",
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "node --import tsx --test tests/*.test.ts",
     "preview:ui": "vite --config tests/ui/vite.config.mts",
-    "bench": "node --import tsx tests/perf/harness.ts"
+    "bench": "node --import tsx tests/perf/harness.ts",
+    "bench:cold": "node --import tsx tests/perf/cold.ts"
   },
   "devDependencies": {
     "@getpaseo/plugin": "0.8.0-beta.1",

@@ -363,9 +363,18 @@ export const McpHealthSchema = z.object({
 });
 export type McpHealth = z.infer<typeof McpHealthSchema>;
 
+/**
+ * 0.11.3: a report saved by an earlier run of the plugin and loaded after a
+ * restart, shown until the first pass of this run replaces it. `asOf` is when
+ * that earlier pass finished. Absent on a report from this run.
+ */
+export const RestoredReportSchema = z.object({ reason: z.string(), asOf: z.string() });
+export type RestoredReport = z.infer<typeof RestoredReportSchema>;
+
 export const McpHealthReportSchema = z.object({
   results: z.array(McpHealthSchema),
   checkedAt: z.string(),
+  stale: RestoredReportSchema.optional(),
 });
 export type McpHealthReport = z.infer<typeof McpHealthReportSchema>;
 
@@ -378,7 +387,10 @@ export const mcpHealth = defineRpc({
 
 /**
  * Last known health without probing. `report` is null until the first check
- * (manual or background) has completed on this host.
+ * (manual or background) has completed on this host, or a saved one was loaded.
+ * 0.11.3: this read never waits on a probe. With no report it starts one in the
+ * background and says so with `checking`; read again to get the verdict. A
+ * host older than 0.11.3 leaves `checking` out.
  */
 export const mcpHealthCached = defineRpc({
   name: "paseo-mcp.health-cached",
@@ -389,6 +401,7 @@ export const mcpHealthCached = defineRpc({
     intervalMinutes: z.number(),
     showComposerPill: z.boolean(),
     nextCheckAt: z.string().nullable(),
+    checking: z.boolean().optional(),
   }),
 });
 
@@ -431,13 +444,16 @@ export const McpServerToolsSchema = z.object({
   // 0.8.0: the latest ask failed (timeout, refused, an error page) but the
   // server listed its tools before; this is that earlier list, from `asOf`,
   // with the reason the new ask failed. Absent when the list is current.
-  stale: z.object({ reason: z.string(), asOf: z.string() }).optional(),
+  // 0.11.3: `restored` when the list was saved by an earlier run of the plugin
+  // and has not been asked again since the restart.
+  stale: z.object({ reason: z.string(), asOf: z.string(), restored: z.boolean().optional() }).optional(),
 });
 export type McpServerTools = z.infer<typeof McpServerToolsSchema>;
 
 export const McpToolsReportSchema = z.object({
   servers: z.array(McpServerToolsSchema),
   checkedAt: z.string(),
+  stale: RestoredReportSchema.optional(),
 });
 export type McpToolsReport = z.infer<typeof McpToolsReportSchema>;
 
@@ -448,13 +464,19 @@ export const mcpTools = defineRpc({
   output: McpToolsReportSchema,
 });
 
-/** Last known tool lists without asking anyone. `report` is null until the first listing has completed. */
+/**
+ * Last known tool lists without asking anyone. `report` is null until the first
+ * listing has completed, or a saved one was loaded. 0.11.3: with no report the
+ * host starts a listing in the background and says so with `checking`, as the
+ * health read does; a host older than 0.11.3 leaves `checking` out.
+ */
 export const mcpToolsCached = defineRpc({
   name: "paseo-mcp.tools-cached",
   input: z.object({}),
   output: z.object({
     report: McpToolsReportSchema.nullable(),
     inFlight: z.boolean(),
+    checking: z.boolean().optional(),
   }),
 });
 

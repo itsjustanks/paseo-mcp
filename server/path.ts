@@ -42,6 +42,16 @@ export function resolveSearchPath(): Promise<string[]> {
   return resolving;
 }
 
+/**
+ * The login PATH if it is known or already being asked for; otherwise the
+ * inherited one. Never starts the shell, so a pass started from a panel read
+ * starts no process.
+ */
+export function settledSearchPath(): Promise<string[]> {
+  if (resolved) return Promise.resolve(resolved);
+  return resolving ?? Promise.resolve(searchPath());
+}
+
 /** The directories to look in now: the login PATH once known, the inherited one until then. */
 export function searchPath(): string[] {
   return resolved ?? withExtras(process.env.PATH ?? "");

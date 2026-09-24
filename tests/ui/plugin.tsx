@@ -127,6 +127,14 @@ const toolSearchFor = (id: string, base: string) =>
   });
 const toolSearchMap = () => params.has("no-tool-search") ? undefined : Object.fromEntries(destinations.map((d) => [d.providerId, toolSearchFor(d.providerId, d.provider)]));
 
+// ?cold: a host that just started with nothing saved; cached reads say
+// `checking` for 6 s, then answer. ?restored: the reports were saved before
+// the plugin restarted and are shown "as of" their time.
+const coldUntil = Date.now() + 6000;
+const cold = () => params.has("cold") && Date.now() < coldUntil;
+const restored = params.has("restored") ? { reason: "saved before the plugin restarted", asOf: checkedAt } : undefined;
+const restoredTools = () => (restored ? tools.map((t: any) => (t.kind === "listed" ? { ...t, stale: { ...restored, restored: true } } : t)) : tools);
+
 async function call(contract: any, input: any) {
   const name = String(contract.name).replace("paseo-mcp.", "");
   calls.push(name);
@@ -135,11 +143,9 @@ async function call(contract: any, input: any) {
   switch (name) {
     case "matrix": return { destinations, servers: empty ? [] : servers };
     case "health": return { results: empty ? [] : health, checkedAt };
-    case "health-cached": return { report: { results: empty ? [] : health, checkedAt }, backgroundChecks: true, intervalMinutes: 10, showComposerPill: true, nextCheckAt: checkedAt };
-    case "tools": case "tools-cached": {
-      const report = { servers: empty ? [] : tools, checkedAt };
-      return name === "tools" ? report : { report, inFlight: false };
-    }
+    case "health-cached": return { report: cold() ? null : { results: empty ? [] : health, checkedAt, stale: restored }, backgroundChecks: true, intervalMinutes: 10, showComposerPill: true, nextCheckAt: checkedAt, checking: cold() };
+    case "tools": return { servers: empty ? [] : tools, checkedAt };
+    case "tools-cached": return { report: cold() ? null : { servers: empty ? [] : restoredTools(), checkedAt, stale: restored }, inFlight: cold(), checking: cold() };
     case "auth": return { accounts, projectServers: empty ? [] : projectServers };
     case "login-status": return { sessions, daemonIsLocal: true, hostname: "paseo" };
     case "raw-get": {

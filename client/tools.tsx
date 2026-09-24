@@ -6,8 +6,8 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import React, { useCallback } from "react";
 import { Text, View } from "react-native";
 import { chipLabel, mcpTools, mcpToolsCached, type McpServerTools, type McpTool, type McpToolsReport } from "../shared/contracts";
-import { backoffMs, clockTime } from "../shared/schedule";
-import { useHealth } from "./health";
+import { clockTime, failureStreak } from "../shared/schedule";
+import { cachedReadInterval, useHealth, type CachedRead } from "./health";
 import { paseoToolsFor, usePaseoTools } from "./paseo-tools";
 import { Card, Disclosure, Facts, Row, useTokens, type Status } from "./ui";
 
@@ -15,8 +15,10 @@ export const TOOLS_QUERY_KEY = ["paseo-mcp", "tools"] as const;
 
 /**
  * Reads the host's last known tool lists. The host refreshes on its own timer,
- * so this is a cheap read; only the very first call on a fresh host asks every
- * server. `refetch` always asks: it backs the Refresh button.
+ * so this is a cheap read that never waits on a listing: on a fresh host the
+ * host starts one and answers `checking`, and this reads again every few
+ * seconds until the lists are in (see useHealth). `refetch` always asks: it
+ * backs the Refresh button.
  */
 export function useTools() {
   const callCached = useRpc(mcpToolsCached);
@@ -24,13 +26,14 @@ export function useTools() {
   const queryClient = useQueryClient();
   const query = useQuery({
     queryKey: TOOLS_QUERY_KEY,
-    queryFn: async (): Promise<McpToolsReport> => {
+    queryFn: async (): Promise<CachedRead<McpToolsReport>> => {
       const cached = await callCached({});
-      return cached.report ?? (await callTools({}));
+      if (!cached.report && cached.checking === undefined) return { report: await callTools({}), checking: false };
+      return { report: cached.report, checking: cached.checking ?? false };
     },
     staleTime: 5 * 60_000,
     // Only while a chip or panel is mounted; slower after failures.
-    refetchInterval: (query) => backoffMs(query.state.fetchFailureCount, 5 * 60_000, 30 * 60_000),
+    refetchInterval: (query) => cachedReadInterval(query.state.data, failureStreak(query), 5 * 60_000, 30 * 60_000),
     retry: false,
   });
   const fresh = useQuery({
@@ -41,13 +44,14 @@ export function useTools() {
   });
   const refetch = useCallback(async () => {
     const result = await fresh.refetch();
-    if (result.data) queryClient.setQueryData(TOOLS_QUERY_KEY, result.data);
+    if (result.data) queryClient.setQueryData<CachedRead<McpToolsReport>>(TOOLS_QUERY_KEY, { report: result.data, checking: false });
     return result;
   }, [fresh, queryClient]);
+  const read = query.data;
   return {
-    data: query.data,
+    data: read?.report ?? undefined,
     error: query.error ?? fresh.error,
-    isFetching: query.isFetching || fresh.isFetching,
+    isFetching: query.isFetching || fresh.isFetching || Boolean(read?.checking && !read.report),
     refetch,
   };
 }
@@ -172,7 +176,9 @@ export function ServerTools({ entry, open = false }: { entry: McpServerTools; op
       {facts}
       {entry.stale ? (
         <Text style={t.text.caption}>
-          {`This list is from ${clockTime(entry.stale.asOf)}; the latest ask did not get an answer (${entry.stale.reason}). It is kept until the server answers again.`}
+          {entry.stale.restored
+            ? `This list is from ${clockTime(entry.stale.asOf)}, ${entry.stale.reason}. It is replaced once the server answers again.`
+            : `This list is from ${clockTime(entry.stale.asOf)}; the latest ask did not get an answer (${entry.stale.reason}). It is kept until the server answers again.`}
         </Text>
       ) : null}
       <Disclosure title={toolsWord(entry)} open={open}>

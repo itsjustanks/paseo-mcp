@@ -22,7 +22,7 @@ import {
   type PaseoToolsChange,
 } from "../shared/paseo-tools";
 import { ADD_PROJECT_SERVERS } from "../shared/settings";
-import { backoffMs } from "../shared/schedule";
+import { backoffMs, failureStreak } from "../shared/schedule";
 import { canOpenMcp, openMcp } from "./navigate";
 import { Button, Card, Disclosure, ErrorText, Facts, Loading, Notice, Row, Section, Segmented, StatusLine, StatusPill, Tag, Toggle, useTokens, type Status } from "./ui";
 
@@ -47,7 +47,7 @@ export function usePaseoTools() {
     queryKey: PASEO_TOOLS_QUERY_KEY,
     queryFn: () => call({}),
     staleTime: 5_000,
-    refetchInterval: (query) => backoffMs(query.state.fetchFailureCount, 60_000, 30 * 60_000),
+    refetchInterval: (query) => backoffMs(failureStreak(query), 60_000, 30 * 60_000),
     retry: false,
   });
 }

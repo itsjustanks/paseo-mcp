@@ -65,8 +65,8 @@ syncBuiltinESMExports();
 const { handleMcpAuth, handleMcpMatrix } = await import("../server/handlers");
 const { handleMcpWorkspace } = await import("../server/workspace");
 const { handleMcpAgentServers } = await import("../server/enabled");
-const { handleMcpHealthCached } = await import("../server/health");
-const { handleMcpToolsCached } = await import("../server/tools");
+const { handleMcpHealthCached, healthSettled } = await import("../server/health");
+const { handleMcpToolsCached, toolsSettled } = await import("../server/tools");
 const { handleMcpSiblings } = await import("../server/siblings");
 const { handleMcpPaseoTools, handleMcpSetPaseoTools } = await import("../server/paseo-tools");
 const { codexChecksSettled } = await import("../server/codex-auth");
@@ -104,6 +104,9 @@ test("panel reads start no process at all", async () => {
     handleMcpSiblings();
     await handleMcpPaseoTools({}, context);
   }
+  // 0.11.3: the cached reads start a pass in the background on a fresh host.
+  // It probes over HTTP and never starts the login shell for PATH.
+  await Promise.all([healthSettled(), toolsSettled()]);
   await codexChecksSettled();
   assert.equal(codexRuns(), 0, "no codex from the workspace panel, the Claude agent panel, the matrix, the cached reads or the AI Router card");
   assert.deepEqual(spawned.filter((name) => name !== "ps" && name !== "lsof"), [], `unexpected processes: ${spawned.join(", ")}`);

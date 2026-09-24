@@ -11,7 +11,9 @@ import {
   type McpHealth,
   type McpHealthReport,
 } from "../shared/contracts";
-import { backoffMs } from "../shared/schedule";
+import { cachedReadInterval, clockTime, failureStreak, type CachedRead } from "../shared/schedule";
+
+export { CHECKING_POLL_MS, cachedReadInterval, type CachedRead } from "../shared/schedule";
 import { canOpenMcp, openMcp } from "./navigate";
 import { Button, Disclosure, Facts, Notice, Tag, useTokens, type Status } from "./ui";
 
@@ -19,9 +21,11 @@ export const HEALTH_QUERY_KEY = ["paseo-mcp", "health"] as const;
 
 /**
  * Reads the host's last known health. The server probes on its own timer, so
- * this is a cheap read; only the very first call on a fresh host (no report
- * yet) asks for a real probe. `refetch` always probes: it backs the Refresh
- * and Check now buttons.
+ * this is a cheap read that never waits on a probe: on a fresh host the host
+ * starts one and answers `checking`, and this reads again every few seconds
+ * until the verdict is in. A host older than 0.11.3 does not start one, so the
+ * first read there still asks for a probe. `refetch` always probes: it backs
+ * the Refresh and Check now buttons.
  */
 export function useHealth() {
   const callCached = useRpc(mcpHealthCached);
@@ -29,14 +33,15 @@ export function useHealth() {
   const queryClient = useQueryClient();
   const query = useQuery({
     queryKey: HEALTH_QUERY_KEY,
-    queryFn: async (): Promise<McpHealthReport> => {
+    queryFn: async (): Promise<CachedRead<McpHealthReport>> => {
       const cached = await callCached({});
-      return cached.report ?? (await callHealth({}));
+      if (!cached.report && cached.checking === undefined) return { report: await callHealth({}), checking: false };
+      return { report: cached.report, checking: cached.checking ?? false };
     },
     staleTime: 60_000,
     // Only while something that shows health is mounted; slower after failures
     // (1, 2, 4 … 15 minutes) so an unreachable host is not asked every minute.
-    refetchInterval: (query) => backoffMs(query.state.fetchFailureCount, 60_000, 15 * 60_000),
+    refetchInterval: (query) => cachedReadInterval(query.state.data, failureStreak(query), 60_000, 15 * 60_000),
     retry: false,
   });
   const probe = useQuery({
@@ -47,15 +52,22 @@ export function useHealth() {
   });
   const refetch = useCallback(async () => {
     const result = await probe.refetch();
-    if (result.data) queryClient.setQueryData(HEALTH_QUERY_KEY, result.data);
+    if (result.data) queryClient.setQueryData<CachedRead<McpHealthReport>>(HEALTH_QUERY_KEY, { report: result.data, checking: false });
     return result;
   }, [probe, queryClient]);
+  const read = query.data;
   return {
-    data: query.data,
+    data: read?.report ?? undefined,
     error: query.error ?? probe.error,
-    isFetching: query.isFetching || probe.isFetching,
+    // The host's own check counts while there is nothing to show yet, so panels say "checking".
+    isFetching: query.isFetching || probe.isFetching || Boolean(read?.checking && !read.report),
     refetch,
   };
+}
+
+/** "checked 14:05", or "as of 14:05 (saved before the plugin restarted)" until this run has checked. */
+export function healthCheckedLabel(report: McpHealthReport, time: (iso: string) => string = clockTime): string {
+  return report.stale ? `as of ${time(report.stale.asOf)} (${report.stale.reason})` : `checked ${time(report.checkedAt)}`;
 }
 
 export function healthStatus(status: McpHealth["status"]): Status {
@@ -154,7 +166,7 @@ export function HealthSummary({ directory, names }: { directory: string; names: 
             rows(away)
           )
         ) : null}
-        <Facts items={[{ value: `checked ${new Date(data.checkedAt).toLocaleString()}` }]} />
+        <Facts items={[{ value: healthCheckedLabel(data, (iso) => new Date(iso).toLocaleString()) }]} />
       </View>
     </Notice>
   );

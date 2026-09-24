@@ -303,17 +303,34 @@ export async function mapLimit<T, R>(items: T[], limit: number, work: (item: T) 
  * the same (`sameDefinition`) keeps its list; an edited URL starts over, and a
  * sign-in wall or a stdio command is a real answer, not a failure.
  */
+/** How long a list that can no longer be read is kept: a server dead for longer stops counting its tools. */
+export const LAST_GOOD_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+
+/** When a listed entry was last actually read. */
+function listedAt(entry: McpServerTools, reportCheckedAt: string): string {
+  return entry.stale?.asOf ?? reportCheckedAt;
+}
+
+/** Whether a list read at `asOf` is still young enough to keep standing in for a failed ask. */
+export function youngEnough(asOf: string, now: number = Date.now(), maxAgeMs: number = LAST_GOOD_MAX_AGE_MS): boolean {
+  const at = Date.parse(asOf);
+  return Number.isFinite(at) && now - at <= maxAgeMs;
+}
+
 export function keepLastGoodTools(
   previous: McpToolsReport | null,
   next: McpToolsReport,
   sameDefinition: (name: string) => boolean,
+  now: number = Date.now(),
 ): McpToolsReport {
   if (!previous) return next;
   const before = new Map(previous.servers.map((entry) => [entry.name, entry]));
   const servers = next.servers.map((entry) => {
     const earlier = before.get(entry.name);
     if (entry.kind !== "unavailable" || earlier?.kind !== "listed" || !sameDefinition(entry.name)) return entry;
-    return { ...earlier, stale: { reason: entry.note, asOf: earlier.stale?.asOf ?? previous.checkedAt } };
+    const asOf = listedAt(earlier, previous.checkedAt);
+    if (!youngEnough(asOf, now)) return entry;
+    return { ...earlier, stale: { reason: entry.note, asOf } };
   });
   return { ...next, servers };
 }

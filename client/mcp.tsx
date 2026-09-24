@@ -53,7 +53,7 @@ import {
   type RawDefRow,
 } from "../shared/mcpjson";
 import { WorkspaceContext, pickLoad } from "./budget";
-import { HealthSummary, ServerHealthTag, healthStatus, healthWord, splitIssues, useHealth } from "./health";
+import { HealthSummary, ServerHealthTag, healthCheckedLabel, healthStatus, healthWord, splitIssues, useHealth } from "./health";
 import { canOpenMcp, openMcp, takePendingServer } from "./navigate";
 import { SectionHeading, TabBar, type SectionId } from "./navigation";
 import { PaseoToolsAgentRow, PaseoToolsCard, PaseoToolsLine } from "./paseo-tools";
@@ -1471,7 +1471,7 @@ function McpBody({ layout, host }: PluginSurfaceProps) {
             ? { value: `${brokenServers.length} down`, status: "error" as Status, hint: nameList(brokenServers), action: { label: "Show issues", onPress: toServers("issues") } }
             : issueServers.length > 0
               ? { value: plural(issueServers.length, "warning"), status: "attention" as Status, hint: nameList(issueServers), action: { label: "Show issues", onPress: toServers("issues") } }
-              : { value: "no issues", status: "ok" as Status, hint: healthQuery.data ? `checked ${clockTime(healthQuery.data.checkedAt)}` : null })}
+              : { value: "no issues", status: "ok" as Status, hint: healthQuery.data ? healthCheckedLabel(healthQuery.data) : null })}
       />
       <StatusLine
         label="Editors"
@@ -1594,7 +1594,7 @@ function McpBody({ layout, host }: PluginSurfaceProps) {
         authQuery.data ? { value: plural(accounts.length, "account") } : null,
         health ? { value: `${issueServers.length} ${issueServers.length === 1 ? "issue" : "issues"}`, tone: issueServers.length > 0 ? "attention" : "ok" } : null,
         { value: `${gapServers.length} ${gapServers.length === 1 ? "gap" : "gaps"}` },
-        healthQuery.data?.checkedAt ? { value: `checked ${new Date(healthQuery.data.checkedAt).toLocaleString()}` } : null,
+        healthQuery.data ? { value: healthCheckedLabel(healthQuery.data, (iso) => new Date(iso).toLocaleString()) } : null,
       ]}
     />
   );
@@ -1819,7 +1819,7 @@ function McpBody({ layout, host }: PluginSurfaceProps) {
             { value: `${server.presentIn.length} of ${plural(destinations.length, "editor")}` },
             ...editorFacts(server.presentIn, destinations).map((value) => ({ value })),
             server.detail ? { value: server.detail } : null,
-            healthQuery.data?.checkedAt ? { value: `checked ${new Date(healthQuery.data.checkedAt).toLocaleString()}` } : null,
+            healthQuery.data ? { value: healthCheckedLabel(healthQuery.data, (iso) => new Date(iso).toLocaleString()) } : null,
           ]}
         />
         {serverHealth && serverHealth.status !== "ok" && serverHealth.note ? (

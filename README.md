@@ -110,7 +110,7 @@ On by default. The host probes every MCP server on a timer: HTTP endpoints get t
 token in the query string counts), stdio commands are looked up on the login shell's PATH. The most recent result
 is cached on the host, and every panel, pill, and the MCP surface reads that cached verdict, so
 opening ten agents never probes your servers ten times. **Refresh** and **Check now** still run a
-fresh probe. Configure it under **Settings → Plugins → Paseo MCP → Health checks**, or run the
+fresh probe and wait for it. Configure it under **Settings → Plugins → Paseo MCP → Health checks**, or run the
 **Configure MCP health checks** command.
 
 | Setting | Default | Meaning |
@@ -128,6 +128,26 @@ the composer chip reads the cached verdict once a minute). With no app connected
 log says `health check: no app connected, pausing until one is` and nothing is probed; the first read
 after that answers with the last verdict and refreshes it in the background. A pass that fails is
 retried after 1, 2, 4 … minutes, never more often than the interval. Probes run eight at a time.
+The tool lists follow the same rules on six times the interval.
+
+Opening a panel never waits on a probe. The cached read answers at once: with the last verdict when
+there is one, or with "checking" on a host that has none yet. When there is no verdict, only a saved
+one, or one older than the interval (after a pause), a pass starts in the background and the panel
+reads again every second until the verdict is in. If a read fails meanwhile, the panel backs off
+(2, 4, 8 … minutes, counted from the last successful read) rather than asking every second.
+
+The last verdicts and tool lists are also kept on disk, so a plugin reload, an update or a daemon
+restart does not start from nothing. After a restart the first read shows the saved verdict and tool
+lists marked "as of HH:MM (saved before the plugin restarted)" and checks again straight away. The
+file is `$PASEO_HOME/plugin-data/paseo-mcp/cache.json` (the same `plugin-data/<id>` place Shared
+Browser uses), written atomically once per completed pass, `0600`, and only while an app is connected.
+It holds no URLs, query strings, header values, env values or command arguments: servers are keyed by
+name and a hash of their URL, headers and command, and notes are the same redacted ones the panels
+show. It does hold what the panels show next to each server: account labels (with the account's
+email), config file paths and the stdio command name. Treat it like `~/.claude.json`, which holds all
+of that and more: don't share it. A tool list last read more than 7 days ago is not restored, and a
+server that stops answering keeps its old list for at most 7 days. A corrupt file, or one from another
+version, is ignored. Deleting it is safe.
 
 | Status | Meaning | Needs attention |
 | --- | --- | --- |

@@ -1,5 +1,43 @@
 # Changelog
 
+## 0.11.3 — 2026-09-24
+
+The first MCP panel open after the plugin starts answers at once. It used to wait 6 to 13 seconds while every server was probed; on a daemon with 36 servers the log showed `paseo-mcp.health took 8.2 s` and `paseo-mcp.tools took 13.4 s` after each reload.
+
+### Why it waited
+- The host kept its last verdict and tool lists in memory only. After a reload, an update or a daemon restart, `paseo-mcp.health-cached` and `paseo-mcp.tools-cached` answered `report: null`, and the app then called the fresh `paseo-mcp.health` and `paseo-mcp.tools` and waited for a full pass (`cached.report ?? (await callHealth({}))` in `client/health.tsx`, the same in `client/tools.tsx`).
+- The 01:50 line in that log (5.9 s, a pause and no reload) was not a cache miss. No `tools took` line came with it, so the tool lists, set in the same process at 01:00, were still cached, and so was health. With a cached verdict the app only calls the fresh RPC on **Refresh**, **Check now**, **Retry**, or after a successful edit or switch (`refreshDefinitions`). Those wait by design. A press right after the pause also joins the background pass that the read had just started. The "last verdict, refreshed in the background" promise held for health. The tools read had no such refresh and waited up to a minute for the timer; it now refreshes the same way.
+
+### Measured (`npm run bench:cold`: sandbox HOME, 36 servers: 26 answer in 400 ms, 4 OAuth, one slow at 4.5 s, one that never answers, 4 stdio)
+
+| | 0.11.2 | 0.11.3 |
+| --- | --- | --- |
+| First panel read, fresh host: health / tools | 6.2 s / 13.3 s (waits on a full pass) | 3 ms / 3 ms ("checking") |
+| Verdict on screen, fresh host: health / tools | 6.2 s / 13.3 s | up to 1 s after the pass ends (read again every second) |
+| First panel read after a reload: health / tools | 6.2 s / 13.3 s | 4 ms / 4 ms (saved verdict, "as of HH:MM") |
+
+The bench measured 9.0 s / 15.0 s to the verdict with a 3 s re-read; the release re-reads every second, so the verdict lands at most a second after the pass ends. The panel stays usable the whole time.
+
+### Changes
+- The cached reads never wait on a probe (`server/health.ts`, `server/tools.ts`). With no report yet, a report saved by the last run, or one older than the interval, they start a pass in the background and answer `checking: true`. The app then reads every second until there is a current report. Panels show their existing "checking" and "listing" states meanwhile. A pass started this way that fails is not started again from a read for a minute.
+- A pass started from a read never starts the login shell for PATH. It waits for the lookup if one is already running (one always is after start-up) and otherwise uses the inherited PATH (`settledSearchPath` in `server/path.ts`). The timer passes and **Refresh** work as before.
+- The last health verdicts and tool lists are saved to `$PASEO_HOME/plugin-data/paseo-mcp/cache.json` (`server/report-cache.ts`). The plugin SDK has no data-directory API; Shared Browser keeps its state in `$PASEO_HOME/plugin-data/shared-browser`, so this uses the same place. The file is written atomically, `0600`, once per completed pass, and only while an app is connected. It is read once on start. A corrupt file, one from another version or one of the wrong shape is ignored.
+- No URL, query string, header value, env value or command argument is stored. Each server is keyed by its name and a 128-bit SHA-256 prefix of its URL, headers and command. Notes are the redacted ones the panels already show; tool descriptions are server text, already capped. The file does hold what the panels show beside each server: account labels (with the account email), config paths and the stdio command name. It is `0600`, like `~/.claude.json`, which holds all of that and more.
+- After a restart the saved health report carries `stale: { reason: "saved before the plugin restarted", asOf }`. Panels show "as of HH:MM (saved before the plugin restarted)" where they said "checked HH:MM". Each saved tool list is marked "as of HH:MM" the way last-good lists already are, with its own sentence in the server pane, and it counts toward the chip until the server answers again. The saved keys carry over the last-good rule: a list is only kept for a definition that has not changed. That rule now compares URL, headers and command, not just the URL.
+- The README's Health checks section says all of this.
+
+
+### Also fixed before release (review)
+- While the host was checking, the app re-read on a fixed timer even after reads started failing, e.g. the plugin went away mid-check. The fast re-read now applies only while reads succeed; after a failure the normal backoff takes over.
+- That backoff never grew. TanStack resets `fetchFailureCount` to 0 whenever a fetch starts (query-core `fetchState`), so "1, 2, 4 … minutes" was always the first step. Health, tools and the Paseo tools card now count failures since the last successful read (`failureStreak` in `shared/schedule.ts`).
+- Kept tool lists never expired, and a saved one came back on every restart. A list last read more than 7 days ago now stops standing in for a server that doesn't answer, and isn't restored (`LAST_GOOD_MAX_AGE_MS`).
+- Known and accepted: if a server's URL, headers or command changed while the plugin was down, its restored health tag can show the old verdict for the few seconds until the first pass ends. The report is labelled "as of HH:MM (saved before the plugin restarted)" throughout.
+### Contracts
+Additive only. Optional `checking` on `paseo-mcp.health-cached` and `paseo-mcp.tools-cached`. Optional `stale: { reason, asOf }` on the health and tools reports. Optional `restored` on a tool list's `stale`. A new app on an older host (no `checking`) still asks for a fresh probe on its first read, as before. No settings document changed. Still no process starts on the panel path.
+
+### Tests
+212 tests (was 201). `tests/polling.test.ts` covers the failure streak, the one-second re-read that stops on failure, and the 7-day limit on kept and restored lists. `tests/cold-start.test.ts` runs the real handlers against a local server that takes 1.5 s to answer. It covers: the first read on a fresh host answers at once with `checking`; nothing is written with no app connected; a completed pass is saved as `0600` without the URL, the query token or the header secret; after a restart the saved verdict and lists come back marked and are replaced by the first pass; back from a pause the last verdict comes back at once and is refreshed; corrupt, old-version and wrong-shape files are ignored; definition keys; round-trip and marking. The no-spawn test now waits for the background pass the cached reads start, and still sees no process. `npm run bench:cold` (`tests/perf/cold.ts`) is new; the plugin process wrapper moved to `tests/perf/plugin-process.ts` so both benches share it. The UI preview takes `?cold` and `?restored`.
+
 ## 0.11.2 — 2026-09-24
 
 Tool search now reads Claude Code's managed settings, so a fleet-wide `ENABLE_TOOL_SEARCH` turns it back on for routed agents. An agent's panel also lists and counts the MCP servers other plugins added to it.
