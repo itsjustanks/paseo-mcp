@@ -3,7 +3,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { request as httpRequest } from "node:http";
 import { chmodSync, existsSync, mkdirSync, renameSync, writeFileSync } from "node:fs";
 import { homedir, hostname } from "node:os";
-import { basename, dirname, join, resolve, sep } from "node:path";
+import { basename, delimiter, dirname, join, resolve, sep } from "node:path";
 import type { Destination } from "../shared/contracts";
 import { onShutdown } from "./lifecycle";
 import { withDeadline } from "./run";
@@ -1273,12 +1273,37 @@ function killLogin(child: ChildProcess, signal: NodeJS.Signals = "SIGTERM"): voi
   }
 }
 
-/** Open on the daemon machine; the URL remains visible in the panel either way. */
-function openDefaultBrowser(url: string): boolean {
+/**
+ * The command that opens a URL in a browser on the daemon machine, or null
+ * when it has none: a Linux host with no desktop session (a container, a
+ * server) or no `xdg-open` on PATH. The panel's Open sign-in button opens the
+ * URL on the user's own device instead.
+ */
+export function browserOpener(
+  platform: NodeJS.Platform = process.platform,
+  env: NodeJS.ProcessEnv = process.env,
+  exists: (path: string) => boolean = existsSync,
+): string | null {
+  if (platform === "darwin") return "/usr/bin/open";
+  if (platform === "win32") return "cmd";
+  if (!env.DISPLAY && !env.WAYLAND_DISPLAY) return null;
+  const dirs = (env.PATH ?? "").split(delimiter).filter(Boolean);
+  const found = dirs.map((dir) => join(dir, "xdg-open")).find((path) => exists(path));
+  return found ?? null;
+}
+
+/** Open on the daemon machine when it has a browser; the URL stays in the panel either way. */
+export function openDefaultBrowser(url: string, command: string | null = browserOpener()): boolean {
+  if (!command) return false;
   try {
-    const command = process.platform === "darwin" ? "/usr/bin/open" : process.platform === "win32" ? "cmd" : "xdg-open";
-    const args = process.platform === "win32" ? ["/c", "start", "", url] : [url];
+    const args = command === "cmd" ? ["/c", "start", "", url] : [url];
     const opener = spawn(command, args, { detached: true, stdio: "ignore", windowsHide: true });
+    // spawn reports a missing or failing program as an 'error' event, not a
+    // throw; with no listener that event ends the whole plugin process.
+    // The URL is not logged: it carries the sign-in state.
+    opener.on("error", (error: NodeJS.ErrnoException) => {
+      console.warn(`[paseo-mcp] could not open a browser on this host (${error.code ?? error.message}); use Open sign-in in the panel`);
+    });
     opener.unref();
     return true;
   } catch {

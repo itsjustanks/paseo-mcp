@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.11.1 — 2026-09-24
+
+Pressing **Connect OAuth** on a daemon with no desktop (every Docker or server install) crashed the plugin: every MCP panel went blank until the plugin was reloaded.
+
+### Fixed
+- The plugin tried to open the sign-in page in a browser on the daemon machine with `xdg-open`. A container has none, and `spawn` reports a missing program as an `error` event rather than a throw, so the `try/catch` around it never saw it. With no listener, Node ended the plugin process (`Error: spawn xdg-open ENOENT`), and Paseo marked the plugin `failed`.
+- A Linux host with no desktop session (`DISPLAY` / `WAYLAND_DISPLAY` unset) or no `xdg-open` on PATH now doesn't try to open a browser at all. The panel's **Open sign-in** button opens the page on your own device, as it already did everywhere. On macOS, Windows and Linux desktops the browser still opens on the daemon machine.
+- A browser command that fails is now a one-line warning in the plugin log, never a crash. The warning leaves out the sign-in URL, since it carries the sign-in state.
+- Audited every other process the plugin starts (`codex`/`claude mcp login`, `mcp logout`, `server/run.ts`): each already had an `error` listener.
+
+### Tests
+180 tests (was 178): headless and desktop hosts, and a browser command that doesn't exist. That test reproduces the crash when the listener is removed.
+
 ## 0.11.0 — 2026-09-24
 
 The context budget now knows whether an agent's CLI loads tool definitions up front, the Paseo tools list says when it may be out of date (or comes live from the host), and the two "inject" settings have different names.
