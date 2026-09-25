@@ -132,15 +132,22 @@ test("Codex is unknown, other CLIs off, an unknown CLI unknown", () => {
 
 const MANAGED = "Managed settings (/etc/claude-code/managed-settings.json)";
 const managedOn = { label: MANAGED, env: { ENABLE_TOOL_SEARCH: "true" } };
+const managedForce = { label: MANAGED, env: { ENABLE_TOOL_SEARCH: "force" } };
 
-test("managed ENABLE_TOOL_SEARCH keeps it on under the betas flag, naming the file and the minimum version", () => {
-  const verdict = claude({ daemonEnv: { CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS: "1", ENABLE_TOOL_SEARCH: "false" }, managedEnv: [managedOn] });
+test("managed ENABLE_TOOL_SEARCH=force keeps it on under the betas flag; a managed true does not (verified on the fleet)", () => {
+  const verdict = claude({ daemonEnv: { CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS: "1", ENABLE_TOOL_SEARCH: "false" }, managedEnv: [managedForce] });
   assert.equal(verdict.state, "on");
   assert.equal(verdict.managed, true);
   assert.equal(
     verdict.reason,
-    `${MANAGED} keep tool search on, even with CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS set (this needs Claude Code v${MANAGED_OVERRIDE_MIN_VERSION} or later)`,
+    `${MANAGED} set ENABLE_TOOL_SEARCH=force, which keeps tool search on through a gateway and under CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS (Claude Code v${MANAGED_OVERRIDE_MIN_VERSION} or later)`,
   );
+  // 2026-09-25: a managed "true" left routed chats sending every tool up front.
+  const trueUnderBetas = claude({ daemonEnv: { CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS: "1" }, managedEnv: [managedOn] });
+  assert.equal(trueUnderBetas.state, "off");
+  assert.notEqual(trueUnderBetas.managed, true, "the betas flag decided it, not the managed file");
+  assert.equal(claude({ daemonEnv: { CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS: "1" }, managedEnv: [{ label: MANAGED, env: { ENABLE_TOOL_SEARCH: "FORCE" } }] }).state, "on", "any case");
+  assert.equal(claude({ daemonEnv: { CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS: "1", CLAUDE_CODE_USE_BEDROCK: "1" }, managedEnv: [managedForce] }).state, "off", "force needs a first-party connection");
   assert.equal(MANAGED_OVERRIDE_MIN_VERSION, "2.1.227");
   const plain = claude({ managedEnv: [{ label: MANAGED, env: { ENABLE_TOOL_SEARCH: "auto" } }] });
   assert.equal(plain.reason, `${MANAGED} keep tool search on`, "no version clause without the betas flag");
@@ -156,11 +163,12 @@ test("managed ENABLE_TOOL_SEARCH=false turns it off, over a user or project valu
   assert.match(high.reason, /set ENABLE_TOOL_SEARCH=auto:50, which defers tools only once they fill 50%/);
 });
 
-test("managed settings on plus a routed AI Router session: on", () => {
+test("managed force plus a routed AI Router session: on (the fleet's live setup); managed true: off", () => {
   for (const [id, routes] of [["claude", true], ["ai-router", false]] as const) {
-    const verdict = claude({ aiRouterRoutes: routes, managedEnv: [managedOn] }, id);
+    const verdict = claude({ aiRouterRoutes: routes, managedEnv: [managedForce] }, id);
     assert.equal(verdict.state, "on", id);
-    assert.match(verdict.reason, /even with CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS set \(this needs Claude Code v2\.1\.227 or later\)$/);
+    assert.match(verdict.reason, /set ENABLE_TOOL_SEARCH=force, which keeps tool search on through a gateway and under CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS \(Claude Code v2\.1\.227 or later\)$/);
+    assert.equal(claude({ aiRouterRoutes: routes, managedEnv: [managedOn] }, id).state, "off", `${id}: a managed true does not survive the betas flag`);
   }
   assert.equal(claude({ aiRouterRoutes: true }).state, "off", "without managed settings routing still turns it off");
 });
@@ -312,10 +320,13 @@ test("host: managed settings file and drop-ins, above everything, missing or bro
   const betas = { CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS: "1" };
   assert.equal((await verdicts({}, betas))?.claude?.state, "off", "missing: no layer");
   const file = join(managedDir, "managed-settings.json");
-  writeJson(file, { env: { ENABLE_TOOL_SEARCH: "true" } });
+  writeJson(file, { env: { ENABLE_TOOL_SEARCH: "force" } });
   const on = await verdicts({}, betas);
   assert.equal(on?.claude?.state, "on");
-  assert.match(on!.claude!.reason, new RegExp(`^Managed settings \\(${file.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\) keep tool search on, even with`));
+  assert.match(on!.claude!.reason, new RegExp(`^Managed settings \\(${file.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\) set ENABLE_TOOL_SEARCH=force`));
+  writeJson(file, { env: { ENABLE_TOOL_SEARCH: "true" } });
+  assert.equal((await verdicts({}, betas))?.claude?.state, "off", "a managed true yields to the betas flag");
+  writeJson(file, { env: { ENABLE_TOOL_SEARCH: "force" } });
   assert.equal(on?.codex?.state, "unknown", "not read for Codex");
 
   writeJson(join(managedDir, "managed-settings.d", "10-a.json"), { env: { ENABLE_TOOL_SEARCH: "auto" } });
@@ -335,7 +346,8 @@ test("host: managed settings file and drop-ins, above everything, missing or bro
 test("host: managed settings with AI Router routing the built-in claude provider", async () => {
   const path = aiRouterSettingsPath(home);
   writeJson(path, { version: 1, values: { routeAgents: true } });
-  writeJson(join(managedDir, "managed-settings.json"), { env: { ENABLE_TOOL_SEARCH: "true" } });
+  // The fleet's live file (2026-09-25).
+  writeJson(join(managedDir, "managed-settings.json"), { env: { ENABLE_TOOL_SEARCH: "force" } });
   const result = await verdicts({});
   assert.equal(result?.claude?.state, "on");
   assert.equal(result?.claude?.managed, true);

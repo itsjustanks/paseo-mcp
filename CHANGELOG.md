@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.14.1 — 2026-09-25
+
+The chip, the context meter and the budget warning now read tool search right on a gateway that keeps it on with `ENABLE_TOOL_SEARCH="force"`.
+
+### Fixed
+- A managed `ENABLE_TOOL_SEARCH="force"` counts as tool search on, through a custom `ANTHROPIC_BASE_URL` and under `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS` (AI Router's routed sessions). It is the value Claude Code 2.1.280 checks for itself (`isToolSearchForceOverride`, first-party connections only). Before, the plugin didn't know the value and said tool search was off. On a fleet that runs with it (`/etc/claude-code/managed-settings.json` = `{"env":{"ENABLE_TOOL_SEARCH":"force"}}`, where routed chats went from 70 tools sent up front to 13), every routed agent's chip showed the full token cost, and the budget warning fired for no reason.
+- A managed `"true"` no longer counts as on under the betas flag. Tested on the same fleet, it changed nothing. 0.11.2 had read the docs' "managed settings can keep tool search on" as covering any managed value.
+- On a cloud provider (Bedrock, Mantle, Claude Platform on AWS, Agent Platform, Foundry), `force` has no effect, as in Claude Code's own check.
+
+### Tests
+Tool-search tests cover `force` under the betas flag, a routed AI Router session and the built-in provider, the managed file on disk, any letter case, and Bedrock; and a managed `true` under the betas flag reading off.
+
 ## 0.14.0 — 2026-09-25
 
 The composer chip is now a context meter: "14 MCP · ~38k tokens", what this agent's MCP tool definitions cost, or "14 MCP · deferred" while tool search is on. The agent's MCP panel shows what this chat used and what it loaded without using, and a failed sign-in now shows up in the chat itself.

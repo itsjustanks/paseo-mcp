@@ -548,15 +548,18 @@ Sources, later ones winning:
    in `managed-settings.d/` (alphabetical, hidden files skipped), in
    `/Library/Application Support/ClaudeCode/` on macOS, `/etc/claude-code/` on Linux and WSL
    ([managed settings](https://code.claude.com/docs/en/managed-settings)). Read for Claude-based
-   providers only. A managed `ENABLE_TOOL_SEARCH` decides even over
-   `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS` and AI Router's routing: Claude Code ignores "a value you
-   set yourself" under that flag, but "on Claude Code v2.1.227 or later, managed settings can keep
-   tool search on" ([env vars](https://code.claude.com/docs/en/env-vars)). The docs name no other
-   key for this, so the plugin takes a managed `env.ENABLE_TOOL_SEARCH` as the override. It cannot
-   see the CLI version without starting it, so the panel says the override needs v2.1.227 or later:
-   "Managed settings (/etc/claude-code/managed-settings.json) keep tool search on, even with
-   CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS set (this needs Claude Code v2.1.227 or later)." On Google
-   Cloud's Agent Platform or Microsoft Foundry the override "has no effect", so those stay unknown.
+   providers only. The value that keeps tool search on under `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS`
+   and through a gateway (AI Router's routing) is a managed `ENABLE_TOOL_SEARCH="force"`. The docs only
+   say "on Claude Code v2.1.227 or later, managed settings can keep tool search on"
+   ([env vars](https://code.claude.com/docs/en/env-vars)); Claude Code 2.1.280 checks for exactly
+   `force` (`isToolSearchForceOverride`, first-party connections only, and a custom
+   `ANTHROPIC_BASE_URL` still counts as one). Tested on a fleet on 2026-09-25: with
+   `{"env":{"ENABLE_TOOL_SEARCH":"force"}}` in `/etc/claude-code/managed-settings.json`, routed chats
+   sent 13 tools up front instead of 70; a managed `"true"` changed nothing. So the panel says on for
+   `force` ("…set ENABLE_TOOL_SEARCH=force, which keeps tool search on through a gateway and under
+   CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS (Claude Code v2.1.227 or later)"), and lets a managed
+   `true`/`auto` count only where the betas flag is not set. On a cloud provider (Bedrock, Mantle,
+   Claude Platform on AWS, Agent Platform, Foundry) `force` has no effect.
    A missing or broken file counts as not there. The macOS configuration profile, the Windows
    registry and server-managed settings are not files and are not read.
 

@@ -233,21 +233,29 @@ function managedVerdict(env: Resolved, cli: string): ToolSearchVerdict | null {
   const threshold = autoThreshold(value);
   const verdict = (state: ToolSearchState, reason: string): ToolSearchVerdict => ({ state, reason, cli, managed: true });
   if (value === "false") return verdict("off", `${set.label} set ENABLE_TOOL_SEARCH=false`);
-  if (threshold !== null && threshold !== "on") return verdict("unknown", `${set.label} set ENABLE_TOOL_SEARCH=${set.value}, ${threshold}`);
-  if (value !== "true" && threshold !== "on") return null;
   const betas = env.CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS;
   const underBetas = betas !== undefined && (betas.source === "ai-router" || truthy(betas.value));
-  // "On a cloud provider … the override has no effect" (llm-gateway-protocol):
-  // under the betas flag that leaves tool search off, which the ordinary rules say.
-  if (underBetas && onCloudProvider(env)) return null;
+  // `force` is the managed override Claude Code checks for itself
+  // (2.1.280 `isToolSearchForceOverride`: only on a first-party connection,
+  // which a custom ANTHROPIC_BASE_URL still is; a cloud provider is not).
+  // Verified on the fleet 2026-09-25: routed chats went from 70 tools sent up
+  // front to 13, under CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS.
+  if (value === "force") {
+    if (onCloudProvider(env)) return null;
+    return verdict(
+      "on",
+      `${set.label} set ENABLE_TOOL_SEARCH=force, which keeps tool search on through a gateway${underBetas ? " and under CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS" : ""} (Claude Code v${MANAGED_OVERRIDE_MIN_VERSION} or later)`,
+    );
+  }
+  if (threshold !== null && threshold !== "on") return verdict("unknown", `${set.label} set ENABLE_TOOL_SEARCH=${set.value}, ${threshold}`);
+  if (value !== "true" && threshold !== "on") return null;
+  // `true`/`auto` do NOT survive the betas flag, managed or not: tested on the
+  // fleet 2026-09-25, a managed "true" left routed chats sending every tool.
+  // The ordinary rules then say off, with the flag as the reason.
+  if (underBetas) return null;
   const cloud = cloudProvider(env);
   if (cloud) return verdict("unknown", cloud);
-  return verdict(
-    "on",
-    underBetas
-      ? `${set.label} keep tool search on, even with CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS set (this needs Claude Code v${MANAGED_OVERRIDE_MIN_VERSION} or later)`
-      : `${set.label} keep tool search on`,
-  );
+  return verdict("on", `${set.label} keep tool search on`);
 }
 
 export const AI_ROUTER_REASON = "AI Router re-routes this provider through OmniRoute (custom ANTHROPIC_BASE_URL) whenever its endpoint is up";
