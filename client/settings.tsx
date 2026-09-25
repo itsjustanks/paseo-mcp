@@ -170,10 +170,17 @@ function HealthControls({ settings, theme }: { settings: HealthReady; theme: Plu
           />
           <SettingsSwitch
             label="Composer chip"
-            hint="Always show an MCP chip on each agent's composer: server count, then issues, sign-ins or the tool total; press it to open MCP management"
+            hint="Always show an MCP chip on each agent's composer: server count, then issues, sign-ins or what the tool definitions cost; press it to open that agent's MCP panel"
             value={values.showComposerPill}
             disabled={settings.saving}
             onValueChange={(showComposerPill) => save({ showComposerPill })}
+          />
+          <SettingsSwitch
+            label="Chat notices: sign-in problems"
+            hint="When an MCP tool call in a chat fails for lack of a sign-in, add one card to that chat with a Connect button (at most one per server per chat)"
+            value={values.chatSignInNotices}
+            disabled={settings.saving}
+            onValueChange={(chatSignInNotices) => save({ chatSignInNotices })}
           />
         </SettingsCard>
         {settings.saveError ? (

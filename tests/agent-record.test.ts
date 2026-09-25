@@ -7,6 +7,7 @@ import { isSafeAgentId, recordServers, unexplainedServers } from "../shared/agen
 import { BUDGET_ATTENTION, costProfile, loadFor, withAdded, type ProfileScope, type WorkspaceProfile } from "../shared/budget";
 import { ADDED_TOOLS_TTL_MS, addedProbesSettled, addedToolCount, agentProjectDir, configureAddedProbe, readAgentServers } from "../server/agent-record";
 import { forgetAllFiles } from "../server/files";
+import { definitionTokens } from "../shared/meter";
 
 const home = mkdtempSync(join(tmpdir(), "paseo-mcp-agent-record-"));
 after(() => rmSync(home, { recursive: true, force: true }));
@@ -92,6 +93,9 @@ function fakeServer(tools: number | "down" | 401) {
   return { fetch, calls: () => calls };
 }
 
+/** What the fake server's list of `count` tools costs, by the meter's own rule. */
+const listedTokens = (count: number) => definitionTokens(Array.from({ length: count }, (_, index) => ({ name: `t${index}`, inputSchema: { type: "object" } })));
+
 const HTTP = { name: "remote", transport: "http" as const, url: "https://mcp.example.com/mcp" };
 
 test("stdio servers run on demand and are never asked", () => {
@@ -103,7 +107,7 @@ test("an HTTP server's count comes from the tools probe, in the background, then
   configureAddedProbe({ fetch: server.fetch });
   assert.deepEqual(addedToolCount(HTTP), { note: "tools not counted yet" }, "the read never waits");
   await addedProbesSettled();
-  assert.deepEqual(addedToolCount(HTTP), { tools: 7, note: "7 tools" });
+  assert.deepEqual(addedToolCount(HTTP), { tools: 7, note: "7 tools", definitionTokens: listedTokens(7) }, "0.14.0: with the estimated cost of its definitions");
   const asked = server.calls();
   for (let round = 0; round < 5; round += 1) addedToolCount(HTTP);
   await addedProbesSettled();
@@ -142,7 +146,7 @@ test("a good count survives a later failure after the ten minutes", async () => 
   mode = "down";
   addedToolCount(HTTP, Date.now() + ADDED_TOOLS_TTL_MS);
   await addedProbesSettled();
-  assert.deepEqual(addedToolCount(HTTP), { tools: 4, note: "4 tools" });
+  assert.deepEqual(addedToolCount(HTTP), { tools: 4, note: "4 tools", definitionTokens: listedTokens(4) });
 });
 
 // ------------------------------------------------------------------ budget

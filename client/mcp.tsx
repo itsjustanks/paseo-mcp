@@ -55,6 +55,7 @@ import {
 import { WorkspaceContext, pickLoad } from "./budget";
 import { CatalogGallery, CopyCatalogEntryButton } from "./catalog";
 import { HealthSummary, ServerHealthTag, healthCheckedLabel, healthStatus, healthWord, splitIssues, useHealth } from "./health";
+import { setSignInFocus, useSignInFocus } from "./focus";
 import { canOpenMcp, openMcp, takePendingServer } from "./navigate";
 import { SectionHeading, TabBar, type SectionId } from "./navigation";
 import { PaseoToolsAgentRow, PaseoToolsCard, PaseoToolsLine } from "./paseo-tools";
@@ -2392,6 +2393,51 @@ function McpBody({ layout, host }: PluginSurfaceProps) {
 }
 
 /** Workspace-local .mcp.json inventory and OAuth, opened beside that workspace. */
+/**
+ * Where the in-chat sign-in card's Connect lands: that server's sign-in rows
+ * (the same OAuth flow as its row below), or, when the plugin cannot start one
+ * for it here, where to sign in instead.
+ */
+function SignInFocus({
+  server,
+  entry,
+  reading,
+  rows,
+  onDismiss,
+}: {
+  server: string;
+  entry: AgentServer | null;
+  reading: boolean;
+  rows: (entry: AgentServer) => React.ReactNode;
+  onDismiss: () => void;
+}) {
+  const t = useTokens();
+  const signIn = entry ? rows(entry) : null;
+  return (
+    <Notice tone="attention" onDismiss={onDismiss}>
+      <View style={{ gap: t.space.sm }}>
+        <Text style={t.text.bodyStrong}>{`${server} needs sign-in`}</Text>
+        {reading ? (
+          <Loading label="Reading this agent's servers…" />
+        ) : signIn ? (
+          signIn
+        ) : (
+          <Text style={t.text.caption}>
+            {entry
+              ? `The plugin cannot start a sign-in for ${server} from here (it is not an OAuth HTTP server for this agent's account). Sign in from its card under Manage all servers, or in the editor.`
+              : `${server} is not one of the servers this panel lists for the agent. Sign in from its card under Manage all servers, or in the editor.`}
+          </Text>
+        )}
+        {canOpenMcp() ? (
+          <View style={{ flexDirection: "row" }}>
+            <Button label="Manage all servers" variant="ghost" onPress={() => openMcp()} />
+          </View>
+        ) : null}
+      </View>
+    </Notice>
+  );
+}
+
 export function McpWorkspacePanel(props: PluginWorkspacePanelProps) {
   const t = useUi(props.theme, props.layout.compact);
   return (
@@ -2412,6 +2458,7 @@ export function WorkspaceBody({
   intro,
   providerId,
   agentId,
+  context,
 }: Pick<PluginWorkspacePanelProps, "host" | "workspaceId"> & {
   caption?: string;
   intro?: React.ReactNode;
@@ -2419,6 +2466,8 @@ export function WorkspaceBody({
   providerId?: string;
   /** The agent panel's agent, so servers other plugins added to it are listed and counted. */
   agentId?: string;
+  /** 0.14.0: the agent panel's context section (client/chat.tsx), under the load. */
+  context?: React.ReactNode;
 }) {
   const t = useTokens();
   const toast = useToast();
@@ -2439,6 +2488,8 @@ export function WorkspaceBody({
   );
   const [selected, setSelected] = useState<string | null>(null);
   const [liveLogin, setLiveLogin] = useState(false);
+  // 0.14.0: the in-chat sign-in card's Connect lands here with its server first.
+  const signInFocus = useSignInFocus(agentId);
 
   const workspaceQuery = useQuery({
     queryKey: ["paseo-mcp", "workspace", workspaceId],
@@ -2746,7 +2797,17 @@ export function WorkspaceBody({
           pill={<StatusPill status={pill.status} label={pill.label} />}
         />
         {intro}
+        {signInFocus && agentId ? (
+          <SignInFocus
+            server={signInFocus}
+            entry={agentServersQuery.data?.servers.find((entry) => entry.name === signInFocus) ?? null}
+            reading={agentServersQuery.isLoading}
+            rows={(entry) => authFor(entry.name, agentServersQuery.data?.account ?? null, entry.inlineCredentials, entry.transport)}
+            onDismiss={() => setSignInFocus(agentId, null)}
+          />
+        ) : null}
         {data && !server ? <WorkspaceContext data={data} providerId={providerId} attention={attention} added={agentId ? agentServersQuery.data?.pluginServers : undefined} /> : null}
+        {data && !server ? context : null}
         <HealthSummary directory={workspace?.directory ?? ""} names={loaded} />
         <View style={{ flexDirection: "row" }}>
           <Button label="Refresh" variant="ghost" loading={workspaceQuery.isFetching || healthQuery.isFetching} onPress={refresh} />

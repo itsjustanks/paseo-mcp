@@ -71,7 +71,10 @@ const { handleMcpSiblings } = await import("../server/siblings");
 const { handleMcpPaseoTools, handleMcpSetPaseoTools } = await import("../server/paseo-tools");
 const { codexChecksSettled } = await import("../server/codex-auth");
 const { injectWorkspaceServers } = await import("../server/hooks");
+const { handleMcpAgentChat, chatSettled } = await import("../server/chat");
+const { addedProbesSettled } = await import("../server/agent-record");
 
+let timelineReads = 0;
 let daemonConfig: Record<string, unknown> = { mcp: { injectIntoAgents: true }, browserTools: { enabled: true }, providers: {} };
 const paseo = {
   config: {
@@ -83,6 +86,25 @@ const paseo = {
     },
   },
   workspaces: { list: async () => ({ entries: [{ id: "ws", name: "demo", workspaceDirectory: project, projectRootPath: project }] }) },
+  // 0.14.0: one agent's timeline, two pages, with MCP calls in both forms.
+  agents: {
+    ref: (id: string) => ({
+      id,
+      lastUsage: { contextWindowUsedTokens: 360_000, contextWindowMaxTokens: 1_000_000 },
+      refresh: async () => null,
+      timeline: {
+        append: async () => ({ seq: 1, epoch: "e" }),
+        refetch: async (options: { direction?: string }) => {
+          timelineReads += 1;
+          const tail = options.direction !== "before";
+          const call = (name: string) => ({ item: { type: "tool_call", callId: name, name, status: "completed", error: null, detail: { type: "unknown", input: null, output: null } } });
+          return tail
+            ? { entries: [call("mcp__tool__run"), call("mcp__paseo__list_agents")], hasOlder: true, startCursor: { epoch: "e", seq: 10 }, agent: null }
+            : { entries: [call("mcp__tool__run"), call("shared-browser.open")], hasOlder: false, startCursor: { epoch: "e", seq: 1 }, agent: null };
+        },
+      },
+    }),
+  },
   projects: { list: async () => ({ entries: [{ name: "demo", path: project }] }) },
 } as never;
 const context = { paseo };
@@ -112,6 +134,20 @@ test("panel reads start no process at all", async () => {
   assert.deepEqual(spawned.filter((name) => name !== "ps" && name !== "lsof"), [], `unexpected processes: ${spawned.join(", ")}`);
   // The process scan is shared: ten workspace reads in a row read the table once.
   assert.ok(spawned.filter((name) => name === "ps").length <= 1, `ps ran ${spawned.filter((name) => name === "ps").length} times`);
+});
+
+test("the context meter behind a Codex agent's chip starts no process and no Codex check (review fix)", async () => {
+  spawned.length = 0;
+  const before = codexRuns();
+  const chip = { workspaceId: "ws", providerId: "codex", agentId: "agent-1" };
+  for (let round = 0; round < 10; round += 1) await handleMcpAgentChat(chip, context);
+  await chatSettled();
+  await codexChecksSettled();
+  await addedProbesSettled();
+  const settled = await handleMcpAgentChat(chip, context);
+  assert.ok(settled.meter, "the meter still comes out");
+  assert.equal(codexRuns() - before, 0, "no codex mcp list from the chip");
+  assert.deepEqual(spawned.filter((name) => name !== "ps" && name !== "lsof"), [], `unexpected processes: ${spawned.join(", ")}`);
 });
 
 test("the sign-in read asks Codex once per account in the background, then never again until something changes", async () => {
@@ -151,6 +187,30 @@ test("Paseo tools read and write start no process", async () => {
   }
   const workspace = await handleMcpWorkspace({ workspaceId: "ws" }, context);
   assert.equal(workspace.paseoTools?.tools.claude, 61, "the workspace load counts Paseo tools");
+  assert.deepEqual(spawned.filter((name) => name !== "ps" && name !== "lsof"), [], `unexpected processes: ${spawned.join(", ")}`);
+});
+
+test("the context meter and chat read (0.14.0) never wait and start no process", async () => {
+  spawned.length = 0;
+  const chip = { workspaceId: "ws", providerId: "claude", agentId: "agent-1" };
+  const first = await handleMcpAgentChat(chip, context);
+  assert.equal(first.checking, true, "the first answer comes back before the meter is worked out");
+  assert.equal(first.meter, null);
+  assert.equal(first.chat, null, "the chip does not ask for the chat");
+  for (let round = 0; round < 10; round += 1) {
+    await handleMcpAgentChat(chip, context);
+    await handleMcpAgentChat({ ...chip, chat: true }, context);
+  }
+  await chatSettled();
+  assert.equal(timelineReads, 2, "ten panel reads, one bounded timeline read (two pages)");
+  const settled = await handleMcpAgentChat({ ...chip, chat: true }, context);
+  assert.equal(settled.checking, false);
+  assert.ok(settled.meter && settled.meter.servers >= 3, "the project server, the added ones and Paseo's");
+  assert.ok(settled.meter.costs.some((entry) => entry.name === "paseo" && entry.basis === "catalogue"));
+  assert.deepEqual(settled.usage, { usedTokens: 360_000, maxTokens: 1_000_000 });
+  assert.deepEqual(settled.chat?.calls.map((entry) => `${entry.server}:${entry.calls}`), ["tool:2", "paseo:1", "shared-browser:1"]);
+  assert.equal(settled.chat?.scanned, 4);
+  await addedProbesSettled();
   assert.deepEqual(spawned.filter((name) => name !== "ps" && name !== "lsof"), [], `unexpected processes: ${spawned.join(", ")}`);
 });
 

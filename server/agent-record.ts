@@ -50,7 +50,7 @@ export function readAgentServers(agentId: string, cwds: readonly string[], home 
  */
 export const ADDED_TOOLS_TTL_MS = 10 * 60_000;
 
-export type AddedCount = { tools?: number; note: string };
+export type AddedCount = { tools?: number; note: string; definitionTokens?: number };
 
 type Entry = { at: number; count: AddedCount };
 
@@ -73,7 +73,7 @@ export async function addedProbesSettled(): Promise<void> {
 async function ask(url: string, headers: Record<string, string> | undefined): Promise<AddedCount> {
   try {
     const outcome = await listToolsMcp(url, headers, probeFetch ? { fetch: probeFetch } : {});
-    if (outcome.kind === "listed") return { tools: outcome.tools.length, note: `${outcome.tools.length} ${outcome.tools.length === 1 ? "tool" : "tools"}` };
+    if (outcome.kind === "listed") return { tools: outcome.tools.length, note: `${outcome.tools.length} ${outcome.tools.length === 1 ? "tool" : "tools"}`, ...(outcome.definitionTokens !== undefined ? { definitionTokens: outcome.definitionTokens } : {}) };
     if (outcome.kind === "auth-required") return { note: "needs a sign-in before it lists its tools" };
     return { note: `tools not listed: ${outcome.note || "no answer"}` };
   } catch {
@@ -93,13 +93,16 @@ async function probe(url: string, headers: Record<string, string> | undefined): 
   counts.set(url, { at: Date.now(), count });
 }
 
-/** The last known count for one server; starts a background probe when due. Never waits. */
-export function addedToolCount(server: RecordServer, now = Date.now()): AddedCount {
+/**
+ * The last known count for one server; starts a background probe when due,
+ * unless `probe` is false (the composer chip: cached counts only). Never waits.
+ */
+export function addedToolCount(server: RecordServer, now = Date.now(), { probe: allowProbe = true }: { probe?: boolean } = {}): AddedCount {
   if (server.transport === "stdio") return { note: "runs on demand" };
   if (server.transport !== "http" || !server.url) return { note: "no command or URL the plugin can read" };
   const url = server.url;
   const hit = counts.get(url);
-  if ((!hit || now - hit.at >= ADDED_TOOLS_TTL_MS) && !inFlight.has(url)) {
+  if (allowProbe && (!hit || now - hit.at >= ADDED_TOOLS_TTL_MS) && !inFlight.has(url)) {
     const run = probe(url, server.headers).finally(() => inFlight.delete(url));
     inFlight.set(url, run);
   }

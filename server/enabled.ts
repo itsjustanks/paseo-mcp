@@ -116,9 +116,15 @@ function projectEntry(configPath: string, directory: string): ClaudeProjectEntry
   return config && typeof config === "object" && !Array.isArray(config) ? config.projects?.[directory] : undefined;
 }
 
+/**
+ * `probe: false` (the context meter behind the composer chip) answers from what
+ * is cached only: no `tools/list` to an added server or to Paseo's own
+ * endpoint, and no `codex mcp list`. The panels leave it on.
+ */
 export async function handleMcpAgentServers(
   { workspaceId, providerId, agentId }: { workspaceId: string; providerId: string; agentId?: string },
   { paseo }: PluginHandlerContext,
+  { probe = true }: { probe?: boolean } = {},
 ) {
   const workspace = await findWorkspace(paseo, workspaceId);
   const directory = projectKeyFor(workspace);
@@ -128,7 +134,7 @@ export async function handleMcpAgentServers(
   const destinations = await buildDestinations(paseo);
   const { profile } = buildProfile(destinations, projectDefs, projectConfigPath, candidates);
   const scope = scopeForProvider(profile, providerId);
-  const paseoTools = await paseoToolsLoad(paseo, providerId ? [providerId] : []);
+  const paseoTools = await paseoToolsLoad(paseo, providerId ? [providerId] : [], { live: probe });
   const toolSearch = providerId ? (await toolSearchVerdicts(paseo, [{ id: providerId, base: scope?.provider ?? "" }], { directory }))?.[providerId] : undefined;
   const load = loadFor(profile, scope, readInjection(), paseoTools ?? null, toolSearch ? { [providerId]: toolSearch } : null);
   const dest = scope ? destinations.find((entry) => entry.id === scope.id) : undefined;
@@ -162,8 +168,8 @@ export async function handleMcpAgentServers(
   const explained = new Set(load.servers.map((entry) => entry.name));
   const pluginServers: PluginServer[] | undefined = recorded
     ? unexplainedServers(recorded, explained).map((entry) => {
-        const count = addedToolCount(entry);
-        return { name: entry.name, transport: entry.transport, ...(count.tools !== undefined ? { tools: count.tools } : {}), note: count.note };
+        const count = addedToolCount(entry, Date.now(), { probe });
+        return { name: entry.name, transport: entry.transport, ...(count.tools !== undefined ? { tools: count.tools } : {}), ...(count.definitionTokens !== undefined ? { definitionTokens: count.definitionTokens } : {}), note: count.note };
       })
     : undefined;
 
@@ -171,7 +177,7 @@ export async function handleMcpAgentServers(
   // from memory; a background refresh starts when the last answer is old).
   let account: McpAuthAccount | null = null;
   if (dest && (dest.provider === "claude" || dest.provider === "codex")) {
-    const accounts = collectAccounts({ askCodex: dest.provider === "codex", only: { provider: dest.provider, email: dest.account } });
+    const accounts = collectAccounts({ askCodex: probe && dest.provider === "codex", only: { provider: dest.provider, email: dest.account } });
     account = accounts[0] ?? null;
   }
 

@@ -10,6 +10,7 @@
  * either what the server said or absent — never guessed.
  */
 import type { McpServerTools, McpTool, McpToolsKind, McpToolsReport } from "./contracts";
+import { definitionTokens as definitionTokensOf } from "./meter";
 import { INITIALIZE_REQUEST, PROBE_TIMEOUT_MS, classifyProbe, describeError, fetchSameOrigin, parseJsonRpc, redactNote } from "./health";
 
 /** Servers asked at once during a refresh; 29 HTTP servers in 5 batches, not 29 sockets. */
@@ -258,7 +259,9 @@ async function exchange(fetchImpl: FetchLike, url: string, headers: Record<strin
   if (listed.kind !== "rpc") return { ...fromHttp(listed), serverInfo, protocolVersion };
   if (listed.error !== undefined) return { ...unavailable("unavailable", `tools/list refused: ${rpcErrorText(listed.error)}`), serverInfo, protocolVersion };
   const tools = shapeToolList(listed.result);
-  return { kind: "listed", note: `${tools.length} tools`, tools, serverInfo, protocolVersion };
+  // Measured on the raw list, before descriptions are cut to one line.
+  const definitionTokens = definitionTokensOf((listed.result as { tools?: unknown } | null)?.tools);
+  return { kind: "listed", note: `${tools.length} tools`, tools, serverInfo, protocolVersion, definitionTokens };
 }
 
 function rpcErrorText(error: unknown): string {

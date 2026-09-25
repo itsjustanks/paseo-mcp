@@ -3,6 +3,7 @@ import React, { useCallback } from "react";
 import { Text, View } from "react-native";
 import { buildPaseoToolsPatch, paseoToolProviders, readDaemonToolsConfig, resolvePaseoTools } from "../../shared/paseo-tools";
 import { toolSearch } from "../../shared/tool-search";
+import { meterFor } from "../../shared/meter";
 import { curatedCard, planInstall, registryCard, teamCard, budgetImpact, type CatalogCard } from "../../shared/catalog";
 import { CURATED_CATALOG } from "../../shared/catalog-curated";
 import { GALLERY_META, libraryCard, mergeGallery, parseLibrary } from "../../shared/library";
@@ -42,9 +43,11 @@ const health = [
   { name: "linear", status: "ok", note: "", scopes: [userScope] },
 ];
 const checkedAt = new Date().toISOString();
+// ?healthy: every server answers, so the chip shows its cost.
+if (params.has("healthy")) for (const entry of health) { entry.status = "ok"; entry.note = ""; }
 const tool = (name: string, description: string, args: string[] = [], required: string[] = []) => ({ name, title: "", description, takesArguments: args.length > 0, arguments: args, required });
 const tools = [
-  { name: "heroui-pro", transport: "http", kind: "listed", note: "3 tools", serverInfo: { name: "@heroui-pro/react-mcp", version: "0.2.0" }, protocolVersion: "2025-06-18", tools: [tool("list_components", "List every component from both packages."), tool("get_component_docs", "Full MDX documentation for components.", ["components", "context"], ["components"]), tool("get_css", "BEM CSS for Pro and OSS components.", ["components"])] },
+  { name: "heroui-pro", transport: "http", kind: "listed", note: "3 tools", serverInfo: { name: "@heroui-pro/react-mcp", version: "0.2.0" }, protocolVersion: "2025-06-18", definitionTokens: 3400, tools: [tool("list_components", "List every component from both packages."), tool("get_component_docs", "Full MDX documentation for components.", ["components", "context"], ["components"]), tool("get_css", "BEM CSS for Pro and OSS components.", ["components"])] },
   { name: "jam", transport: "http", kind: "auth-required", note: "sign in to list tools", serverInfo: null, protocolVersion: "", tools: [] },
   { name: "posthog", transport: "http", kind: "auth-required", note: "sign in to list tools", serverInfo: null, protocolVersion: "", tools: [] },
   { name: "playwright", transport: "stdio", kind: "stdio", note: "'npx' runs as a child process of the agent; its tools are only listed while it runs", serverInfo: null, protocolVersion: "", tools: [] },
@@ -268,6 +271,34 @@ async function call(contract: any, input: any) {
       ].map((row) => ({ ...row, enabled: verdict(row.scope, row.name) }));
       return { directory: `${HOME}/projects/data-glue`, scope: { id: scopeId, label: destinations.find((d) => d.id === scopeId)!.label, provider: claudeP ? "claude" : "codex", providerId: provider, configPath: scopeId }, projectIncluded: true, projectNote: "", servers: rows, account: accounts.find((a) => a.provider === (claudeP ? "claude" : "codex")) ?? null, paseoTools: (() => { const load = paseoLoad(); return { tools: load.tools[provider] ?? 0, blocker: load.blocker, asOf: load.asOf, source: load.source }; })(), toolSearch: toolSearchMap()?.[provider], ...(input.agentId && params.has("plugin-servers") ? { pluginServers: [{ name: "shared-browser", transport: "stdio", note: "runs on demand" }, { name: "linear-remote", transport: "http", tools: 23, note: "23 tools" }] } : {}) };
     }
+    // 0.14.0: the context meter from the real estimator over the agent-servers
+    // fixture, with its tool-search verdict (Claude: on, so deferred; ?routed: off). ?no-usage: the agent has not reported
+    // its context use. ?quiet-chat: no MCP calls in this chat yet. ?long-chat: the read
+    // stopped at the cap. ?stale-chat: the last read failed.
+    case "agent-chat": {
+      const data: any = await call({ name: "paseo-mcp.agent-servers" }, input);
+      calls.pop();
+      const known = new Map(tools.map((t: any) => [t.name, { listed: t.kind === "listed", tools: t.tools.length, ...(t.definitionTokens ? { definitionTokens: t.definitionTokens } : {}) }]));
+      const servers = data.servers.filter((s: any) => s.enabled.state !== "disabled");
+      const meter = meterFor({ servers, added: data.pluginServers, known: known as any, paseoTools: data.paseoTools?.tools ?? 0, toolSearch: data.toolSearch });
+      const loaded = [...servers.map((s: any) => s.name), ...(data.pluginServers ?? []).map((s: any) => s.name), ...((data.paseoTools?.tools ?? 0) > 0 ? ["paseo"] : [])];
+      const chatCalls = params.has("quiet-chat") ? [] : [{ server: "supabase", calls: 4, known: true }, { server: "linear", calls: 1, known: true }];
+      return {
+        checking: false,
+        meter,
+        usage: input.chat && !params.has("no-usage") ? { usedTokens: 360_000, maxTokens: 1_000_000 } : null,
+        chat: input.chat ? { scanned: params.has("long-chat") ? 2000 : 1843, truncated: params.has("long-chat"), complete: !params.has("long-chat"), calls: chatCalls, loaded, asOf: checkedAt } : null,
+        stale: Boolean(input.chat) && params.has("stale-chat"),
+        ...(input.chat && params.has("stale-chat") ? { failedAt: checkedAt } : {}),
+      };
+    }
+    // Review fix: the host decides; ?plan-changed: the chat moved on since the review.
+    case "turn-off-unused": {
+      if (params.has("plan-changed")) return { ok: false, refused: "changed", message: "The chat changed since you reviewed this list; review again.", done: [], failed: [], plan: { off: [], kept: [] } };
+      const disabledHere = (window as any).__disabled ??= new Set<string>();
+      for (const name of input.expected) disabledHere.add(name);
+      return { ok: true, message: `Off for this workspace: ${input.expected.join(", ")}. New sessions start without them.`, done: input.expected, failed: [], plan: { off: input.expected, kept: [] } };
+    }
     case "set-enabled": {
       const disabledHere = (window as any).__disabled ??= new Set<string>();
       if (input.enabled) disabledHere.delete(input.name); else disabledHere.add(input.name);
@@ -319,8 +350,8 @@ async function call(contract: any, input: any) {
 }
 export function useRpc(contract: any) { return useCallback((input: unknown) => call(contract, input), [contract]); }
 export function useWorkspace<T>(_id: string, select: (workspace: { name: string; directory: string }) => T): T { return select({ name: "data-glue", directory: `${HOME}/projects/data-glue` }); }
-export function useAgent<T>(_id: string, select: (agent: { provider: string; model: string | null }) => T): T { return select({ provider: params.get("provider") ?? "codex", model: "gpt-5-codex" }); }
-const settingsValues: Record<string, unknown> = { injectWorkspaceServers: !params.has("inject-off"), providers: ["codex"], skipInlineCredentialServers: true, backgroundChecks: true, intervalMinutes: 10, showComposerPill: true, hideAiRouter: params.has("promo-hidden"), libraries: [
+export function useAgent<T>(id: string, select: (agent: { id: string; workspaceId: string; provider: string; model: string | null }) => T): T { return select({ id, workspaceId: "ws-1", provider: params.get("provider") ?? "codex", model: params.get("provider") === "claude" ? "claude-opus-5-5" : "gpt-5-codex" }); }
+const settingsValues: Record<string, unknown> = { injectWorkspaceServers: !params.has("inject-off"), providers: ["codex"], skipInlineCredentialServers: true, backgroundChecks: true, intervalMinutes: 10, showComposerPill: true, chatSignInNotices: true, hideAiRouter: params.has("promo-hidden"), libraries: [
   { ...DEFAULT_LIBRARIES[0]! },
   { ...DEFAULT_LIBRARIES[1]!, enabled: params.has("registry") },
   ...(params.has("team") ? [{ id: "team", name: "Team", source: "https://raw.githubusercontent.com/you/devstack/main/mcp-catalogue.json", format: "json", enabled: true, headerName: "Authorization" }] : []),

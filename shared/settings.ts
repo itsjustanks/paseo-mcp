@@ -77,6 +77,11 @@ export const healthSettings = defineSettings({
       .boolean()
       .default(true)
       .describe("Show an MCP chip on each agent's composer with the server count and status"),
+    // 0.14.0, added with a default so version 1 documents still read as valid.
+    chatSignInNotices: z
+      .boolean()
+      .default(true)
+      .describe("Chat notices: sign-in problems. When an MCP tool call in a chat fails for lack of a sign-in, add one card to that chat"),
   }),
 });
 

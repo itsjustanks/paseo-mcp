@@ -104,6 +104,12 @@ function refreshForRead(paseo: PluginHandlerContext["paseo"] | null): void {
   });
 }
 
+/** The lists as they stand, for the context meter; never starts a listing (the chip's tools read does that). */
+export function toolsReportNow(): McpToolsReport | null {
+  restoreSaved();
+  return cached;
+}
+
 /** For tests: forget this run's lists and what was restored. */
 export function resetToolsCache(): void {
   cached = null;

@@ -8,6 +8,7 @@ import { Text, View } from "react-native";
 import { chipLabel, mcpTools, mcpToolsCached, type McpServerTools, type McpTool, type McpToolsReport } from "../shared/contracts";
 import { clockTime, failureStreak } from "../shared/schedule";
 import { cachedReadInterval, useHealth, type CachedRead } from "./health";
+import { useAgentChat } from "./chat";
 import { paseoToolsFor, usePaseoTools } from "./paseo-tools";
 import { Card, Disclosure, Facts, Row, useTokens, type Status } from "./ui";
 
@@ -80,17 +81,21 @@ export function toolsWord(entry: McpServerTools): string {
 
 /**
  * Always-on composer chip body: the server count and the one thing worth
- * knowing about them (an issue count, a sign-in count, or the tool total).
+ * knowing about them (an issue count, a sign-in count, or, since 0.14.0, what
+ * this agent's tool definitions cost: "~38k tokens", or "deferred").
  * Pressing it opens the agent's MCP panel. Colour is never the only channel:
  * the icon changes with the tone too.
  */
-export function McpChip({ theme, agentId }: PluginComposerPillProps) {
+export function McpChip({ theme, agentId, workspaceId }: PluginComposerPillProps) {
   const health = useHealth();
   const tools = useTools();
   // Paseo's built-in server counts when this agent's provider gets it.
   const provider = useAgent(agentId, (agent) => agent.provider);
   const paseo = usePaseoTools();
-  const { label, tone } = chipLabel(health.data, tools.data, paseoToolsFor(paseo.data, provider));
+  // 0.14.0: this agent's context meter, read beside the reports and never
+  // waited on; until it arrives (or on an older host) the label is as before.
+  const meter = useAgentChat(workspaceId, agentId, provider, false);
+  const { label, tone } = chipLabel(health.data, tools.data, paseoToolsFor(paseo.data, provider), meter.data?.meter ?? null);
   const color = tone === "attention" ? theme.colors.statusWarning : theme.colors.foregroundMuted;
   return (
     <>

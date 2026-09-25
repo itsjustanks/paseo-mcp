@@ -95,16 +95,17 @@ export function resetPaseoToolsCache(): void {
 /**
  * The tool list in use: the daemon's own answer when there is one
  * (server/paseo-live.ts), else the catalogue. Asking again happens in the
- * background, at most every ten minutes, so no read waits on it.
+ * background, at most every ten minutes, so no read waits on it; `askLive:
+ * false` (the composer chip) never asks.
  */
-function catalogInUse(config: DaemonToolsConfig) {
-  void refreshLive(config.mcpEnabled);
+function catalogInUse(config: DaemonToolsConfig, askLive = true) {
+  if (askLive) void refreshLive(config.mcpEnabled);
   const live = liveSnapshot();
   return live.tools ? { catalog: liveCatalog(live.tools), source: "live" as const, liveNote: "" } : { catalog: PASEO_TOOL_CATALOG, source: "catalogue" as const, liveNote: live.note };
 }
 
-function report(config: DaemonToolsConfig, known: readonly string[] = []) {
-  const { catalog, source, liveNote } = catalogInUse(config);
+function report(config: DaemonToolsConfig, known: readonly string[] = [], askLive = true) {
+  const { catalog, source, liveNote } = catalogInUse(config, askLive);
   const hostVersion = runningPaseoVersion();
   return {
     ...resolvePaseoTools(config, paseoToolProviders(config, known), catalog),
@@ -129,9 +130,9 @@ export function toolsLoad(state: PaseoToolsState & { source?: "catalogue" | "liv
  * wired provider ids the caller knows. Undefined when the daemon config cannot
  * be read, so the panels show what they showed before rather than fail.
  */
-export async function paseoToolsLoad(paseo: Paseo, known: readonly string[] = []): Promise<PaseoToolsLoad | undefined> {
+export async function paseoToolsLoad(paseo: Paseo, known: readonly string[] = [], { live = true }: { live?: boolean } = {}): Promise<PaseoToolsLoad | undefined> {
   try {
-    return toolsLoad(report(await readToolsConfig(paseo), known));
+    return toolsLoad(report(await readToolsConfig(paseo), known, live));
   } catch (error) {
     console.warn(`[paseo-mcp] Paseo tools not counted: ${error instanceof Error ? error.message : String(error)}`);
     return undefined;

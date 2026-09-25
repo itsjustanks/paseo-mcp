@@ -1,10 +1,12 @@
 import type { PluginClientContext } from "@getpaseo/plugin/client";
 import { McpAgentPanel } from "./client/agent";
+import { SignInCardSchema, makeSignInCard } from "./client/chat";
 import { McpSurface, McpWorkspacePanel } from "./client/mcp";
 import { registerSurfaceOpener } from "./client/navigate";
 import { HealthSettingsScreen, InjectionSettingsScreen } from "./client/settings";
 import { McpChip } from "./client/tools";
 import { mcpHealthCached } from "./shared/contracts";
+import { SIGN_IN_KIND, SIGN_IN_VERSION } from "./shared/chat";
 import { backoffMs } from "./shared/schedule";
 
 export default function contribute(client: PluginClientContext) {
@@ -90,7 +92,27 @@ export default function contribute(client: PluginClientContext) {
       openSurface("mcp");
     },
   });
-  const removeChips = registerMcpChips(client);
+  // The chip, `/mcp` and the in-chat sign-in card all open the agent's MCP
+  // panel the same way.
+  const openAgentPanel = (workspaceId: string, agentId: string) => client.openPanel("mcp-agent", { workspaceId, agentId });
+  // 0.14.0. Paseo lists its own commands first, then plugins', then the
+  // provider's, so this one is what `/mcp` runs in an agent's composer.
+  client.addSlashCommand({
+    name: "mcp",
+    description: "Open this agent's MCP panel: servers, context cost, sign-in",
+    argumentHint: "",
+    context: "agent",
+    onSubmit({ workspace, agent }) {
+      openAgentPanel(workspace.id, agent.id);
+    },
+  });
+  client.addTimelineRenderer({
+    kind: SIGN_IN_KIND,
+    version: SIGN_IN_VERSION,
+    schema: SignInCardSchema,
+    Component: makeSignInCard(openAgentPanel),
+  });
+  const removeChips = registerMcpChips(client, openAgentPanel);
   return () => {
     removeChips();
     registerSurfaceOpener(null);
@@ -101,7 +123,7 @@ export default function contribute(client: PluginClientContext) {
 
 /**
  * One always-on chip per live agent while the setting is on. It replaces the
- * 0.4 break-only pill: the same slot now reads "12 MCP · 340 tools" on a calm
+ * 0.4 break-only pill: the same slot now reads "12 MCP · ~38k tokens" on a calm
  * host and shifts to "12 MCP · 2 issues" when something breaks, so there is one
  * chip to look at, not two. The chip body (client/tools.tsx) reads the cached
  * health and tool reports; this registry only decides whether a chip exists.
@@ -109,7 +131,7 @@ export default function contribute(client: PluginClientContext) {
  */
 const CHIP_SETTINGS_POLL_MS = 60_000;
 
-function registerMcpChips(client: PluginClientContext): () => void {
+function registerMcpChips(client: PluginClientContext, openAgentPanel: (workspaceId: string, agentId: string) => void): () => void {
   const agents = new Map<string, string>(); // agentId -> workspaceId
   const pills = new Map<string, () => void>();
   // Assume on until the host says otherwise: the setting defaults to on, and a
@@ -134,7 +156,7 @@ function registerMcpChips(client: PluginClientContext): () => void {
               // the agent's MCP panel shows what that agent loads with its
               // per-workspace switches and sign-in. "Manage all servers" inside
               // it is the door to the full surface.
-              client.openPanel("mcp-agent", { workspaceId, agentId });
+              openAgentPanel(workspaceId, agentId);
             },
           }),
         );

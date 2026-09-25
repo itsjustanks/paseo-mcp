@@ -26,7 +26,9 @@ paseo plugin update paseo-mcp
 - Shows each Paseo workspace's project-level `.mcp.json` servers in an **MCP connections** tab, available in both the workspace view and the Projects/Explorer view.
 - Tells each workspace what an agent started there loads (project, local and user-level servers), what it costs in child processes and memory, and warns when the count is heavy enough to exhaust the agent's context.
 - Checks every server's health in the background and flags problems per agent, per project, and per user config.
-- Lists the tools each server exposes, the way Claude Code's `/mcp` view does, and keeps an always-on chip on every agent's composer with the server count and status.
+- Lists the tools each server exposes, the way Claude Code's `/mcp` view does, and keeps an always-on chip on every agent's composer with the server count and what their tool definitions cost that agent (`14 MCP · ~38k tokens`), or its status when something is wrong.
+- Shows, per agent, which servers the chat actually used and which it loaded without using, and turns the unused ones off for the workspace in one confirmed step. `/mcp` in a composer opens that panel.
+- Puts a small "needs sign-in" card in the chat when a tool call fails for lack of a sign-in, with a Connect button.
 - Shows and switches Paseo's own built-in tools (the `mcp__paseo__*` tools the daemon adds to agents): for the whole host, per provider, and per tool.
 - Syncs MCP definitions and Claude project trust to discovered account directories without copying OAuth grants.
 - Keeps backups before config writes and preserves destination-specific credentials.
@@ -273,6 +275,7 @@ fresh probe and wait for it. Configure it under **Settings → Plugins → Paseo
 | Check servers in the background | on | Probe on a timer, not only when Refresh is pressed |
 | Interval | 10 minutes | Time between background checks (1 to 1440 minutes) |
 | Composer chip | on | Show an always-on MCP chip on each agent's composer |
+| Chat notices: sign-in problems | on | Add one card to a chat when an MCP tool call there fails for lack of a sign-in (see [In-chat sign-in card](#in-chat-sign-in-card)) |
 
 Settings live on the host at `$PASEO_HOME/plugin-settings/paseo-mcp/health.json`; an unreadable or
 invalid file means the defaults apply. The daemon log shows `health check: N servers, M need attention, K OAuth`
@@ -319,12 +322,22 @@ which reads each editor's own grant list.
 
 ### Composer chip
 
-Every live agent's composer carries one **MCP** chip, always on. It reads the server count and the
-one thing worth knowing about them, in this order: `12 MCP · 2 issues` while a server is down,
-missing its binary, or answering with an error; `12 MCP · 3 need sign-in` while OAuth servers are
-waiting on a grant; `12 MCP · 340 tools` when everything is healthy. Press it to open that agent's
-**MCP** panel: the servers it loads with their switches, sign-in, and tools, plus a **Manage all servers**
-button to the full surface. Turn it off with the **Composer chip** setting.
+Every live agent's composer carries one **MCP** chip, always on. It reads the number of servers
+that agent loads and the one thing worth knowing about them, in this order: `14 MCP · 2 issues`
+while a server is down, missing its binary, or answering with an error; `14 MCP · 3 need sign-in`
+while OAuth servers are waiting on a grant; otherwise what their tool definitions cost that agent,
+`14 MCP · ~38k tokens`, or `14 MCP · deferred` when its provider's tool search is on (see
+[Context meter](#context-meter)). Until the estimate is in, or on a host older than 0.14.0, the chip
+reads as it did before (`12 MCP · 340 tools`). Press it, or type `/mcp` in the composer, to open that
+agent's **MCP** panel: the servers it loads with their switches, sign-in, tools and context cost,
+plus a **Manage all servers** button to the full surface. Turn the chip off with the **Composer chip**
+setting.
+
+Paseo ranks its own slash commands first, then plugins', then the provider's, so in Paseo's composer
+`/mcp` opens this panel and hides the provider's own `/mcp`, which only works interactively in the
+CLIs anyway. A message with an attachment still reaches the provider.
+
+The chip never makes a network call or starts a process: its estimate uses cached tool counts only.
 
 ## Tools each server exposes
 
@@ -437,6 +450,53 @@ this workspace with their resident memory. That section reads the daemon host's 
 (`ps`, `/proc` on Linux, `lsof` on macOS), attributing a server to the workspace when its agent, or
 the server process itself, works in the workspace directory. When the table cannot be read the panel
 says so rather than showing a zero.
+
+### Context meter
+
+The agent tab's **Context** section estimates what that agent's MCP tool definitions cost, the same
+number the chip shows:
+
+| Server | Counted as |
+| --- | --- |
+| Listed HTTP server | Measured: each tool's name, description and input schema as JSON, ÷ 4, from the raw `tools/list` answer (before descriptions are cut for display) |
+| Added when created, HTTP | Measured the same way from its own probe |
+| Paseo tools (built in) | 135 tokens per tool, measured on Paseo 0.9.1's own `tools/list` (61 tools, about 8,250 tokens) |
+| Anything not listed (stdio, OAuth before sign-in, unreachable) | 2,500: five tools at 500, an assumption between Paseo's measured 135 and the roughly 1,500 per tool Anthropic reported for large servers |
+
+A server switched off for the workspace is not counted. Every number is an estimate and says "≈" or
+"~". When the agent has reported its context use, the section adds "This chat: 360k of 1M context; MCP
+definitions ≈38k of that." With tool search on, the definitions load on demand, so the chip says
+"deferred" and the panel says so instead of claiming a share. **Heaviest servers** lists each server,
+biggest first, with how it was estimated.
+
+Below that, from the agent's own timeline: **Used in this chat** ("supabase ×4, linear ×1") and
+**Loaded but unused** with their names. The host reads the timeline through Paseo's plugin API, the
+newest 2,000 items at most, in the background, and keeps the answer a minute; the panel says when older
+items were not read. Claude agents' tool calls are named `mcp__<server>__<tool>` and Codex agents'
+`<server>.<tool>`; both are mapped to the servers the agent loads. A name two loaded servers could own
+counts for both.
+
+**Turn off the unused ones for this workspace** uses the same per-workspace switches as the rows
+below it. It asks first, names exactly the servers that change, and applies to new sessions only.
+It only offers servers that have a switch for this provider and are on now; unused servers without
+one are named and left alone. It is never offered when the chat is longer than the 2,000 items read or
+the last read failed; the panel says which. On confirm the host reads the whole chat again and
+switches off only if its own list matches the one you confirmed; otherwise it switches nothing and
+asks you to review again. A call to a server outside the loaded list counts as a use of any loaded
+server it could belong to.
+
+### In-chat sign-in card
+
+With **Chat notices: sign-in problems** on (the default), when an MCP tool call in a chat fails with
+an auth-shaped error (401 or 403, "unauthorized", "invalid_token", "needs authentication"), the host
+adds one small card to that chat: "linear needs sign-in", with **Connect**. Connect opens the agent's
+MCP panel with that server's sign-in rows first, the same OAuth flow as its row. The card carries the
+server and provider names only, never the error text.
+
+There is at most one card per server per chat, even across plugin restarts: the first time a chat is
+seen, its timeline is read back for an earlier card, and if that read fails nothing is added. The host
+checks each finished turn only while a Paseo app is connected; the panel's chat read catches failures
+from before that. Paseo's own server never gets a card.
 
 ### Context-budget warning
 

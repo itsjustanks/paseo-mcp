@@ -3,6 +3,7 @@ import { useAgent, useSettings } from "@getpaseo/plugin/client";
 import React from "react";
 import { Text, View } from "react-native";
 import { injectionSettings, injectionTargets } from "../shared/settings";
+import { ContextSection } from "./chat";
 import { WorkspaceBody } from "./mcp";
 import { Tag, TokensProvider, useTokens, useUi, type Status } from "./ui";
 
@@ -59,6 +60,7 @@ export function McpAgentPanel(props: PluginAgentPanelProps) {
         intro={<AgentIntro agentId={props.agentId} />}
         providerId={provider ?? undefined}
         agentId={props.agentId}
+        context={<ContextSection workspaceId={props.workspaceId} agentId={props.agentId} providerId={provider} />}
       />
     </TokensProvider>
   );

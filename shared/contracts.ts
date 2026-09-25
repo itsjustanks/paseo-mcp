@@ -1,5 +1,6 @@
 import { defineRpc } from "@getpaseo/plugin";
 import { z } from "zod";
+import { shortTokens } from "./meter";
 // ---- universal MCP management -------------------------------------------------
 
 export const DestinationSchema = z.object({
@@ -211,6 +212,8 @@ export const PluginServerSchema = z.object({
   transport: TransportSchema,
   tools: z.number().optional(),
   note: z.string(),
+  /** 0.14.0: estimated tokens of its tool definitions, when the probe listed them (shared/meter.ts). */
+  definitionTokens: z.number().optional(),
 });
 export type PluginServer = z.infer<typeof PluginServerSchema>;
 
@@ -241,6 +244,76 @@ export const mcpSetEnabled = defineRpc({
   name: "paseo-mcp.set-enabled",
   input: z.object({ workspaceId: z.string().min(1), providerId: z.string(), name: z.string().min(1), enabled: z.boolean() }),
   output: z.object({ ok: z.boolean(), message: z.string(), state: EnabledStateSchema.optional() }),
+});
+
+/**
+ * 0.14.0: one agent's context meter and, with `chat`, what its chat used. Never
+ * waits: it answers from the host's per-agent cache and, when that is missing
+ * or older than a minute, refreshes it in the background and says `checking`.
+ * The composer chip asks without `chat` (the meter only); the agent panel asks
+ * with it, which also reads the timeline (bounded, see shared/chat.ts) and the
+ * agent's last context usage. Server and tool names only, never arguments,
+ * output or error text.
+ */
+export const ServerCostSchema = z.object({ name: z.string(), tokens: z.number(), basis: z.enum(["measured", "counted", "catalogue", "default"]) });
+
+export const AgentMeterSchema = z.object({
+  servers: z.number(),
+  tokens: z.number(),
+  deferred: z.boolean(),
+  costs: z.array(ServerCostSchema),
+  defaults: z.number(),
+});
+export type AgentMeter = z.infer<typeof AgentMeterSchema>;
+
+export const AgentChatReadSchema = z.object({
+  /** Timeline items read, newest first, up to 2000. */
+  scanned: z.number(),
+  /** More items exist than were read. */
+  truncated: z.boolean(),
+  /** Review fix: every page was read, back to the chat's first item. Only a complete read may offer "turn off the unused ones". */
+  complete: z.boolean(),
+  calls: z.array(z.object({ server: z.string(), calls: z.number(), known: z.boolean() })),
+  /** Servers the agent loads (editor, added, Paseo's), to split used from unused. */
+  loaded: z.array(z.string()),
+  asOf: z.string(),
+});
+export type AgentChatRead = z.infer<typeof AgentChatReadSchema>;
+
+export const mcpAgentChat = defineRpc({
+  name: "paseo-mcp.agent-chat",
+  input: z.object({ workspaceId: z.string().min(1), providerId: z.string(), agentId: z.string().min(1), chat: z.boolean().optional() }),
+  output: z.object({
+    checking: z.boolean(),
+    meter: AgentMeterSchema.nullable(),
+    usage: z.object({ usedTokens: z.number(), maxTokens: z.number() }).nullable(),
+    chat: AgentChatReadSchema.nullable(),
+    /** The last chat read failed: `chat` is an earlier read (or null), and `failedAt` says when the read failed. */
+    stale: z.boolean(),
+    failedAt: z.string().optional(),
+  }),
+});
+
+export const TurnOffPlanSchema = z.object({ off: z.array(z.string()), kept: z.array(z.object({ name: z.string(), reason: z.string() })) });
+
+/**
+ * Review fix: "Turn off the unused ones", decided on the host. It reads the
+ * whole chat again (no cache), rebuilds the plan, and flips the servers through
+ * the `set-enabled` path only when that plan is exactly `expected`, the list the
+ * user reviewed. A changed plan, a chat too long to read in full, or a failed
+ * read switches nothing off; `plan` is the new one when there is one.
+ */
+export const mcpTurnOffUnused = defineRpc({
+  name: "paseo-mcp.turn-off-unused",
+  input: z.object({ workspaceId: z.string().min(1), providerId: z.string(), agentId: z.string().min(1), expected: z.array(z.string()) }),
+  output: z.object({
+    ok: z.boolean(),
+    message: z.string(),
+    refused: z.enum(["changed", "too-long", "unreadable", "no-servers"]).optional(),
+    done: z.array(z.string()),
+    failed: z.array(z.string()),
+    plan: TurnOffPlanSchema.optional(),
+  }),
 });
 
 /** Running MCP server processes attributed to the workspace. See shared/processes.ts. */
@@ -447,6 +520,10 @@ export const McpServerToolsSchema = z.object({
   // 0.11.3: `restored` when the list was saved by an earlier run of the plugin
   // and has not been asked again since the restart.
   stale: z.object({ reason: z.string(), asOf: z.string(), restored: z.boolean().optional() }).optional(),
+  // 0.14.0: estimated tokens of the listed tools' definitions (name,
+  // description and input schema as JSON, ÷ 4), measured before the list is
+  // shortened for display. Absent when not listed, and from older hosts.
+  definitionTokens: z.number().optional(),
 });
 export type McpServerTools = z.infer<typeof McpServerToolsSchema>;
 
@@ -492,18 +569,26 @@ export function chipLabel(
   // 0.10.0: tools the agent gets from Paseo's built-in server (0: none). It
   // counts as one more server and adds its tools; 0 leaves the label as it was.
   paseoTools = 0,
+  // 0.14.0: this agent's context meter (shared/meter.ts). When known, the count
+  // is the servers this agent loads and the tail is the estimated cost of their
+  // definitions ("~38k tokens"), or "deferred" while tool search is on. Issues
+  // and sign-ins still win, as before.
+  meter?: { servers: number; tokens: number; deferred: boolean } | null,
 ): { label: string; tone: "calm" | "attention" } {
   const builtIn = paseoTools > 0 ? 1 : 0;
   const results = health?.results ?? [];
+  const tail = meter ? (meter.deferred ? "deferred" : `~${shortTokens(meter.tokens)} tokens`) : "";
   if (results.length === 0) {
+    if (meter) return { label: `${meter.servers} MCP · ${tail}`, tone: "calm" };
     const count = (tools?.servers.length ?? 0) + builtIn;
     return { label: count ? `${count} MCP` : "MCP", tone: "calm" };
   }
   const issues = results.filter((entry) => healthNeedsAttention(entry.status)).length;
   const signIn = results.filter((entry) => healthIsSignIn(entry.status)).length;
-  const head = `${results.length + builtIn} MCP`;
+  const head = `${meter ? meter.servers : results.length + builtIn} MCP`;
   if (issues > 0) return { label: `${head} · ${issues} ${issues === 1 ? "issue" : "issues"}`, tone: "attention" };
   if (signIn > 0) return { label: `${head} · ${signIn} need sign-in`, tone: "calm" };
+  if (meter) return { label: `${head} · ${tail}`, tone: "calm" };
   const toolCount = (tools?.servers ?? []).reduce((sum, entry) => sum + entry.tools.length, 0) + paseoTools;
   if (toolCount > 0) return { label: `${head} · ${toolCount} tools`, tone: "calm" };
   return { label: `${head} · healthy`, tone: "calm" };

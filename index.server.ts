@@ -13,6 +13,7 @@ import {
   handleMcpSync,
 } from "./server/handlers";
 import { handleMcpCatalog, handleMcpCatalogEntry, handleMcpCatalogInstall, handleMcpCatalogPlan, handleMcpCatalogTeamAuth, hostCatalogSettings } from "./server/catalog";
+import { handleMcpAgentChat, handleMcpTurnOffUnused, registerChatNotices } from "./server/chat";
 import { handleMcpAgentServers, handleMcpSetEnabled } from "./server/enabled";
 import { handleMcpHealth, handleMcpHealthCached } from "./server/health";
 import { registerHooks } from "./server/hooks";
@@ -37,6 +38,8 @@ import { handleMcpTools, handleMcpToolsCached } from "./server/tools";
 import { handleMcpWorkspace } from "./server/workspace";
 import {
   mcpAdd,
+  mcpAgentChat,
+  mcpTurnOffUnused,
   mcpAgentServers,
   mcpApply,
   mcpAuth,
@@ -99,6 +102,7 @@ export default function contribute(server: PluginServerContext) {
   server.registerSettings(promoSettings);
   server.registerSettings(hostCatalogSettings);
   registerHooks(server);
+  registerChatNotices(server);
   handle(mcpMatrix, handleMcpMatrix);
   handle(mcpAdd, handleMcpAdd);
   handle(mcpApply, handleMcpApply);
@@ -115,6 +119,8 @@ export default function contribute(server: PluginServerContext) {
   handle(mcpWorkspace, handleMcpWorkspace);
   handle(mcpAgentServers, handleMcpAgentServers);
   handle(mcpSetEnabled, handleMcpSetEnabled);
+  handle(mcpAgentChat, handleMcpAgentChat);
+  handle(mcpTurnOffUnused, handleMcpTurnOffUnused);
   handle(mcpRawGet, handleMcpRawGet);
   handle(mcpRawPut, handleMcpRawPut);
   handle(mcpImportParse, handleMcpImportParse);
