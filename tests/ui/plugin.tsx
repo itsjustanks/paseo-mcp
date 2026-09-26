@@ -4,9 +4,10 @@ import { Text, View } from "react-native";
 import { buildPaseoToolsPatch, paseoToolProviders, readDaemonToolsConfig, resolvePaseoTools } from "../../shared/paseo-tools";
 import { toolSearch } from "../../shared/tool-search";
 import { meterFor } from "../../shared/meter";
-import { curatedCard, planInstall, registryCard, teamCard, budgetImpact, type CatalogCard } from "../../shared/catalog";
+import { curatedCard, endpointKey, planInstall, registryCard, teamCard, budgetImpact, type CatalogCard } from "../../shared/catalog";
 import { CURATED_CATALOG } from "../../shared/catalog-curated";
 import { GALLERY_META, libraryCard, mergeGallery, parseLibrary } from "../../shared/library";
+import { placeLabel } from "../../shared/copy-all";
 import { DEFAULT_LIBRARIES } from "../../shared/library-source";
 export function defineRpc<T>(contract: T) { return contract; }
 export function defineSettings<T>(definition: T) { return definition; }
@@ -31,6 +32,9 @@ const servers = [
   { name: "playwright", transport: "stdio", detail: "npx @playwright/mcp@latest", authStyle: "oauth-or-none", inlineCredentialsIn: [], presentIn: [claude, codex, work, kimi] },
   { name: "supabase", transport: "stdio", detail: "npx -y @supabase/mcp-server", authStyle: "inline-credentials", inlineCredentialsIn: [work], presentIn: [claude, work] },
   { name: "linear", transport: "http", detail: "https://mcp.linear.app/mcp", authStyle: "oauth-or-none", inlineCredentialsIn: [], presentIn: [claude, codex, work, kimi] },
+  // 0.15.0 "already have": Zapier by its host (a personal path), Notion by its name.
+  { name: "automations", transport: "http", detail: "https://mcp.zapier.com/api/mcp/s/Zm9vYmFy/mcp", authStyle: "oauth-or-none", inlineCredentialsIn: [], presentIn: [claude, codex, work, kimi] },
+  { name: "ikit-notion", transport: "http", detail: "https://notion-proxy.investorkit.example/mcp", authStyle: "inline-credentials", inlineCredentialsIn: [claude], presentIn: [claude, work] },
 ];
 const userScope = { level: "user", label: "Claude · demo@example.com (primary)", configPath: `${HOME}/.claude.json` };
 const projectScope = { level: "project", label: "data-glue", configPath: `${HOME}/projects/data-glue/.mcp.json` };
@@ -41,6 +45,8 @@ const health = [
   { name: "playwright", status: "ok", note: "", scopes: [userScope] },
   { name: "supabase", status: "binary-missing", note: "npx could not resolve @supabase/mcp-server.", scopes: [projectScope] },
   { name: "linear", status: "ok", note: "", scopes: [userScope] },
+  { name: "automations", status: "ok", note: "", scopes: [userScope] },
+  { name: "ikit-notion", status: "ok", note: "", scopes: [userScope] },
 ];
 const checkedAt = new Date().toISOString();
 // ?healthy: every server answers, so the chip shows its cost.
@@ -192,6 +198,12 @@ const libraryStates = (query: string) => {
     ...(params.has("team") ? [{ id: "team", name: "Team", source: "https://raw.githubusercontent.com/you/devstack/main/mcp-catalogue.json", kind: "json", enabled: true, headerName: "Authorization", state: "ready", count: 2, refused: [{ id: "ikit-attio", reason: "header Authorization holds what looks like a literal key; use a {PLACEHOLDER} the user fills in" }], fetchedAt: checkedAt, note: "" }] : []),
   ];
 };
+// 0.15.0: a card at the same endpoint as a fixture server reads as added, as the host works it out.
+const fixtureEndpoints = new Map(servers.map((s) => [s.transport === "http" ? endpointKey({ url: s.detail }) : endpointKey({ command: s.detail.split(" ")[0], args: s.detail.split(" ").slice(1) }), s] as const).filter(([key]) => key));
+const markAdded = (card: CatalogCard): CatalogCard => {
+  const hit = card.added ? undefined : fixtureEndpoints.get(endpointKey(card.entry));
+  return hit ? { ...card, added: { label: `in ${hit.presentIn.length} of ${destinations.length} editors`, name: hit.name, editors: hit.presentIn, projects: [] } } : card;
+};
 const catalogProjects = [
   { name: "data-glue", path: `${HOME}/projects/data-glue`, servers: 2 },
   { name: "unfold-mobile", path: `${HOME}/projects/unfold-mobile`, servers: 2 },
@@ -304,6 +316,31 @@ async function call(contract: any, input: any) {
       if (input.enabled) disabledHere.delete(input.name); else disabledHere.add(input.name);
       return { ok: true, state: input.enabled ? "enabled" : "disabled", message: `${input.name} ${input.enabled ? "on" : "off"} for this workspace only (backup saved). Takes effect when a new agent session starts; a running agent keeps the servers it started with.` };
     }
+    // 0.15.0 "Copy to all my AI apps": the plan from the fixture's gaps; the copy
+    // writes them, except jam into Kimi, which has its own jam by the time of the copy.
+    case "copy-plan": {
+      const plan = servers.filter((s) => s.presentIn.length < destinations.length).map((s) => {
+        const source = destinations.find((d) => s.presentIn.includes(d.id) && d.format === "json-mcp") ?? destinations.find((d) => s.presentIn.includes(d.id))!;
+        return { name: s.name, from: placeLabel(source), targets: destinations.filter((d) => !s.presentIn.includes(d.id)).map((d) => ({ id: d.id, label: placeLabel(d) })), savedKey: s.inlineCredentialsIn.length > 0 };
+      });
+      return { servers: plan, excluded: [] };
+    }
+    case "copy-all": {
+      const results = input.servers.map((pick: { name: string; targets: string[] }) => {
+        const server = servers.find((s) => s.name === pick.name)!;
+        const source = destinations.find((d) => server.presentIn.includes(d.id))!;
+        const written: string[] = [];
+        const skipped: { label: string; reason: string }[] = [];
+        for (const id of pick.targets) {
+          const dest = destinations.find((d) => d.id === id)!;
+          if (pick.name === "jam" && id === kimi) skipped.push({ label: placeLabel(dest), reason: "it already has a different server called jam; left as it is" });
+          else { written.push(placeLabel(dest)); server.presentIn.push(id); }
+        }
+        return { name: pick.name, from: placeLabel(source), written, skipped };
+      });
+      const skippedCount = results.reduce((n: number, r: any) => n + r.skipped.length, 0);
+      return { ok: skippedCount === 0, message: "Copied.", results };
+    }
     case "sync": return { ok: true, log: "Copied 6 server definitions into 1 AgentLink slot.\nTrusted projects: 3 copied.\nOAuth grants: untouched." };
     case "login": return { ok: true, session: { ...sessions[0], server: input.server, account: input.account, provider: input.provider, workspaceId: input.workspaceId ?? "" }, message: `Sign-in started for ${input.server}.` };
     case "login-complete": return { ok: true, message: "Connection finished." };
@@ -327,7 +364,7 @@ async function call(contract: any, input: any) {
     }
     case "catalog": return {
       // ?added: Notion reads as already added (as ikit-notion) in one of the fixture editors and data-glue.
-      cards: catalogCards(input.query ?? "").map((card) => (params.has("added") && card.key === "recommended:notion" ? { ...card, added: { label: `in 1 of ${destinations.length} editors and data-glue`, name: "ikit-notion", editors: [destinations[0]?.id ?? ""], projects: [catalogProjects[0]?.path ?? ""] } } : card)),
+      cards: catalogCards(input.query ?? "").map((card) => (params.has("added") && card.key === "recommended:notion" ? { ...card, added: { label: `in 1 of ${destinations.length} editors and data-glue`, name: "ikit-notion", editors: [destinations[0]?.id ?? ""], projects: [catalogProjects[0]?.path ?? ""] } } : markAdded(card))),
       team: params.has("team") ? { source: "https://raw.githubusercontent.com/you/devstack/main/mcp-catalogue.json", state: "ready", count: 2, refused: [{ id: "ikit-attio", reason: "header Authorization holds what looks like a literal key; use a {PLACEHOLDER} the user fills in" }], fetchedAt: checkedAt, note: "" } : { source: "", state: "off", count: 0, refused: [], fetchedAt: null, note: "" },
       registry: params.has("registry") && (input.query ?? "").trim().length >= 2 ? { query: input.query.trim(), state: "ready", fetchedAt: checkedAt, note: "", count: 4 } : { query: "", state: "idle", fetchedAt: null, note: "", count: 0 },
       libraries: libraryStates(input.query ?? ""),

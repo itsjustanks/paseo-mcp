@@ -200,7 +200,7 @@ export function ServerTools({ entry, open = false }: { entry: McpServerTools; op
 function reasonText(entry: McpServerTools): string {
   switch (entry.kind) {
     case "auth-required":
-      return "This server needs a sign-in before it will list its tools. Your editor holds the grant; connect it from this server's sign-in rows and the list appears in the editor.";
+      return "This server lists its tools once you've signed in. Connect from this server's sign-in rows below; the list then appears in the AI app.";
     case "stdio":
       return `Command server: ${entry.note}. The plugin does not start processes, so nothing is listed here rather than guessed.`;
     default:

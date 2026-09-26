@@ -1,7 +1,6 @@
-import * as HostRN from "@getpaseo/plugin/client/react-native";
 import React from "react";
 import { Pressable, ScrollView, Text, View } from "react-native";
-import { useTokens } from "./ui";
+import { HostIcon, useTokens } from "./ui";
 
 /**
  * Five sections, one job each, in one row. Icons are Lucide names drawn by the
@@ -9,17 +8,14 @@ import { useTokens } from "./ui";
  * is for (the bar already names it). Same pattern as AI Router's tabs.
  */
 export const TABS = [
-  { id: "overview", label: "Overview", icon: "LayoutDashboard", heading: "Is every server healthy and in every editor, and what to do next." },
-  { id: "servers", label: "Servers", icon: "Server", heading: "One card per server: where it is defined, its health, its tools, and who is signed in. Open a server to edit a definition." },
-  { id: "projects", label: "Projects", icon: "FolderCode", heading: "Servers a project brings with its own .mcp.json. They are read here; sign-in happens from the workspace itself." },
-  { id: "transfer", label: "Import & Export", icon: "ArrowLeftRight", heading: "Add one server by hand, paste a block of JSON from a README, or write every definition to a backup file." },
-  { id: "guide", label: "Guide & Setup", icon: "BookOpen", heading: "Five steps from a README to every editor and every account on this host, and what to do when something does not work." },
+  { id: "overview", label: "Overview", icon: "LayoutDashboard", heading: "Whether every server works and is in every AI app, and what to do next." },
+  { id: "servers", label: "Servers", icon: "Server", heading: "Every server you have, one card each. Use a card's settings button to see its tools, sign in, change or remove it." },
+  { id: "projects", label: "Projects", icon: "FolderCode", heading: "Servers a project brings with it, listed in its .mcp.json file. They're shown here; sign in from that project's workspace." },
+  { id: "transfer", label: "Import & Export", icon: "ArrowLeftRight", heading: "Add one server by hand, paste the setup text from a server's instructions, or save every server to a backup file." },
+  { id: "guide", label: "Guide & Setup", icon: "BookOpen", heading: "Five steps from a server's instructions to every AI app on this computer, and what to do when something doesn't work." },
 ] as const;
 
 export type SectionId = (typeof TABS)[number]["id"];
-
-/** The app's icon component, when the host provides one; looked up at runtime so an app without it still renders the bar. */
-const HostIcon = (HostRN as unknown as { Icon?: React.ComponentType<{ name: string; size?: number; color?: string }> }).Icon;
 
 /**
  * An underline tab bar in one row. Narrow screens show every section's icon

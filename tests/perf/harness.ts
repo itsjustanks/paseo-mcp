@@ -4,6 +4,7 @@
  *
  *   npm run bench                  # full run, ~3-8 minutes
  *   npm run bench -- --quick       # 20 s windows, 1 s fake Codex
+ *   npm run bench -- --daemon-delay 8   # the daemon takes 8 s to list projects and settings
  *
  * Everything runs against a throwaway HOME: a sandbox with a Claude config, a
  * Codex config and auth file, two AgentLink Codex slots and one Claude slot,
@@ -38,6 +39,8 @@ const flag = (name: string, fallback: number) => {
 };
 const WINDOW_MS = flag("--window", quick ? 20 : 60) * 1000;
 const CODEX_DELAY_S = flag("--codex-delay", quick ? 1 : 5);
+// A busy daemon: seconds its project list and provider settings take to answer (0.15.0).
+const DAEMON_DELAY_S = flag("--daemon-delay", 0);
 const DAEMON_TIMEOUT_MS = 30_000;
 const label = args.find((arg, index) => !arg.startsWith("--") && !args[index - 1]?.startsWith("--")) ?? "run";
 
@@ -226,6 +229,7 @@ const env: NodeJS.ProcessEnv = {
   PASEO_HOME: join(sandbox.home, ".paseo"),
   TMPDIR: process.env.TMPDIR ?? "/tmp",
   HARNESS_PROJECT: sandbox.project,
+  HARNESS_DAEMON_DELAY_MS: String(DAEMON_DELAY_S * 1000),
 };
 // Stand-in agents: children of the "daemon" (this process) working in the
 // project, so the running-process scan has something real to look at.
@@ -328,6 +332,7 @@ const handlerCalls: Array<[string, Record<string, string>]> = [
   ["paseo-mcp.tools-cached", {}],
   ["paseo-mcp.matrix", {}],
   ["paseo-mcp.auth", {}],
+  ["paseo-mcp.catalog", { query: "" }],
   ["paseo-mcp.workspace", { workspaceId: "ws-1" }],
   ["paseo-mcp.agent-servers", { workspaceId: "ws-1", providerId: "claude" }],
   ["paseo-mcp.agent-servers", { workspaceId: "ws-1", providerId: "codex" }],
@@ -350,6 +355,7 @@ const explained = (plugin.log.match(/Codex could not tidy/g) ?? []).length;
 const result = {
   label,
   codexDelayS: CODEX_DELAY_S,
+  daemonDelayS: DAEMON_DELAY_S,
   closed,
   open: { ...opened, codexRunsIncludingDrain: drainCodexRuns },
   handlers: timings,

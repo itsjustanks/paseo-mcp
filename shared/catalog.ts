@@ -905,6 +905,131 @@ export function cardMatches(card: CatalogCard, query: string, category: string):
 }
 
 /**
+ * The gallery shows what you don't have yet (0.15.0): a card you already have
+ * (`isOwned`; by default the host's `added` match) is left out unless
+ * `showAdded` is on, and the count of those left out is kept for the line
+ * under the search.
+ */
+export function hideAdded<T extends Pick<CatalogCard, "added">>(
+  cards: readonly T[],
+  showAdded: boolean,
+  isOwned: (card: T) => boolean = (card) => Boolean(card.added),
+): { shown: T[]; hidden: number } {
+  if (showAdded) return { shown: [...cards], hidden: 0 };
+  const shown = cards.filter((card) => !isOwned(card));
+  return { shown, hidden: cards.length - shown.length };
+}
+
+/** A server the user has, as far as "already have" needs it. */
+export type OwnedServer = { name: string; url?: string; command?: string; args?: string[] };
+
+/** A matrix row as an owned server: its address, or its command line split into a command and arguments. */
+export function ownedFromRow(row: { name: string; transport: string; detail: string }): OwnedServer {
+  const detail = row.detail.trim();
+  if (row.transport === "http") return { name: row.name, url: detail };
+  const [command, ...args] = detail.split(/\s+/);
+  return { name: row.name, command, args };
+}
+
+function hostOf(url: string | undefined): string {
+  if (!url || url.includes("{") || hasEnvReference(url)) return "";
+  try {
+    return new URL(url.trim()).hostname.toLowerCase().replace(/\.$/, "").replace(/^www\./, "");
+  } catch {
+    return "";
+  }
+}
+
+/**
+ * Hosts many unrelated servers share (a hosting platform, a tunnel, this
+ * computer): being on one says nothing about which server it is, so the host
+ * rule skips them.
+ */
+const SHARED_HOSTS = ["server.smithery.ai", "github.com", "raw.githubusercontent.com", "vercel.app", "netlify.app", "workers.dev", "pages.dev", "onrender.com", "herokuapp.com", "fly.dev", "localhost", "127.0.0.1", "0.0.0.0", "[::1]"];
+
+export function isSharedHost(host: string): boolean {
+  if (!host) return true;
+  if (/(^|\.)ngrok/.test(host)) return true;
+  return SHARED_HOSTS.some((shared) => host === shared || host.endsWith(`.${shared}`));
+}
+
+function slug(text: string): string {
+  return text.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+}
+
+/** Prefixes the user demonstrably names servers with: a first word (`ikit-`) that two or more of their servers share. */
+function ownPrefixes(owned: readonly OwnedServer[]): Set<string> {
+  const counts = new Map<string, number>();
+  for (const server of owned) {
+    const name = slug(server.name);
+    const cut = name.indexOf("-");
+    if (cut <= 0 || cut === name.length - 1) continue;
+    const prefix = name.slice(0, cut + 1);
+    counts.set(prefix, (counts.get(prefix) ?? 0) + 1);
+  }
+  return new Set([...counts].filter(([, count]) => count >= 2).map(([prefix]) => prefix));
+}
+
+/** A user's server name against a card's id or name: EXACTLY the same, once a prefix they use (`ikit-`) and an `-mcp` ending are taken off. `old-github` is not GitHub. */
+function nameMatches(owned: string, card: CatalogEntry, prefixes: ReadonlySet<string>): boolean {
+  let mine = slug(owned);
+  for (const prefix of prefixes) {
+    if (mine.startsWith(prefix) && mine.length > prefix.length) {
+      mine = mine.slice(prefix.length);
+      break;
+    }
+  }
+  mine = mine.replace(/-mcp$/, "");
+  if (!mine) return false;
+  return [card.id, card.name].map((text) => slug(text).replace(/-mcp$/, "")).filter(Boolean).some((theirs) => mine === theirs);
+}
+
+/**
+ * "Already have" the way a person thinks of it (0.15.0). A card is one you
+ * have when any of your servers:
+ * - is at the same endpoint (the host's `added`, or `endpointKey`), or
+ * - is on the same host, unless many servers share that host (anything on
+ *   `mcp.zapier.com`: paths often carry a personal token, so the address
+ *   alone rarely matches; not `vercel.app` or `localhost`), or
+ * - runs the same package (npm, PyPI, OCI; any version), not a generic
+ *   runner like `mcp-remote`, or
+ * - is named exactly after the card's id or name, ignoring case, an `-mcp`
+ *   ending, and a prefix two or more of your servers share (`ikit-notion` is
+ *   Notion when you also have `ikit-linear`).
+ * Returns the first of your servers that matches, or null.
+ */
+export function alreadyHave(card: Pick<CatalogCard, "added" | "entry">, owned: readonly OwnedServer[]): { name: string; how: "added" | "endpoint" | "host" | "package" | "name" } | null {
+  if (card.added) return { name: card.added.name, how: "added" };
+  const key = endpointKey(card.entry);
+  const host = hostOf(card.entry.url);
+  const hostRule = host !== "" && !isSharedHost(host);
+  for (const server of owned) {
+    const theirs = endpointKey(server);
+    if (key && theirs === key) return { name: server.name, how: key.startsWith("pkg:") ? "package" : "endpoint" };
+    if (hostRule && hostOf(server.url) === host) return { name: server.name, how: "host" };
+  }
+  const prefixes = ownPrefixes(owned);
+  for (const server of owned) {
+    if (nameMatches(server.name, card.entry, prefixes)) return { name: server.name, how: "name" };
+  }
+  return null;
+}
+
+/** On a card shown through "Show ones I already have": "You have a Zapier server already, called ikit-zapier." */
+export function alreadyHaveLine(card: Pick<CatalogCard, "entry">, have: { name: string }): string {
+  const vendor = card.entry.name || card.entry.id;
+  return slug(have.name) === slug(vendor) || slug(have.name) === slug(card.entry.id)
+    ? `You have a ${vendor} server already.`
+    : `You have a ${vendor} server already, called ${have.name}.`;
+}
+
+/** "12 you already have are hidden." — or "" when none are. */
+export function hiddenLine(hidden: number): string {
+  if (hidden <= 0) return "";
+  return `${hidden} you already have ${hidden === 1 ? "is" : "are"} hidden.`;
+}
+
+/**
  * The empty-state line: says what was searched and what came back, so "no
  * results" never reads as "nothing exists". Example: "Searched the registry
  * and 31 recommended servers for 'jira': 0 official, 3 community."
@@ -1319,7 +1444,7 @@ function packageKey(def: { command?: string; args?: string[] }): string {
  * a last `/mcp` or `/sse` (one server's two transports); for a package, its
  * ecosystem and name without a version (packageKey), so an npm package never
  * matches a PyPI one of the same name. "" when there is nothing to match on
- * (an address with parts to fill in, another command).
+ * (an address with parts to fill in, another command, a generic runner).
  */
 export function endpointKey(def: { url?: string; command?: string; args?: string[] }): string {
   if (def.url) {
@@ -1332,8 +1457,16 @@ export function endpointKey(def: { url?: string; command?: string; args?: string
       return "";
     }
   }
-  return packageKey(def);
+  const key = packageKey(def);
+  // A generic runner, or a package whose real target is an address in its
+  // arguments, is a pipe to another server: its package says nothing about
+  // which one (`npx mcp-remote https://mcp.linear.app/sse` is not Notion's).
+  if (RUNNER_PACKAGES.has(key) || (def.args ?? []).some((arg) => /^https?:\/\//i.test(arg))) return "";
+  return key;
 }
+
+/** Generic runners and proxies: `mcp-remote`, `supergateway`, the MCP inspector. */
+const RUNNER_PACKAGES = new Set(["pkg:npm:mcp-remote", "pkg:npm:supergateway", "pkg:npm:@modelcontextprotocol/inspector"]);
 
 export type AddedPlace = { kind: "editor"; id: string; label: string } | { kind: "project"; id: string; label: string };
 export type AddedIndex = Map<string, Array<{ place: AddedPlace; name: string }>>;

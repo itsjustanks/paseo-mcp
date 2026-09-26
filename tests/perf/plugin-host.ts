@@ -41,12 +41,15 @@ const handlers = new Map<string, { parse: (input: unknown) => unknown; handler: 
 const beforeHooks = new Map<string, (event: { request: unknown }) => unknown>();
 
 const project = process.env.HARNESS_PROJECT ?? "";
+// --daemon-delay: a busy daemon, slow to answer its project list and settings.
+const daemonDelayMs = Number(process.env.HARNESS_DAEMON_DELAY_MS ?? 0);
+const slow = <T>(value: T) => (daemonDelayMs > 0 ? new Promise<T>((done) => setTimeout(() => done(value), daemonDelayMs)) : Promise.resolve(value));
 const paseo = {
-  config: { get: async () => ({ config: { providers: {} } }) },
+  config: { get: () => slow({ config: { providers: {} } }) },
   workspaces: {
     list: async () => ({ entries: [{ id: "ws-1", name: "demo", workspaceDirectory: project, projectRootPath: project }] }),
   },
-  projects: { list: async () => ({ entries: [{ name: "demo", path: project }] }) },
+  projects: { list: () => slow({ entries: [{ name: "demo", path: project }] }) },
 };
 
 const server = {

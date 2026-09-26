@@ -3,11 +3,15 @@ import { useRpc } from "@getpaseo/plugin/client";
 import { useToast } from "@getpaseo/plugin/client/react-native";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Image, Linking, Pressable, Text, View } from "react-native";
+import { Image, Linking, Text, View } from "react-native";
 import {
   CATALOG_CATEGORIES,
   CATEGORY_LABELS,
   cardMatches,
+  alreadyHave,
+  alreadyHaveLine,
+  hiddenLine,
+  hideAdded,
   mcpCatalog,
   mcpCatalogEntry,
   mcpCatalogInstall,
@@ -15,8 +19,10 @@ import {
   searchSummary,
   type CatalogCard,
   type LibraryState,
+  type OwnedServer,
 } from "../shared/catalog";
-import type { Destination } from "../shared/contracts";
+import type { Destination, McpHealthStatus } from "../shared/contracts";
+import { healthPlainWord } from "../shared/servers";
 import { plainError } from "../shared/errors";
 import {
   Button,
@@ -29,11 +35,13 @@ import {
   Grid,
   Loading,
   Notice,
+  Pills,
   Row,
   Section,
   Segmented,
   StatusPill,
   Tag,
+  Toggle,
   Toolbar,
   alpha,
   copyToClipboard,
@@ -55,37 +63,6 @@ function useDebounced<T>(value: T, ms: number): T {
   return held;
 }
 
-/** Category filter: one row of pressable pills, "All" first. */
-function Pills({ options, value, onChange }: { options: Array<{ value: string; label: string }>; value: string; onChange: (value: string) => void }) {
-  const t = useTokens();
-  return (
-    <View style={{ flexDirection: "row", flexWrap: "wrap", gap: t.space.xs }}>
-      {options.map((option) => {
-        const active = option.value === value;
-        return (
-          <Pressable
-            key={option.value}
-            accessibilityRole="button"
-            accessibilityState={{ selected: active }}
-            onPress={() => onChange(option.value)}
-            hitSlop={t.control.hit}
-            style={{
-              paddingVertical: t.compact ? 7 : 4,
-              paddingHorizontal: 10,
-              borderRadius: t.radius.pill,
-              borderWidth: 1,
-              borderColor: active ? t.color.accentLine : t.color.border,
-              backgroundColor: active ? t.color.accentWash : "transparent",
-            }}
-          >
-            <Text style={{ fontSize: 12, fontWeight: "600", color: active ? t.color.accent : t.color.muted }}>{option.label}</Text>
-          </Pressable>
-        );
-      })}
-    </View>
-  );
-}
-
 const TRUST: Record<CatalogCard["trust"], { label: string; tone: Status }> = {
   official: { label: "Official", tone: "ok" },
   team: { label: "Team", tone: "busy" },
@@ -94,10 +71,10 @@ const TRUST: Record<CatalogCard["trust"], { label: string; tone: Status }> = {
 };
 
 function authWord(card: CatalogCard): string {
-  if (card.entry.auth === "oauth") return "OAuth";
-  if (card.entry.auth === "none") return "No auth";
+  if (card.entry.auth === "oauth") return "Sign in with your account";
+  if (card.entry.auth === "none") return "No sign-in";
   if (card.entry.auth === "unknown") return "Sign-in unclear";
-  return "Key";
+  return "Needs a key";
 }
 
 /** A registry namespace is a claim, shown as plain text, never as a badge. */
@@ -123,7 +100,7 @@ function CardIcon({ url }: { url?: string }) {
   return <Image source={{ uri: url }} accessibilityIgnoresInvertColors style={{ width: 20, height: 20, borderRadius: 4 }} onError={() => setFailed(true)} />;
 }
 
-function ServerCard({ card, onAdd, onAddByHand }: { card: CatalogCard; onAdd: () => void; onAddByHand: (name: string) => void }) {
+function ServerCard({ card, have, onAdd, onAddByHand }: { card: CatalogCard; have: { name: string } | null; onAdd: () => void; onAddByHand: (name: string) => void }) {
   const t = useTokens();
   const trust = TRUST[card.trust];
   const byHand = byHandOnly(card);
@@ -141,13 +118,13 @@ function ServerCard({ card, onAdd, onAddByHand }: { card: CatalogCard; onAdd: ()
         {card.entry.description || "No description."}
       </Text>
       <View style={{ flexDirection: "row", flexWrap: "wrap", gap: t.space.xs }}>
-        {card.added ? <Tag label="Added" tone="ok" /> : null}
+        {card.added ? <Tag label="Added" tone="ok" /> : have ? <Tag label="You have one" tone="ok" /> : null}
         <Tag label={trust.label} tone={trust.tone} />
-        <Tag label={card.entry.transport === "http" ? "Remote" : "Runs locally"} />
+        <Tag label={card.entry.transport === "http" ? "Web" : "On this computer"} />
         <Tag label={authWord(card)} />
-        {sourceLabel(card) !== trust.label ? <Tag label={sourceLabel(card)} /> : null}
+        {card.shelf !== "recommended" && sourceLabel(card) !== trust.label ? <Tag label={sourceLabel(card)} /> : null}
       </View>
-      {card.added ? <Text numberOfLines={1} style={t.text.caption}>{`Added ${card.added.label}${card.added.name !== card.entry.id ? ` as ${card.added.name}` : ""}.`}</Text> : null}
+      {have ? <Text numberOfLines={2} style={t.text.caption}>{alreadyHaveLine(card, have)}</Text> : null}
       {card.warning ? <Text style={[t.text.caption, { color: t.color.warning }]}>{card.warning}</Text> : null}
       {!card.installable ? <Text style={t.text.caption}>{card.blockedReason}</Text> : null}
       <View style={{ flexDirection: "row", flexWrap: "wrap", gap: t.space.sm, alignItems: "center" }}>
@@ -166,12 +143,15 @@ function ServerCard({ card, onAdd, onAddByHand }: { card: CatalogCard; onAdd: ()
 
 export function CatalogGallery({
   destinations,
+  owned,
   onClose,
   onAddByHand,
   onInstalled,
   onOpenServer,
 }: {
   destinations: Destination[];
+  /** Your servers (0.15.0): a card you already have in any sense is hidden until asked for. */
+  owned: readonly OwnedServer[];
   onClose: () => void;
   /** Opens the add-by-hand form, with the name filled in when one is given. */
   onAddByHand: (name?: string) => void;
@@ -183,6 +163,8 @@ export function CatalogGallery({
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState("all");
   const [picked, setPicked] = useState<CatalogCard | null>(null);
+  // 0.15.0: servers you already have are left out unless asked for.
+  const [showAdded, setShowAdded] = useState(false);
   const refresh = useRef<{ refresh?: "team" | "registry" | "both" | "libraries" | "all"; library?: string }>({});
   const query = useDebounced(search.trim(), 400);
 
@@ -199,7 +181,9 @@ export function CatalogGallery({
   });
   const data = catalogQuery.data;
   const cards = data?.cards ?? [];
-  const shown = cards.filter((card) => (card.shelf === "registry" ? category === "all" || card.entry.category === category : cardMatches(card, query, category)));
+  const matching = cards.filter((card) => (card.shelf === "registry" ? category === "all" || card.entry.category === category : cardMatches(card, query, category)));
+  const haves = useMemo(() => new Map(cards.map((card) => [card.key, alreadyHave(card, owned)] as const)), [cards, owned]);
+  const { shown, hidden } = hideAdded(matching, showAdded, (card) => Boolean(haves.get(card.key)));
   const fromLibrary = (id: string) => shown.filter((card) => card.shelf !== "registry" && card.shelf !== "recommended" && card.library?.id === id);
   const fromRegistry = (id: string) => shown.filter((card) => card.shelf === "registry" && card.library?.id === id);
   const recommended = shown.filter((card) => card.shelf === "recommended");
@@ -218,6 +202,7 @@ export function CatalogGallery({
     registrySearched: Boolean(data && data.registry.state !== "idle"),
     shown,
   });
+  const summaryLine = [summary, hiddenLine(hidden)].filter(Boolean).join(" ");
 
   const again = (next: { refresh?: "team" | "registry" | "both" | "libraries" | "all"; library?: string }) => {
     refresh.current = next;
@@ -245,7 +230,7 @@ export function CatalogGallery({
   const grid = (list: CatalogCard[]) => (
     <Grid min={230}>
       {list.map((card) => (
-        <ServerCard key={card.key} card={card} onAdd={() => setPicked(card)} onAddByHand={onAddByHand} />
+        <ServerCard key={card.key} card={card} have={haves.get(card.key) ?? null} onAdd={() => setPicked(card)} onAddByHand={onAddByHand} />
       ))}
       {t.compact ? null : [0, 1, 2].map((index) => <View key={`filler-${index}`} />)}
     </Grid>
@@ -274,21 +259,29 @@ export function CatalogGallery({
       />
       <Field value={search} onChangeText={setSearch} placeholder={registries.length > 0 ? "Search the gallery and registries (e.g. jira)" : "Search the gallery (e.g. jira)"} />
       <Pills options={categories} value={category} onChange={setCategory} />
+      <View style={{ flexDirection: "row", alignItems: "center", gap: t.space.sm }}>
+        <Text style={t.text.caption}>Show ones I already have</Text>
+        <Toggle label="Show ones I already have" value={showAdded} onChange={setShowAdded} />
+      </View>
 
       {catalogQuery.isLoading ? <Loading label="Reading the catalogue…" /> : null}
       {catalogQuery.error ? <ErrorText>{`Could not read the catalogue: ${plainError(catalogQuery.error)}`}</ErrorText> : null}
 
       {data && shown.length === 0 && data.registry.state !== "searching" ? (
         <Card>
-          <EmptyState title="Nothing matches" body={summary} action={search ? <Button label="Clear search" onPress={() => setSearch("")} /> : undefined} />
+          <EmptyState
+            title={hidden > 0 ? "You already have every match" : "Nothing matches"}
+            body={summaryLine}
+            action={hidden > 0 ? <Button label="Show ones I already have" onPress={() => setShowAdded(true)} /> : search ? <Button label="Clear search" onPress={() => setSearch("")} /> : undefined}
+          />
         </Card>
       ) : data ? (
-        <Text style={t.text.caption}>{summary}</Text>
+        <Text style={t.text.caption}>{summaryLine}</Text>
       ) : null}
 
       {recommended.length > 0 ? (
         <Section title="Recommended">
-          <Text style={t.text.caption}>Official servers shipped with the plugin, each address checked against the vendor's own docs. A library's copy that differs in any way (address, headers, version, arguments) shows under that library instead.</Text>
+          <Text style={t.text.caption}>Popular apps, each address checked against the maker's own instructions. Your own servers never leave this computer.</Text>
           {grid(recommended)}
         </Section>
       ) : null}
@@ -397,7 +390,7 @@ function InstallSheet({
           <Text style={t.text.heading}>Health check</Text>
           {result.health ? (
             <View style={{ flexDirection: "row", gap: t.space.sm, alignItems: "center", flexWrap: "wrap" }}>
-              <StatusPill status={tone} label={result.health.status === "auth-required" ? "needs sign-in" : result.health.status} />
+              <StatusPill status={tone} label={healthPlainWord(result.health.status as McpHealthStatus)} />
               <Text style={[t.text.body, { flexShrink: 1 }]}>{result.health.note || "The server answered."}</Text>
             </View>
           ) : (
@@ -414,7 +407,7 @@ function InstallSheet({
         {result.envToSet.length > 0 ? (
           <Notice tone="attention">
             <View style={{ gap: t.space.xs }}>
-              <Text style={t.text.body}>Set these where Claude Code starts before the server can sign in:</Text>
+              <Text style={t.text.body}>Set these where Claude Code starts, before the server can connect:</Text>
               <CodeBlock>{result.envToSet.map((entry) => `export ${entry.name}=…   # ${entry.label}`).join("\n")}</CodeBlock>
             </View>
           </Notice>
@@ -424,8 +417,8 @@ function InstallSheet({
             <Text style={t.text.heading}>Sign in</Text>
             <Text style={t.text.body}>
               {scope === "user"
-                ? "This server signs in with OAuth. Open it to connect each account."
-                : "This server signs in with OAuth. Connect it from the workspace's MCP connections tab, or with /mcp in Claude Code."}
+                ? "This server asks you to sign in with your account. Open it to connect each app."
+                : "This server asks you to sign in with your account. Connect it from the project workspace's MCP connections tab."}
             </Text>
             {scope === "user" ? (
               <View style={{ flexDirection: "row" }}>
@@ -448,13 +441,13 @@ function InstallSheet({
           value={scope}
           onChange={setScope}
           options={[
-            { value: "user", label: "My editors" },
+            { value: "user", label: "My AI apps" },
             { value: "project", label: "One project" },
           ]}
         />
         {scope === "user" ? (
           <Card padded={false}>
-            {destinations.length === 0 ? <EmptyState title="Nowhere to write" body="No editor config was found on this host." /> : null}
+            {destinations.length === 0 ? <EmptyState title="No AI app found" body="None of Claude, Codex, Kimi or Grok is set up on this computer yet." /> : null}
             {destinations.map((dest, index) => {
               const on = targets.includes(dest.id);
               return (
@@ -472,7 +465,7 @@ function InstallSheet({
           </Card>
         ) : (
           <Card padded={false}>
-            {projects.length === 0 ? <EmptyState title="No projects" body="Paseo has no registered project on this host." /> : null}
+            {projects.length === 0 ? <EmptyState title="No projects" body="Paseo doesn't know any project on this computer yet." /> : null}
             {projects.map((project, index) => (
               <Row
                 key={project.path}
@@ -490,7 +483,7 @@ function InstallSheet({
 
       <Section title="Details">
         <Card>
-          <Field label="Name" value={name} onChangeText={setName} hint="What the editors call it. Letters, numbers, - and _." />
+          <Field label="Name" value={name} onChangeText={setName} hint="What your AI apps call it. Letters, numbers, - and _." />
           {inputs.map((input) =>
             input.secret ? (
               <SecretField
@@ -511,10 +504,10 @@ function InstallSheet({
             ),
           )}
           {scope === "project" && (entry.inputs ?? []).some((input) => input.secret) ? (
-            <Text style={t.text.caption}>Keys are not asked for here: the project file gets a ${"{VAR}"} reference instead, shown below.</Text>
+            <Text style={t.text.caption}>Keys aren't asked for here: a project's file is often shared, so it gets a placeholder instead, shown below.</Text>
           ) : null}
-          {entry.auth === "oauth" && inputs.length === 0 ? <Text style={t.text.caption}>No key needed: this server signs in with OAuth after it is added.</Text> : null}
-          {entry.auth === "unknown" && inputs.length === 0 ? <Text style={t.text.caption}>The registry lists no key for this server. If it asks you to sign in once added, use Connect OAuth on its card.</Text> : null}
+          {entry.auth === "oauth" && inputs.length === 0 ? <Text style={t.text.caption}>No key needed: you sign in with your account after it's added.</Text> : null}
+          {entry.auth === "unknown" && inputs.length === 0 ? <Text style={t.text.caption}>No key is listed for this server. If it asks you to sign in once added, open it and choose Connect.</Text> : null}
         </Card>
       </Section>
 
@@ -536,7 +529,7 @@ function InstallSheet({
         ))}
         {plan?.commandLine ? (
           <View style={{ gap: t.space.xs }}>
-            <Text style={t.text.label}>Runs this command on this host</Text>
+            <Text style={t.text.label}>Starts this program on this computer</Text>
             <Text selectable style={[t.text.mono, { color: t.color.fg }]}>{plan.commandLine}</Text>
           </View>
         ) : null}
@@ -558,7 +551,7 @@ function InstallSheet({
 
       <View style={{ flexDirection: "row", gap: t.space.sm }}>
         <Button
-          label={scope === "user" ? `Add to ${targets.length} editor${targets.length === 1 ? "" : "s"}` : "Add to the project"}
+          label={scope === "user" ? `Add to ${targets.length} app${targets.length === 1 ? "" : "s"}` : "Add to the project"}
           variant="primary"
           loading={install.isPending}
           disabled={!current || !plan?.ok}

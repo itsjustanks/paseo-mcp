@@ -13,6 +13,7 @@ import {
   handleMcpSync,
 } from "./server/handlers";
 import { handleMcpCatalog, handleMcpCatalogEntry, handleMcpCatalogInstall, handleMcpCatalogPlan, handleMcpCatalogTeamAuth, hostCatalogSettings } from "./server/catalog";
+import { handleMcpCopyAll, handleMcpCopyPlan } from "./server/copy-all";
 import { handleMcpAgentChat, handleMcpTurnOffUnused, registerChatNotices } from "./server/chat";
 import { handleMcpAgentServers, handleMcpSetEnabled } from "./server/enabled";
 import { handleMcpHealth, handleMcpHealthCached } from "./server/health";
@@ -72,6 +73,7 @@ import {
   mcpRawGet,
   mcpRawPut,
 } from "./shared/mcpjson";
+import { mcpCopyAll, mcpCopyPlan } from "./shared/copy-all";
 import { mcpCatalog, mcpCatalogEntry, mcpCatalogInstall, mcpCatalogPlan, mcpCatalogTeamAuth } from "./shared/catalog";
 import { healthSettings, injectionSettings, promoSettings } from "./shared/settings";
 
@@ -140,6 +142,8 @@ export default function contribute(server: PluginServerContext) {
   handle(mcpCatalogInstall, handleMcpCatalogInstall);
   handle(mcpCatalogEntry, handleMcpCatalogEntry);
   handle(mcpCatalogTeamAuth, handleMcpCatalogTeamAuth);
+  handle(mcpCopyPlan, handleMcpCopyPlan);
+  handle(mcpCopyAll, handleMcpCopyAll);
 
   runStart();
   return runShutdown;

@@ -10,7 +10,8 @@ import { probeMcp } from "../shared/health";
 import type { Dialect } from "../shared/mcpjson";
 import { codexAuthView } from "./codex-auth";
 import { forgetFile, readJsonCached, readTextCached } from "./files";
-import { withDeadline } from "./run";
+import { projectList, providerSettings, refreshDaemonReads } from "./daemon-cache";
+import { tomlServerNamesFromText, tomlStringArray, tomlStructureProblem, tomlValueText } from "./toml-check";
 
 export { binaryOnPath, searchPath } from "./path";
 
@@ -75,12 +76,14 @@ function readJsonShared(path: string): Record<string, unknown> | null {
 
 const BACKUP_KEEP = 20;
 
-export function backupFile(path: string): void {
-  if (!existsSync(path)) return;
+/** Copy the file beside itself before a change; returns the copy's path, or null when there was no file. */
+export function backupFile(path: string): string | null {
+  if (!existsSync(path)) return null;
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
   // A random suffix keeps two backups in the same millisecond apart: the copy
   // never overwrites (COPYFILE_EXCL), so a repeated name would fail the write.
-  copyFileSafely(path, `${path}.bak-paseo-mcp-${stamp}-${randomBytes(3).toString("hex")}`);
+  const backup = `${path}.bak-paseo-mcp-${stamp}-${randomBytes(3).toString("hex")}`;
+  copyFileSafely(path, backup);
   // Keep the most recent few so config dirs do not fill with backups. The count
   // is per file and generous on purpose: applying one server to seven
   // destinations is a single user action that writes seven files, and a tighter
@@ -96,6 +99,7 @@ export function backupFile(path: string): void {
   } catch {
     // Pruning is best-effort; never block a write on it.
   }
+  return backup;
 }
 
 /**
@@ -206,13 +210,14 @@ type ProviderOverrides = Record<
 // even though a patch is written as { agents: { providers } }. Reading the
 // nested path silently yielded {} , so every provider looked unconfigured:
 // wired accounts showed as unwired and the auto-router always offered "Wire".
-async function providerOverrides(paseo: PluginHandlerContext["paseo"] | null): Promise<ProviderOverrides> {
+//
+// 0.15.0: read through the shared daemon cache (server/daemon-cache.ts), so a
+// busy daemon no longer holds up every read that lists the editors.
+async function providerOverrides(paseo: PluginHandlerContext["paseo"] | null, options: { fresh?: boolean } = {}): Promise<ProviderOverrides> {
   // The background health check may run before any RPC has handed us a paseo
   // handle; without one, every discovered editor counts as enabled.
   if (!paseo) return {};
-  const { config } = await withDeadline(paseo.config.get(), "its provider settings");
-  const shape = config as { providers?: ProviderOverrides; agents?: { providers?: ProviderOverrides } };
-  return (shape.providers ?? shape.agents?.providers ?? {}) as ProviderOverrides;
+  return (await providerSettings.read(paseo, options)) as ProviderOverrides;
 }
 
 // ---------------------------------------------------------------- MCP formats
@@ -232,7 +237,19 @@ export type McpDef = {
   // `http_headers`; Grok uses `headers`. Reading the wrong one reports a server
   // as credential-free, and writing the wrong one deletes its token.
   headerTable?: "headers" | "http_headers";
+  // TOML subtables this parser doesn't model (`env_http_headers`,
+  // `tools.<tool>`), each kept as its one-line `key = value` lines.
+  tables?: Array<{ sub: string; lines: string[] }>;
+  // Set when part of the block couldn't be read as one-line settings (a list
+  // across lines, a `"""` string): the definition can't be copied exactly, so
+  // no writer takes it. Plain words, for "copy this one by hand: …".
+  partial?: string;
 };
+
+/** Refuse a definition that can't be copied exactly, before anything is written. */
+export function assertCopyable(name: string, def: McpDef | null): void {
+  if (def?.partial) throw new Error(`copy ${name} by hand: ${def.partial}`);
+}
 
 /**
  * What each config language actually accepts, in one table so nothing has to
@@ -273,7 +290,7 @@ export function dialectOf(dest: Destination): Dialect {
 
 /** TOML-only bookkeeping that must never be written into a JSON config. */
 export function jsonSafeDef(def: McpDef, dialect: "claude-json" | "other"): McpDef {
-  const { extra: _extra, headerTable: _headerTable, ...rest } = def;
+  const { extra: _extra, headerTable: _headerTable, tables: _tables, partial: _partial, ...rest } = def;
   const clean: McpDef = { ...rest };
   // Claude Code needs `type` to treat an entry as HTTP; 18 of the 19 servers in
   // a real config carry it, and an entry that loses it stops loading.
@@ -290,7 +307,25 @@ export function jsonMcpRead(path: string): Record<string, McpDef> {
   return servers && typeof servers === "object" && !Array.isArray(servers) ? structuredClone(servers as Record<string, McpDef>) : {};
 }
 
-function jsonMcpWrite(path: string, name: string, def: McpDef | null): void {
+export type WriteOptions = {
+  /** Add only: refuse, after this write's own fresh read, when the file has a server of that name in any form. */
+  onlyIfAbsent?: boolean;
+  /** The target dialect's header table (Codex `http_headers`, Grok `headers`). */
+  headerTable?: "headers" | "http_headers";
+};
+
+const alreadyThere = (name: string) => new Error(`already has a server called ${name}`);
+
+function jsonMcpWrite(path: string, name: string, def: McpDef | null, options: WriteOptions = {}): void {
+  jsonMcpWriteMany(path, [{ name, def }], options);
+}
+
+/**
+ * Several servers into one JSON config: one fresh read, one backup, one write.
+ * With `onlyIfAbsent`, a name the file already has is refused and the rest
+ * are still written; the refusals come back by name.
+ */
+function jsonMcpWriteMany(path: string, entries: Array<{ name: string; def: McpDef | null }>, options: WriteOptions = {}): Map<string, string> {
   // A file that EXISTS but will not parse must never be overwritten: rewriting
   // it from `{}` would drop everything else it holds (account identity, project
   // history, settings). Missing is fine — that is a genuine first write.
@@ -298,12 +333,28 @@ function jsonMcpWrite(path: string, name: string, def: McpDef | null): void {
   if (config === null) {
     throw new Error(`${path} exists but is not valid JSON — refusing to overwrite it`);
   }
-  const servers = (config.mcpServers as Record<string, McpDef> | undefined) ?? {};
-  if (def === null) delete servers[name];
-  else servers[name] = jsonSafeDef(def, path.endsWith(".claude.json") ? "claude-json" : "other");
+  const refused = new Map<string, string>();
+  const raw = config.mcpServers;
+  const servers = raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, McpDef>) : {};
+  if (raw !== undefined && servers !== raw) throw new Error(`${path} has an mcpServers that isn't a list of servers — refusing to overwrite it`);
+  let changed = false;
+  for (const { name, def } of entries) {
+    try {
+      assertCopyable(name, def);
+      if (options.onlyIfAbsent && Object.prototype.hasOwnProperty.call(servers, name)) throw alreadyThere(name);
+    } catch (error) {
+      refused.set(name, error instanceof Error ? error.message : String(error));
+      continue;
+    }
+    if (def === null) delete servers[name];
+    else servers[name] = jsonSafeDef(def, path.endsWith(".claude.json") ? "claude-json" : "other");
+    changed = true;
+  }
+  if (!changed) return refused;
   config.mcpServers = servers;
   backupFile(path);
   writeJsonAtomic(path, config);
+  return refused;
 }
 
 // toml-mcp: [mcp_servers.<name>] tables. Codex and Grok both use this shape.
@@ -385,62 +436,90 @@ export function tomlMcpReadOne(path: string, name: string): McpDef | null {
   return text === null ? null : tomlMcpReadOneFromText(text, name);
 }
 
+const MULTI_LINE = "it has a setting that runs over several lines, which this app can't copy exactly";
+const UNREADABLE = "it has a part this app can't read";
+const MODELLED_TABLES = new Set(["env", "headers", "http_headers"]);
+
 // Same parse against a buffer rather than a file, so a computed document can be
 // re-read and compared before anything is written to disk.
+//
+// Only one-line `key = value` settings are carried (in `extra` and `tables`).
+// Anything else (a list across lines, a `"""` string, an array of tables)
+// marks the definition `partial`: it still reads, but no writer copies it.
 export function tomlMcpReadOneFromText(text: string, name: string): McpDef | null {
   const block = tomlServerBlock(text, name);
   if (!block) return null;
-  const body = text.slice(block.start, block.end);
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const own = new RegExp(`^[ \\t]*\\[mcp_servers\\.${escaped}(?:\\.([^\\]]+))?\\][ \\t]*(?:#.*)?$`);
   const def: McpDef = {};
-  const bodyLines = body.split("\n");
-  // Top-level lines of the block: everything before the first subtable header.
-  const subStart = bodyLines.findIndex((line, index) => index > 0 && /^[ \t]*\[/.test(line));
-  const topLines = (subStart === -1 ? bodyLines : bodyLines.slice(0, subStart)).slice(1);
   const extra: string[] = [];
-  for (const line of topLines) {
-    const pair = TOML_PAIR.exec(line);
-    if (!pair) continue;
-    const [, rawKey, rawValue] = pair;
-    const key = tomlPairKey(rawKey);
-    if (key === "url" || key === "command") {
-      const value = tomlUnquote(rawValue);
-      if (value !== null) def[key] = value;
-      continue;
-    }
-    if (key === "args") {
-      const inner = /^\[(.*)\]$/.exec(rawValue.trim());
-      if (inner) {
-        def.args = [...inner[1].matchAll(/"(?:[^"\\]|\\.)*"|'[^']*'/g)]
-          .map((match) => tomlUnquote(match[0]))
-          .filter((value): value is string => value !== null);
+  const tables: Array<{ sub: string; lines: string[] }> = [];
+  const records: Partial<Record<"env" | "headers" | "http_headers", Record<string, string>>> = {};
+  let partial = "";
+  let section: string | null = null;
+  for (const line of text.slice(block.start, block.end).split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+    if (trimmed.startsWith("[")) {
+      const header = own.exec(line);
+      if (!header) {
+        partial ||= UNREADABLE;
+        section = "?";
+        continue;
       }
+      section = header[1]?.trim() ?? null;
+      if (section !== null && !MODELLED_TABLES.has(section)) tables.push({ sub: section, lines: [] });
       continue;
     }
-    // Anything else (enabled, startup_timeout_sec, …) survives verbatim.
-    extra.push(line.trim());
-  }
-  if (extra.length > 0) def.extra = extra;
-  for (const sub of ["env", "headers", "http_headers"] as const) {
-    const subHeader = new RegExp(`^[ \\t]*\\[mcp_servers\\.${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\.${sub}\\]`, "m").exec(body);
-    if (!subHeader) continue;
-    const subBody = body.slice(subHeader.index).split("\n").slice(1);
-    const record: Record<string, string> = {};
-    for (const line of subBody) {
-      if (/^[ \t]*\[/.test(line)) break;
-      const pair = TOML_PAIR.exec(line);
-      if (!pair) continue;
+    const pair = TOML_PAIR.exec(line);
+    const value = pair ? tomlValueText(pair[2]) : null;
+    if (!pair || value === null) {
+      partial ||= MULTI_LINE;
+      continue;
+    }
+    if (section === "?") continue;
+    if (section === null) {
+      const key = tomlPairKey(pair[1]);
+      if (key === "url" || key === "command") {
+        const text = tomlUnquote(value);
+        if (text === null) partial ||= UNREADABLE;
+        else def[key] = text;
+        continue;
+      }
+      if (key === "args") {
+        const args = tomlStringArray(value, tomlUnquote);
+        if (args === null) partial ||= UNREADABLE;
+        else def.args = args;
+        continue;
+      }
+      // Anything else (enabled, startup_timeout_sec, …) survives verbatim.
+      extra.push(line.trim());
+      continue;
+    }
+    if (MODELLED_TABLES.has(section)) {
       // A bare dotted key is a nested table to TOML, not a header or variable called "a.b".
       const key = /^[A-Za-z0-9_-]+$/.test(pair[1]) ? pair[1] : pair[1].startsWith('"') || pair[1].startsWith("'") ? tomlUnquote(pair[1]) : null;
-      const value = tomlUnquote(pair[2]);
-      if (key !== null && value !== null) record[key] = value;
+      const text = tomlUnquote(value);
+      if (key === null || text === null) {
+        partial ||= UNREADABLE;
+        continue;
+      }
+      const sub = section as "env" | "headers" | "http_headers";
+      records[sub] = { ...records[sub], [key]: text };
+      continue;
     }
-    if (Object.keys(record).length === 0) continue;
-    if (sub === "env") def.env = record;
-    else {
-      def.headers = { ...def.headers, ...record };
-      def.headerTable = sub;
-    }
+    tables.at(-1)?.lines.push(line.trim());
   }
+  if (extra.length > 0) def.extra = extra;
+  if (records.env && Object.keys(records.env).length > 0) def.env = records.env;
+  for (const sub of ["headers", "http_headers"] as const) {
+    const record = records[sub];
+    if (!record || Object.keys(record).length === 0) continue;
+    def.headers = { ...def.headers, ...record };
+    def.headerTable = sub;
+  }
+  if (tables.length > 0) def.tables = tables;
+  if (partial) def.partial = partial;
   // A block we could not read meaningfully must not be treated as a definition:
   // re-serializing an empty def would silently destroy the real one.
   if (!def.command && !def.url) return null;
@@ -473,6 +552,7 @@ export function tomlApply(
   if (!TOML_SAFE_NAME.test(name)) {
     throw new Error(`'${name}' is not a valid TOML table name (letters, numbers, - and _ only)`);
   }
+  assertCopyable(name, def);
   let next = text;
   // Whichever subtable this file already used for headers wins: rewriting a
   // Codex block's `http_headers` as `headers` deletes the token Codex reads.
@@ -502,6 +582,7 @@ export function tomlApply(
         for (const [key, value] of Object.entries(record)) lines.push(`${tomlString(key)} = ${tomlString(value)}`);
       }
     }
+    for (const table of def.tables ?? []) lines.push(`[mcp_servers.${name}.${table.sub}]`, ...table.lines);
     next = `${next.replace(/\n*$/, "\n")}${lines.join("\n")}\n`;
   }
   return next;
@@ -518,11 +599,53 @@ export function tomlReadForWrite(path: string): string {
   }
 }
 
-function tomlMcpWrite(path: string, name: string, def: McpDef | null): void {
-  const text = tomlReadForWrite(path);
-  const next = tomlApply(text, name, def, path); // throws before any write on a bad name
-  backupFile(path);
+/**
+ * The one way a TOML config is written (0.15.0). The file as it was must
+ * hold together (tomlStructureProblem), or nothing is written: an unreadable
+ * file is never a reason to replace it. Then: backup, atomic write, and the
+ * file as written is checked again. When that check fails, the backup goes
+ * back and the write is reported as failed.
+ */
+export function writeTomlChecked(path: string, before: string, next: string): void {
+  const already = before === "" ? "" : tomlStructureProblem(before);
+  if (already) throw new Error(`${path} doesn't read as valid settings (${already}); fix it by hand first, nothing was written`);
+  const backup = backupFile(path);
   writeTextAtomic(path, next);
+  const problem = tomlStructureProblem(readFileSync(path, "utf8"));
+  if (!problem) return;
+  if (backup) writeTextAtomic(path, readFileSync(backup, "utf8"));
+  else rmSync(path, { force: true });
+  throw new Error(`the change would have broken ${path} (${problem}); it was put back as it was`);
+}
+
+/** Every server name a TOML file has, in any form (headers, inline tables, dotted keys). */
+export function tomlNamesAll(text: string): Set<string> {
+  return new Set([...tomlMcpNamesFromText(text), ...tomlServerNamesFromText(text)]);
+}
+
+function tomlMcpWrite(path: string, name: string, def: McpDef | null, options: WriteOptions = {}): void {
+  const refused = tomlMcpWriteMany(path, [{ name, def }], options);
+  const reason = refused.get(name);
+  if (reason) throw new Error(reason);
+}
+
+/** Several servers into one TOML config: one fresh read, one backup, one checked write. Refusals come back by name. */
+function tomlMcpWriteMany(path: string, entries: Array<{ name: string; def: McpDef | null }>, options: WriteOptions = {}): Map<string, string> {
+  const before = tomlReadForWrite(path);
+  const names = tomlNamesAll(before);
+  const refused = new Map<string, string>();
+  let next = before;
+  for (const { name, def } of entries) {
+    try {
+      if (options.onlyIfAbsent && names.has(name)) throw alreadyThere(name);
+      next = tomlApply(next, name, def, path, options.headerTable); // throws before any write on a bad name
+      names.add(name);
+    } catch (error) {
+      refused.set(name, error instanceof Error ? error.message : String(error));
+    }
+  }
+  if (next !== before) writeTomlChecked(path, before, next);
+  return refused;
 }
 
 // The one-line summary shown in the always-visible list must never carry a
@@ -530,34 +653,95 @@ function tomlMcpWrite(path: string, name: string, def: McpDef | null): void {
 // --api-key …) and in URL query strings.
 const SECRETISH = /(token|secret|key|password|auth|bearer|credential)/i;
 
-export function hasInlineCredentials(def: McpDef | null): boolean {
-  if (!def) return false;
-  if ((def.env && Object.keys(def.env).length > 0) || (def.headers && Object.keys(def.headers).length > 0)) return true;
-  if ((def.args ?? []).some((arg) => SECRETISH.test(arg))) return true;
-  if (!def.url) return false;
+// Flags whose next argument is a credential, though the flag's name doesn't say "token" (`--pat`, `-k`).
+const CREDENTIAL_FLAG = /^--?(pat|token|api[-_]?key|apikey|key|secret|password|passwd|pw|auth|bearer|access[-_]?token|client[-_]?secret|credentials?)$|^-k$/i;
+// Known key prefixes, at the start of a value or after a separator (so `task-manager` isn't `sk-`).
+const KEY_PREFIX = /(^|[^A-Za-z0-9])(ghp_[A-Za-z0-9]{4,}|gho_[A-Za-z0-9]{4,}|github_pat_[A-Za-z0-9_]{4,}|sk-[A-Za-z0-9_-]{4,}|sk_[A-Za-z0-9_]{4,}|xox[abposr]-[A-Za-z0-9-]{4,}|eyJ[A-Za-z0-9_-]{8,})/;
+
+/** A path segment that looks like a token: a known key prefix, or long and random-looking (letters and digits mixed). */
+function tokenLikeSegment(segment: string): boolean {
+  if (KEY_PREFIX.test(segment)) return true;
+  if (!/^[A-Za-z0-9_-]+$/.test(segment)) return false;
+  if (segment.length >= 32) return true;
+  return segment.length >= 16 && /[A-Za-z]/.test(segment) && /[0-9]/.test(segment);
+}
+
+/** An address that carries a key: a user name or password, a key-named query parameter, a token-like path segment, or a known key prefix. */
+function urlHasCredentials(raw: string): boolean {
+  if (KEY_PREFIX.test(raw)) return true;
   try {
-    return [...new URL(def.url).searchParams.keys()].some((key) => SECRETISH.test(key));
+    const url = new URL(raw);
+    if (url.username || url.password) return true;
+    if ([...url.searchParams.keys()].some((key) => SECRETISH.test(key))) return true;
+    return url.pathname.split("/").some((segment) => tokenLikeSegment(decodeURIComponent(segment)));
   } catch {
     // A malformed URL is already surfaced by health/editing. Do not infer auth.
     return false;
   }
 }
 
+/** Which arguments hold a key: a key-named flag's own value, the argument after a credential flag, one with a known key prefix, or a URL carrying one. */
+function secretArgIndexes(args: readonly string[]): Set<number> {
+  const secret = new Set<number>();
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    const flag = arg.split("=")[0];
+    if (SECRETISH.test(arg) || CREDENTIAL_FLAG.test(flag)) {
+      secret.add(index);
+      if (!arg.includes("=") && !/\s/.test(arg) && flag.startsWith("-") && index + 1 < args.length) secret.add(index + 1);
+      continue;
+    }
+    if (KEY_PREFIX.test(arg) || (/^https?:\/\//i.test(arg) && urlHasCredentials(arg))) secret.add(index);
+  }
+  return secret;
+}
+
+export function hasInlineCredentials(def: McpDef | null): boolean {
+  if (!def) return false;
+  if ((def.env && Object.keys(def.env).length > 0) || (def.headers && Object.keys(def.headers).length > 0)) return true;
+  // Codex keeps some keys on their own lines (`bearer_token = …`, an inline `http_headers = { … }`).
+  if ((def.extra ?? []).some((line) => SECRETISH.test(line.split("=")[0] ?? "") || /^\s*(env|http_headers|headers)\s*=/.test(line))) return true;
+  if ((def.tables ?? []).some((table) => table.lines.length > 0 && /header|env|auth/i.test(table.sub))) return true;
+  if (secretArgIndexes(def.args ?? []).size > 0) return true;
+  if (def.command && KEY_PREFIX.test(def.command)) return true;
+  return def.url ? urlHasCredentials(def.url) : false;
+}
+
+/** An address for display: no user name or password, no query, and a token-like path segment hidden. */
+function redactUrl(raw: string): string {
+  let text = raw.replace(/\?.*/, "?…");
+  try {
+    const url = new URL(raw);
+    if (url.username || url.password) text = text.replace(`${url.username}${url.password ? `:${url.password}` : ""}@`, "");
+  } catch {
+    // Shown as typed; health/editing reports a malformed address.
+  }
+  return text
+    .split("/")
+    .map((segment, index) => (index > 2 && tokenLikeSegment(segment) ? "•••" : segment))
+    .join("/");
+}
+
 export function redactDetail(def: McpDef | null): string {
   if (!def) return "";
-  if (def.url) return def.url.replace(/\?.*/, "?…");
+  if (def.url) return redactUrl(def.url);
   if (!def.command) return "";
   const parts: string[] = [def.command];
   const args = def.args ?? [];
+  const secret = secretArgIndexes(args);
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
-    if (SECRETISH.test(arg)) {
-      // Redact the flag's value too, whether inline (--key=v) or the next arg.
-      parts.push(arg.includes("=") ? `${arg.split("=")[0]}=•••` : `${arg.split(/\s/)[0]} •••`);
-      if (!arg.includes("=") && !/\s/.test(arg)) index += 1;
+    if (!secret.has(index)) {
+      parts.push(/^https?:\/\//i.test(arg) ? redactUrl(arg) : arg.replace(/\?.*/, "?…"));
       continue;
     }
-    parts.push(arg.replace(/\?.*/, "?…"));
+    if (SECRETISH.test(arg) || CREDENTIAL_FLAG.test(arg.split("=")[0])) {
+      // Redact the flag's value too, whether inline (--key=v) or the next arg.
+      parts.push(arg.includes("=") ? `${arg.split("=")[0]}=•••` : `${arg.split(/\s/)[0]} •••`);
+      if (!arg.includes("=") && !/\s/.test(arg) && secret.has(index + 1)) index += 1;
+      continue;
+    }
+    parts.push("•••");
   }
   return parts.join(" ");
 }
@@ -579,15 +763,32 @@ export function destNames(dest: Destination): string[] {
   return dest.format === "json-mcp" ? Object.keys(jsonMcpRead(dest.configPath)) : tomlMcpNames(dest.configPath);
 }
 
-export function destWrite(dest: Destination, name: string, def: McpDef | null): void {
-  if (dest.format === "json-mcp") jsonMcpWrite(dest.configPath, name, def);
-  else tomlMcpWrite(dest.configPath, name, def);
+/** Who has a server is decided by NAME, in any form the file writes it; never by whether its definition could be read. */
+export function destNamesAll(dest: Destination): Set<string> {
+  if (dest.format === "json-mcp") return new Set(Object.keys(jsonMcpRead(dest.configPath)));
+  const text = readTextCached(dest.configPath);
+  return text === null ? new Set() : tomlNamesAll(text);
+}
+
+export function destWrite(dest: Destination, name: string, def: McpDef | null, options: WriteOptions = {}): void {
+  if (dest.format === "json-mcp") jsonMcpWrite(dest.configPath, name, def, options);
+  else tomlMcpWrite(dest.configPath, name, def, options);
+}
+
+/** Several servers into one destination in one write, with one backup first. Returns the refusals by name. */
+export function destWriteMany(dest: Destination, entries: Array<{ name: string; def: McpDef }>, options: WriteOptions = {}): Map<string, string> {
+  return dest.format === "json-mcp" ? jsonMcpWriteMany(dest.configPath, entries, options) : tomlMcpWriteMany(dest.configPath, entries, options);
 }
 
 // ---------------------------------------------------------------- destinations
 
-export async function buildDestinations(paseo: PluginHandlerContext["paseo"] | null): Promise<Destination[]> {
-  const overrides = await providerOverrides(paseo);
+/**
+ * Every AI app and account config on this host. Reads may use the cached
+ * provider settings; every WRITE passes `fresh`, so an app switched off in
+ * Paseo a moment ago is never written to from an old copy.
+ */
+export async function buildDestinations(paseo: PluginHandlerContext["paseo"] | null, options: { fresh?: boolean } = {}): Promise<Destination[]> {
+  const overrides = await providerOverrides(paseo, options);
   const destinations: Destination[] = [];
   const seen = new Set<string>();
   const push = (dest: Destination) => {
@@ -731,7 +932,7 @@ function parseKvLines(text: string | undefined): Record<string, string> {
   return record;
 }
 
-function applyDefToTargets(
+export function applyDefToTargets(
   destinations: Destination[],
   targets: string[],
   name: string,
@@ -776,7 +977,7 @@ export async function handleMcpAdd(
     const headers = parseKvLines(input.kvLines);
     if (Object.keys(headers).length > 0) def.headers = headers;
   }
-  const destinations = await buildDestinations(paseo);
+  const destinations = await buildDestinations(paseo, { fresh: true });
   const { written, skipped } = applyDefToTargets(destinations, input.targets, input.name, def);
   return {
     ok: written.length > 0,
@@ -791,7 +992,7 @@ export async function handleMcpApply(
   { name, targets, sourceDestId }: { name: string; targets: string[]; sourceDestId?: string },
   { paseo }: PluginHandlerContext,
 ) {
-  const destinations = await buildDestinations(paseo);
+  const destinations = await buildDestinations(paseo, { fresh: true });
   let def: McpDef | null = null;
   if (sourceDestId) {
     const source = destinations.find((candidate) => candidate.id === sourceDestId);
@@ -870,7 +1071,7 @@ export async function handleMcpRemove(
   { name, targets = [], projectFiles = [] }: { name: string; targets?: string[]; projectFiles?: string[] },
   { paseo }: PluginHandlerContext,
 ) {
-  const destinations = await buildDestinations(paseo);
+  const destinations = await buildDestinations(paseo, { fresh: true });
   const removed: string[] = [];
   const skipped: string[] = [];
   for (const target of targets) {
@@ -965,7 +1166,7 @@ export async function handleMcpEditOne(
   input: { name: string; destId: string; kind: "stdio" | "http"; command?: string; url?: string; kvLines?: string },
   { paseo }: PluginHandlerContext,
 ) {
-  const destinations = await buildDestinations(paseo);
+  const destinations = await buildDestinations(paseo, { fresh: true });
   const dest = destinations.find((candidate) => candidate.id === input.destId);
   if (!dest) return { ok: false, message: `unknown destination ${input.destId}` };
   // Masked values restore from THIS destination's stored secret — per-account
@@ -1030,7 +1231,7 @@ export async function handleMcpRename({ name, newName }: { name: string; newName
     return { ok: false, message: "new name must be letters, numbers, hyphens, underscores" };
   }
   if (newName === name) return { ok: false, message: "new name is the same" };
-  const destinations = await buildDestinations(paseo);
+  const destinations = await buildDestinations(paseo, { fresh: true });
   const renamed: string[] = [];
   const skipped: string[] = [];
   for (const dest of destinations) {
@@ -1070,34 +1271,28 @@ export async function probeHttp(url: string, headers: Record<string, string> | u
 
 // Only MCP definitions and Claude project trust are shared between accounts.
 // Provider preferences, prompts, output styles, and OAuth grants remain owned
-// by the account that created them.
-const SYNC_PROJECT_FIELDS = [
-  "hasTrustDialogAccepted",
-  "hasCompletedProjectOnboarding",
-  "allowedTools",
-  "mcpServers",
-  "enabledMcpjsonServers",
-  "disabledMcpjsonServers",
-  "dontCrawlDirectory",
-];
+// by the account that created them. Trust is the "you trusted this folder"
+// answer and the onboarding flag, nothing else: a slot's own allowed tools,
+// project servers and .mcp.json choices are its own and never replaced.
+const SYNC_PROJECT_FIELDS = ["hasTrustDialogAccepted", "hasCompletedProjectOnboarding"];
 
 // Paseo 0.7 exposes every registered project, including projects with no
 // active workspace. Prefer that catalog so the MCP inventory is not tied to
 // guessed folder roots; retain the old scan for earlier hosts.
+//
+// 0.15.0: the daemon's list is read through the shared daemon cache
+// (server/daemon-cache.ts): a copy answers at once and is refreshed in the
+// background, so the Add gallery and the sign-in read no longer wait on it.
+type Project = { name: string; path: string };
+
 export async function discoverProjects(
   paseo: PluginHandlerContext["paseo"] | null,
-): Promise<Array<{ name: string; path: string }>> {
-  let projects: Array<{ name: string; path: string }> = [];
-  const projectApi = (paseo as unknown as {
-    projects?: { list(): Promise<{ entries?: Array<{ name?: string; path?: string }> } | Array<{ name?: string; path?: string }>> };
-  } | null)?.projects;
-  if (projectApi) {
+  options: { fresh?: boolean } = {},
+): Promise<Project[]> {
+  let projects: Project[] = [];
+  if (paseo) {
     try {
-      const result = await withDeadline(projectApi.list(), "its project list");
-      const entries = Array.isArray(result) ? result : result.entries ?? [];
-      projects = entries.flatMap((entry) => entry.path
-        ? [{ name: entry.name || basename(entry.path), path: entry.path }]
-        : []);
+      projects = [...(await projectList.read(paseo, options))];
     } catch {
       // Fall through to the directory scan supported by older hosts.
     }
@@ -1195,6 +1390,8 @@ export async function handleMcpAuth(
 ) {
   const accounts = collectAccounts({ askCodex: true, force: input.refresh === true });
   const projectServers: Array<{ project: string; name: string; path: string }> = [];
+  // Refresh re-reads the project list too, in the background: this read answers from the last copy.
+  if (input.refresh === true) refreshDaemonReads("projects");
   const projects = await discoverProjects(context?.paseo ?? null);
   const seenProjectServers = new Set<string>();
   for (const project of projects) {
@@ -1211,6 +1408,33 @@ export async function handleMcpAuth(
   return { accounts, projectServers, checking: accounts.some((account) => account.checking === true) };
 }
 
+
+/**
+ * Claude project trust from the primary account into one slot's config: for
+ * every project the primary trusts, each of SYNC_PROJECT_FIELDS the slot's
+ * entry LACKS is copied. A field the slot already has (even `false`) is its
+ * own answer and is left as it is; nothing else in the entry changes.
+ * Returns how many project entries changed.
+ */
+function mergeTrustedProjects(projects: Record<string, Record<string, unknown>>, config: Record<string, unknown>): number {
+  const slotProjects = (config.projects as Record<string, Record<string, unknown>> | undefined) ?? {};
+  let changed = 0;
+  for (const [projectPath, entry] of Object.entries(projects)) {
+    if (entry?.hasTrustDialogAccepted !== true) continue;
+    const target = slotProjects[projectPath] ?? {};
+    let touched = false;
+    for (const field of SYNC_PROJECT_FIELDS) {
+      if (!(field in entry) || field in target) continue;
+      target[field] = entry[field];
+      touched = true;
+    }
+    if (!touched) continue;
+    slotProjects[projectPath] = target;
+    changed += 1;
+  }
+  if (changed > 0) config.projects = slotProjects;
+  return changed;
+}
 
 export async function handleMcpSync(): Promise<{ ok: boolean; log: string }> {
   const logs: string[] = [];
@@ -1229,22 +1453,16 @@ export async function handleMcpSync(): Promise<{ ok: boolean; log: string }> {
       // Union, not replace: a server that exists only in this account (or an
       // auth header edited per account) must survive a sync.
       const slotServers = (config.mcpServers as Record<string, unknown> | undefined) ?? {};
+      const added = Object.keys(mcp).filter((name) => !(name in slotServers)).length;
       config.mcpServers = { ...mcp, ...slotServers };
-      const slotProjects = (config.projects as Record<string, Record<string, unknown>> | undefined) ?? {};
-      config.projects = slotProjects;
-      let trusted = 0;
-      for (const [projectPath, entry] of Object.entries(projects)) {
-        if (!entry?.hasTrustDialogAccepted) continue;
-        trusted += 1;
-        const target = slotProjects[projectPath] ?? {};
-        slotProjects[projectPath] = target;
-        for (const field of SYNC_PROJECT_FIELDS) {
-          if (field in entry) target[field] = entry[field];
-        }
+      const trusted = mergeTrustedProjects(projects, config);
+      if (added === 0 && trusted === 0) {
+        logs.push(`claude · ${slot.email}: already up to date`);
+        continue;
       }
       backupFile(path);
       writeJsonAtomic(path, config);
-      logs.push(`claude · ${slot.email}: ${Object.keys(mcp).length} MCP servers, ${trusted} trusted projects`);
+      logs.push(`claude · ${slot.email}: ${added} MCP server(s) added, trust copied to ${trusted} project(s)`);
     }
   }
   const codexPrimary = join(HOME, ".codex", "config.toml");
@@ -1259,24 +1477,30 @@ export async function handleMcpSync(): Promise<{ ok: boolean; log: string }> {
       primaryText = "";
     }
     const primaryDefs: Array<[string, McpDef]> = [];
+    const byHand: string[] = [];
     for (const name of tomlMcpNamesFromText(primaryText)) {
       const def = tomlMcpReadOneFromText(primaryText, name);
-      if (def) primaryDefs.push([name, def]);
+      if (def?.partial) byHand.push(name);
+      else if (def) primaryDefs.push([name, def]);
     }
     for (const slot of slots.filter((entry) => entry.provider === "codex")) {
       const path = join(slot.dir, "config.toml");
       try {
-        let text = tomlReadForWrite(path);
-        const existing = new Set(tomlMcpNamesFromText(text));
+        const before = tomlReadForWrite(path);
+        let text = before;
+        // By name, in any form (an inline table counts): never clobber a per-account definition.
+        const existing = tomlNamesAll(text);
         let added = 0;
         for (const [name, def] of primaryDefs) {
-          if (existing.has(name)) continue; // never clobber a per-account definition
+          if (existing.has(name)) continue;
           text = tomlApply(text, name, def);
           added += 1;
         }
-        backupFile(path);
-        writeTextAtomic(path, text);
-        logs.push(`codex · ${slot.email}: ${added} MCP server(s) added, ${existing.size} kept as-is`);
+        if (text !== before) writeTomlChecked(path, before, text);
+        const skipped = byHand.filter((name) => !existing.has(name));
+        logs.push(
+          `codex · ${slot.email}: ${added} MCP server(s) added, ${existing.size} kept as-is${skipped.length > 0 ? `; copy ${skipped.join(", ")} by hand (settings over several lines)` : ""}`,
+        );
       } catch (error) {
         logs.push(`codex · ${slot.email}: SKIPPED — ${error instanceof Error ? error.message : String(error)}`);
       }

@@ -114,7 +114,7 @@ export function PaseoToolsLine({ onOpen }: { onOpen: () => void }) {
         label="Paseo tools"
         value="off"
         status="neutral"
-        hint={state.blocker === "mcp-off" ? "Paseo's MCP server is off on this host" : state.blocker === "inject-off" ? "Not added to agents on this host" : "Off for every provider"}
+        hint={state.blocker === "mcp-off" ? "Paseo's own tools are switched off on this computer" : state.blocker === "inject-off" ? "Not given to agents on this computer" : "Off for every AI app"}
         action={{ label: "Paseo tools", onPress: onOpen }}
       />
     );
@@ -126,9 +126,30 @@ export function PaseoToolsLine({ onOpen }: { onOpen: () => void }) {
       label="Paseo tools"
       value={`on · ${plural(most, "tool")}`}
       status={drift ? "attention" : "ok"}
-      hint={drift || `for ${on.length <= 3 ? on.map((entry) => entry.id).join(", ") : `${on.length} of ${plural(state.providers.length, "provider")}`}${state.browserTools ? "" : " · browser tools off"}`}
+      hint={drift || `${on.length === state.providers.length ? `for all ${on.length} AI apps` : `for ${on.length} of ${state.providers.length} AI apps`}${state.browserTools ? "" : " · browser tools off"}`}
       action={{ label: "Paseo tools", onPress: onOpen }}
     />
+  );
+}
+
+// ------------------------------------------------------------- servers row
+
+/** "Paseo's built-in tools · on · 39 tools": the one line the Servers tab shows for them, closed. */
+export function paseoToolsTitle(state: PaseoToolsStateReport | undefined, failed: boolean): string {
+  const head = "Paseo's built-in tools";
+  if (!state) return `${head} · ${failed ? "unavailable" : "reading…"}`;
+  const on = state.providers.filter((entry) => entry.tools > 0);
+  if (!state.injected || on.length === 0) return `${head} · off`;
+  return `${head} · on · ${plural(Math.max(...on.map((entry) => entry.tools)), "tool")}`;
+}
+
+/** The Servers tab's Paseo tools card, folded into one row until opened (0.15.0). */
+export function PaseoToolsDisclosure({ hostLabel }: { hostLabel: string }) {
+  const query = usePaseoTools();
+  return (
+    <Disclosure title={paseoToolsTitle(query.data, Boolean(query.error))}>
+      <PaseoToolsCard hostLabel={hostLabel} />
+    </Disclosure>
   );
 }
 

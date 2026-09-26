@@ -124,14 +124,14 @@ function projectEntry(configPath: string, directory: string): ClaudeProjectEntry
 export async function handleMcpAgentServers(
   { workspaceId, providerId, agentId }: { workspaceId: string; providerId: string; agentId?: string },
   { paseo }: PluginHandlerContext,
-  { probe = true }: { probe?: boolean } = {},
+  { probe = true, fresh = false }: { probe?: boolean; fresh?: boolean } = {},
 ) {
   const workspace = await findWorkspace(paseo, workspaceId);
   const directory = projectKeyFor(workspace);
   const candidates = [...new Set([directory, workspace.projectRootPath].filter(Boolean))];
   const projectConfigPath = candidates.map((candidate) => join(candidate, ".mcp.json")).find(existsSync) ?? "";
   const projectDefs = projectConfigPath ? jsonMcpRead(projectConfigPath) : {};
-  const destinations = await buildDestinations(paseo);
+  const destinations = await buildDestinations(paseo, { fresh });
   const { profile } = buildProfile(destinations, projectDefs, projectConfigPath, candidates);
   const scope = scopeForProvider(profile, providerId);
   const paseoTools = await paseoToolsLoad(paseo, providerId ? [providerId] : [], { live: probe });
@@ -232,7 +232,8 @@ export async function handleMcpSetEnabled(
   { workspaceId, providerId, name, enabled }: { workspaceId: string; providerId: string; name: string; enabled: boolean },
   context: PluginHandlerContext,
 ) {
-  const current = await handleMcpAgentServers({ workspaceId, providerId }, context);
+  // A write: the provider settings are read fresh, never from the cached copy.
+  const current = await handleMcpAgentServers({ workspaceId, providerId }, context, { fresh: true });
   const server = current.servers.find((entry) => entry.name === name);
   if (!server) return { ok: false, message: `'${name}' is not a server this agent loads` };
   if (!current.scope) return { ok: false, message: "No editor config is wired to this provider" };

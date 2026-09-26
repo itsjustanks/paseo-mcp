@@ -57,6 +57,7 @@ import {
   type LibraryCache,
   type RegistrySearch,
 } from "./library";
+import { refreshDaemonReads } from "./daemon-cache";
 import { handleMcpImportApply } from "./mcpjson";
 import { keepVersionCopy, readSettingsDocument } from "./settings";
 import { libraryAuthIds, readLibraryAuth, teamOrigin, writeLibraryHeaderValue } from "./team-auth";
@@ -327,6 +328,8 @@ export async function handleMcpCatalog(
 ) {
   const settings = readCatalogSettings();
   unbindMovedKeys(settings.libraries);
+  // Refresh everything re-reads the daemon's project list and provider settings too, in the background.
+  if (refresh === "all") refreshDaemonReads();
   const reads = readLibraries(settings.libraries, query, refresh, library);
   const cards = mergeGallery(
     CURATED_CATALOG.map(curatedCard),
@@ -334,11 +337,12 @@ export async function handleMcpCatalog(
     reads.filter((read) => read.search).flatMap((read) => read.cards),
   );
 
-  const discovered = (await discoverProjects(context?.paseo ?? null)).map((project) => ({ ...project, defs: jsonMcpRead(join(project.path, ".mcp.json")) }));
+  // Both lists come from the daemon's cached reads (server/daemon-cache.ts); asked together, so a first read waits once.
+  const [found, destinations] = await Promise.all([discoverProjects(context?.paseo ?? null), buildDestinations(context?.paseo ?? null)]);
+  const discovered = found.map((project) => ({ ...project, defs: jsonMcpRead(join(project.path, ".mcp.json")) }));
   const projects = discovered.map((project) => ({ name: project.name, path: project.path, servers: Object.keys(project.defs).length }));
 
   // "Added": each card's endpoint against every editor config and project file.
-  const destinations = await buildDestinations(context?.paseo ?? null);
   const index = buildAddedIndex([
     ...destinations.map((dest) => ({ place: { kind: "editor", id: dest.id, label: dest.label } as AddedPlace, defs: destRead(dest) })),
     ...discovered.map((project) => ({ place: { kind: "project", id: project.path, label: project.name } as AddedPlace, defs: project.defs })),
@@ -506,7 +510,9 @@ async function prepare(input: InstallInput, paseo: PluginHandlerContext["paseo"]
     if (clashFiles.length > 0) result.clash = { files: clashFiles, suggestion: nameClash(name, taken).suggestion };
     if (chosen.length > 0) result.budget = budgetImpact("user", heaviest + 1, describeTargets(chosen.map((dest) => dest.label)));
   } else {
-    const projects = await discoverProjects(paseo);
+    // A project registered since the last copy is looked for again, waiting for the daemon this once.
+    const cached = await discoverProjects(paseo);
+    const projects = cached.some((candidate) => candidate.path === input.projectPath) ? cached : await discoverProjects(paseo, { fresh: true });
     const project = projects.find((candidate) => candidate.path === input.projectPath);
     if (!project) {
       result.issues.push("Pick one of the registered projects.");

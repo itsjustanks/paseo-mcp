@@ -19,7 +19,7 @@ paseo plugin update paseo-mcp
 ## What it does
 
 - Adds servers from a gallery: recommended official servers, libraries you subscribe to by address or file (the MCP Gallery by default, your team's own list, a private registry), and optionally the MCP Registry, with trust badges (see [Add from catalogue](#add-from-catalogue)).
-- Shows user-level MCP servers across Claude Code, Codex, Kimi Code, and Grok, one card per server with its editors, health, tools and sign-in state.
+- Shows user-level MCP servers across Claude Code, Codex, Kimi Code, and Grok as a searchable gallery: one card per server saying what it is, whether it works, which apps have it and its sign-in state, with a settings button to its own page (tools, sign-in, edit, remove).
 - Adds, edits, renames, imports, and exports definitions with masked secrets; removes a server from one editor, all editors, or everywhere including project `.mcp.json` files.
 - Turns servers on or off per workspace from the workspace and agent panels, where the editor has such a switch.
 - Starts Claude or Codex OAuth in the computer's default browser and shows the fallback URL.
@@ -30,14 +30,14 @@ paseo plugin update paseo-mcp
 - Shows, per agent, which servers the chat actually used and which it loaded without using, and turns the unused ones off for the workspace in one confirmed step. `/mcp` in a composer opens that panel.
 - Puts a small "needs sign-in" card in the chat when a tool call fails for lack of a sign-in, with a Connect button.
 - Shows and switches Paseo's own built-in tools (the `mcp__paseo__*` tools the daemon adds to agents): for the whole host, per provider, and per tool.
-- Syncs MCP definitions and Claude project trust to discovered account directories without copying OAuth grants.
+- Copies every server to every AI app and account that doesn't have it (**Copy to all my AI apps**, which replaces Sync accounts), after a preview, never removing or overwriting anything and never copying a sign-in. Only what can be copied exactly goes; a server another app wouldn't read the same way is left for you to copy by hand, with the reason.
 - Keeps backups before config writes and preserves destination-specific credentials.
 
 ## Add from catalogue
 
 **Servers → Add server** opens a gallery. Search it, filter by category, and press **Add** on a card; **Add by hand**
 keeps the old form. Each card says who publishes it, whether it is **Official**, **Library**, **Team** or **Community**,
-whether it is **Remote** or **Runs locally**, whether it signs in with **OAuth**, needs a **Key**, or has **No auth**,
+whether it is on the **Web** or **On this computer**, whether you **Sign in with your account**, it **Needs a key**, or has **No sign-in**,
 and which library it came from.
 
 | Shelf | Where it comes from |
@@ -133,10 +133,16 @@ review again. Writes use the same writers as Import
 Skip. Afterwards it runs a health check, offers **Open server to connect** for an OAuth server, and says what the server
 adds to the context budget.
 
-A card whose server is already defined somewhere says **Added** and where ("in 3 of 4 editors", "in data-glue"). It
-matches the address or the package and its ecosystem (npm, PyPI, OCI), not the name, so an `ikit-notion` at
-`mcp.notion.com` counts as Notion, and an npm package never counts as a PyPI one of the same name. Its button reads
-**Add to more** and starts with only the missing places picked.
+A card you already have is **hidden** (0.15.0): the gallery shows what you don't have yet, and the line
+under the search says how many are hidden ("8 you already have are hidden."). You have it when one of your
+servers is at the same endpoint, is on the same host whatever the path (anything on `mcp.zapier.com`,
+where the path carries a personal token; not a host many servers share, like `vercel.app` or `localhost`),
+runs the same package (npm, PyPI, OCI; any version; not a runner like `mcp-remote`), or is named exactly
+after the card's id or name, ignoring case, an `-mcp` ending and a prefix two or more of your servers
+share (`ikit-notion` is Notion when you also have `ikit-linear`; `old-github` isn't GitHub). **Show ones I already have** brings them back, each saying "You have a Zapier server already,
+called automations." A card at the same endpoint says **Added** (matched on the address or the package
+and its ecosystem, not the name, so an npm package never counts as a PyPI one of the same name), and its
+button reads **Add to more** and starts with only the missing places picked.
 
 A project's `.mcp.json` is usually in git, so a key never goes into it. Claude Code expands `${VAR}` in `.mcp.json`
 (in `command`, `args`, `env`, `url` and `headers`), so a secret becomes a `${VAR}` reference and the sheet names the
@@ -214,16 +220,52 @@ directly; if it is missing or invalid, the setting stays off.
 
 ## The MCP surface
 
-Five sections: **Overview**, **Servers**, **Projects**, **Import & Export**, **Guide & Setup**. Since
-0.7.0 the old Tools and Accounts tabs are part of **Servers**: every server is one card showing its
-transport, which editors define it and which are missing it, its health, its tool list (collapsed; some
-servers list 77), and a sign-in row per account with Connect / Sign out. The strip above the cards
-carries the totals those tabs used to lead with (servers, tools listed, accounts, sign-ins needed,
-issues, gaps). Filters: all, gaps, issues, need sign-in. **Sync accounts** moved to Overview.
+Five sections: **Overview**, **Servers**, **Projects**, **Import & Export**, **Guide & Setup**. The
+words are for people who have never heard of MCP: plain English, and any term explained where it appears.
+
+**Overview** opens with what this is: "MCP servers connect your AI assistants to the apps you already
+use, like Notion, Supabase or Linear, so an assistant can read and act in them. Add a server once here,
+and every AI app on this computer can use it." **Learn more** says what a server is, web servers versus
+ones that run on this computer, signing in, and why fewer servers keep assistants quick (the words are
+in `shared/overview.ts`). Then the next step, the at-a-glance lines (AI apps, sign-in, tools, Paseo's
+own tools, projects, in plain words), what needs attention, and **Use your servers in every AI app**.
+
+**Copy to all my AI apps** (0.15.0; it replaces **Sync accounts**) copies every user-level server into
+every AI app and account on this host that doesn't have it: Claude → Codex and Kimi, Codex → Claude, and
+between two accounts of one app. It opens a preview first: one row per server with where it will go,
+which copy is used, "includes its saved key" when it carries one, and a tick box to leave it out; then
+**Copy N servers**. It writes through the same writers as a server's **Add to missing**, one write and
+one backup per file, in each file's own format, and reads every server back. It never removes or
+overwrites: who has a server is decided by name, the plan is worked out again when you press Copy, and
+the write refuses a name the file has by then ("it already has a different server called jam; left as it
+is"). Between apps only the settings every app shares are copied; a switched-off server, an app-only
+setting or a `${VAR}` the other app wouldn't fill in is skipped with the reason. The result is per server
+and per app, so a file that failed shows. Paseo's own server and project `.mcp.json` servers are left
+out, and no sign-in is copied. Project trust isn't touched: Sync accounts copies that, and only where the
+other account doesn't have it yet. It is on Overview, in the next step when servers are missing from some
+apps, and on the Servers tab's **Missing from some apps** filter.
+
+**Servers** is a gallery of the servers you have, in the same style as the Add gallery (0.15.0). Search
+reads each server's name and description; the pills are **All**, **Needs attention** (health),
+**Needs sign-in** and **Missing from some apps**, each with its count. A card shows:
+
+- the name and one plain line: the catalogue's description when the address or package is a known one,
+  otherwise "Your server at mcp.example.com" or "Runs on this computer";
+- a health dot and word (Working, Warning, Not working, Not installed, Needs sign-in, Not checked yet);
+- which apps have it and which don't: "In Claude and Codex · missing in 1 Claude account and Kimi";
+- its sign-in state ("Signed in", "2 accounts need to sign in", "Uses a saved key", "No sign-in needed");
+- a settings button (the app's gear icon; a text button in an app without icons) that opens the
+  server's own page, which has its tool list, sign-in rows, **Add to missing**, rename, export, **Copy
+  as catalogue entry** and **Remove**.
+
+Above the gallery, Paseo's built-in tools ("Paseo's built-in tools · on · 61 tools") and the totals
+("6 servers · 1 needs attention · 2 need sign-in") are two closed rows, so the gallery starts near the
+top. One **Refresh** re-reads the settings, health, sign-in and every server's tool list. The logic is in
+`shared/servers.ts` (`serverGallery`).
 
 ### Removing a server
 
-Each card and each server page offers three scopes, each a two-step confirm that names the files:
+Each server's page offers three scopes, each a two-step confirm that names the files:
 
 | Scope | What is written |
 | --- | --- |
@@ -307,6 +349,15 @@ of that and more: don't share it. A tool list last read more than 7 days ago is 
 server that stops answering keeps its old list for at most 7 days. A corrupt file, or one from another
 version, is ignored. Deleting it is safe.
 
+Two calls back into the Paseo daemon sit on the panel's path: its project list and its provider
+settings. A busy daemon takes seconds to answer them (`paseo-mcp.auth took 10.0 s` in a daemon log). Since
+0.15.0 both go through one cache (`server/daemon-cache.ts`): a read answers from the last copy at once
+and refreshes it in the background when it is older than 15 s; one call is in flight at a time; a failed
+call keeps the last good copy and isn't retried from a read for 15 s. Only the very first read, or one
+that needs a project registered since (adding a server to a project Paseo just learned about), waits.
+Refresh in the Add gallery or on sign-in re-reads both in the background, and changing Paseo's tool
+settings from the Servers tab marks the provider settings out of date.
+
 | Status | Meaning | Needs attention |
 | --- | --- | --- |
 | `ok` | The endpoint answered `initialize`, or is alive and rejected the anonymous request the way the protocol says to (400, 405, 406, a redirect) | no |
@@ -317,8 +368,8 @@ version, is ignored. Deleting it is safe.
 | `unknown` | No readable definition | no |
 
 Health notes never contain a URL, query string, token, or header value; the verdict is redacted
-before it is cached, shown, or logged. Missing sign-ins are reported per account on each server's card,
-which reads each editor's own grant list.
+before it is cached, shown, or logged. Missing sign-ins are reported per account on each server's page
+(and counted on its card), which reads each editor's own grant list.
 
 ### Composer chip
 
@@ -612,6 +663,7 @@ paseo plugin add /absolute/path/to/paseo-mcp --link
 `npm run bench` runs the load harness (`tests/perf/harness.ts`): the plugin in its own process against
 a sandbox HOME with a fake `codex`, playing daemon and app, and prints processes started per minute,
 event-loop stalls, and RPC timings with the panel closed and open. `npm run bench -- --quick` takes
-about a minute.
+about a minute. `--daemon-delay 8` makes the fake daemon take 8 s to answer its project list and
+provider settings, the way a busy daemon does (0.15.0).
 
 Paseo's plugin host supplies the runtime. The npm dependencies are development types only.

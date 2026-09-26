@@ -18,6 +18,7 @@ import {
   type PaseoToolsState,
 } from "../shared/paseo-tools";
 import { readProviderLaunch, type ProviderLaunch } from "../shared/tool-search";
+import { invalidateDaemonReads } from "./daemon-cache";
 import { liveSnapshot, refreshLive } from "./paseo-live";
 import { runningPaseoVersion } from "./paseo-version";
 import { withDeadline } from "./run";
@@ -83,6 +84,8 @@ export async function readToolsConfig(paseo: Paseo, fresh = false): Promise<Daem
 function startWrite(): void {
   generation += 1;
   cached = null;
+  // The shared read of provider settings (server/daemon-cache.ts) is out of date too.
+  invalidateDaemonReads("config");
 }
 
 /** For tests: forget the cached read. */

@@ -29,7 +29,9 @@ export type OverviewTone = "ok" | "attention" | "error" | "neutral";
 export type OverviewTarget =
   | { section: "servers"; filter: ServerFilter }
   | { section: "transfer"; mode: "add" | "import" }
-  | { section: "refresh" };
+  | { section: "refresh" }
+  /** Open "Copy to all my AI apps" (0.15.0). */
+  | { section: "copy" };
 
 export type OverviewStep = { title: string; detail: string; label: string; target: OverviewTarget };
 
@@ -50,45 +52,78 @@ function firstProblem(facts: OverviewFacts): Problem | null {
 
 /** The header pill: one tone and a few words. */
 export function overviewVerdict(facts: OverviewFacts): { status: OverviewTone; label: string } {
-  if (facts.state === "error") return { status: "error", label: "Host unavailable" };
+  if (facts.state === "error") return { status: "error", label: "Can't reach Paseo" };
   if (facts.staleAt) return { status: "attention", label: `As of ${facts.staleAt}` };
   if (facts.state === "loading") return { status: "neutral", label: "Connecting" };
   if (facts.servers === 0) return { status: "neutral", label: "No servers yet" };
   switch (firstProblem(facts)) {
     case "broken":
-      return { status: "error", label: `${plural(facts.broken, "server")} down` };
+      return { status: "error", label: `${facts.broken} not working` };
     case "signIn":
       return { status: "attention", label: `${facts.signIn} need sign-in` };
     case "gaps":
-      return { status: "attention", label: plural(facts.gaps, "gap") };
+      return { status: "attention", label: `${facts.gaps} missing from some apps` };
     case "warnings":
       return { status: "attention", label: plural(facts.warnings, "warning") };
     default:
-      return { status: "ok", label: "All servers healthy" };
+      return { status: "ok", label: "All working" };
   }
 }
 
 /** The Overview's first card: what to do next, and the button that does it. */
 export function overviewNextStep(facts: OverviewFacts): OverviewStep {
   if (facts.state === "error") {
-    return { title: "Reconnect to the host", detail: "The MCP plugin could not read the editor configs on this host. Retry once the daemon is reachable.", label: "Retry", target: { section: "refresh" } };
+    return { title: "Couldn't reach Paseo", detail: "We couldn't read your AI apps' settings on this computer. Try again once Paseo is running.", label: "Try again", target: { section: "refresh" } };
   }
   if (facts.state === "loading") {
-    return { title: "Reading editor configs", detail: `Looking for Claude, Codex, Kimi and Grok configs on ${facts.hostLabel}. This takes a moment.`, label: "Refresh", target: { section: "refresh" } };
+    return { title: "Reading your AI apps", detail: `Looking for Claude, Codex, Kimi and Grok on ${facts.hostLabel}. This takes a moment.`, label: "Refresh", target: { section: "refresh" } };
   }
   if (facts.servers === 0) {
-    return { title: "Add or import your first server", detail: "Paste the JSON block from a server's README, or type a URL or command. It is written to every editor you choose.", label: "Open Import & Export", target: { section: "transfer", mode: "import" } };
+    return { title: "Add your first server", detail: "Paste the setup text from a server's instructions, or type its web address. It's added to every AI app you choose.", label: "Add a server", target: { section: "transfer", mode: "import" } };
   }
   switch (firstProblem(facts)) {
     case "broken":
-      return { title: `Fix ${plural(facts.broken, "unhealthy server")}`, detail: "A server is down or its command is not installed. Open it to read the health note and edit its definition.", label: "Show issues", target: { section: "servers", filter: "issues" } };
+      return {
+        title: facts.broken === 1 ? "Fix the server that isn't working" : `Fix ${facts.broken} servers that aren't working`,
+        detail: facts.broken === 1 ? "One server isn't working. Open it to see what's wrong and fix it." : `${facts.broken} servers aren't working. Open each one to see what's wrong and fix it.`,
+        label: "Show them",
+        target: { section: "servers", filter: "issues" },
+      };
     case "signIn":
-      return { title: `Sign in to ${plural(facts.signIn, "server")}`, detail: "OAuth grants are per account. Connect each one once from the server's card; the browser sign-in runs on the daemon host.", label: "Show servers needing sign-in", target: { section: "servers", filter: "sign-in" } };
+      return { title: `Sign in to ${plural(facts.signIn, "server")}`, detail: "Each AI app and account signs in once, in your browser. Open a server and choose Connect.", label: "Show servers that need sign-in", target: { section: "servers", filter: "sign-in" } };
     case "gaps":
-      return { title: `Apply ${plural(facts.gaps, "server")} to the editors missing them`, detail: "A server defined in one editor is not yet in the others. Open a server and choose Add to missing to copy its definition across.", label: "Review gaps", target: { section: "servers", filter: "gaps" } };
+      return { title: `Copy ${plural(facts.gaps, "server")} to the apps missing them`, detail: "Some servers are in one AI app but not another. Copy them everywhere in one go; you'll see exactly what changes first.", label: "Copy to all my AI apps", target: { section: "copy" } };
     case "warnings":
-      return { title: `Check ${plural(facts.warnings, "server")} with a warning`, detail: "A server answered, but not cleanly. Open it to read the health note.", label: "Show issues", target: { section: "servers", filter: "issues" } };
+      return { title: `Check ${plural(facts.warnings, "server")} with a warning`, detail: "A server answered, but not cleanly. Open it to see what's wrong.", label: "Show them", target: { section: "servers", filter: "issues" } };
     default:
-      return { title: "Ready", detail: `${plural(facts.servers, "server")} defined in every editor, with every account connected. Add another server or export a backup whenever you like.`, label: "Browse servers", target: { section: "servers", filter: "all" } };
+      return { title: "All set", detail: `${plural(facts.servers, "server")}, in every AI app, all working and signed in. Add another whenever you like.`, label: "Browse servers", target: { section: "servers", filter: "all" } };
   }
 }
+
+// -------------------------------------------------------------------- words
+
+/**
+ * What this is, for someone who has never heard of MCP (0.15.0). Always on
+ * top of Overview, with a longer version behind "Learn more".
+ */
+export const MCP_EXPLAINER =
+  "MCP servers connect your AI assistants to the apps you already use, like Notion, Supabase or Linear, so an assistant can read and act in them. Add a server once here, and every AI app on this computer can use it.";
+
+export const MCP_LEARN_MORE: ReadonlyArray<{ title: string; body: string }> = [
+  {
+    title: "What a server is",
+    body: "A small connector for one app. It tells your AI assistant what it can do there, like \"search pages\" or \"create an issue\", and does it when asked.",
+  },
+  {
+    title: "On the web, or on this computer",
+    body: "Some servers live on the web: you add them by their web address and nothing is installed. Others run on this computer: a small program starts whenever an assistant needs it.",
+  },
+  {
+    title: "Signing in",
+    body: "Many servers ask you to sign in once, in your browser, so the assistant can act as you. Each AI app and each account signs in on its own.",
+  },
+  {
+    title: "Why fewer is faster",
+    body: "At the start of every chat, each server tells the assistant about all of its tools. That takes time and room, so keeping only the servers you use keeps your assistants quick.",
+  },
+];

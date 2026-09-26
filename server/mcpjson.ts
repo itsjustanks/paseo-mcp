@@ -29,6 +29,7 @@ import {
   tomlReadForWrite,
   tomlString,
   writeTextAtomic,
+  writeTomlChecked,
   TOML_SAFE_NAME,
   type McpDef,
 } from "./handlers";
@@ -48,7 +49,9 @@ type Entry = Record<string, unknown>;
  * render as JSON (an inline table, say). They are invisible to the editor and
  * written back untouched, so an edit can never delete a setting it never showed.
  */
-type Stored = { entry: Entry; carry: string[] };
+// `tables` and `partial` come from a TOML block: subtables kept as written,
+// and why part of it can't be rewritten exactly (then nothing rewrites it).
+type Stored = { entry: Entry; carry: string[]; tables?: McpDef["tables"]; partial?: string };
 
 const COMMON_KEYS = new Set(["command", "args", "env", "url", "headers"]);
 
@@ -143,7 +146,7 @@ function tomlToCanonical(def: McpDef): Stored {
     if (pair && value !== undefined) entry[pair[1]] = value;
     else carry.push(line);
   }
-  return { entry, carry };
+  return { entry, carry, ...(def.tables ? { tables: def.tables } : {}), ...(def.partial ? { partial: def.partial } : {}) };
 }
 
 function readStored(dest: Destination, name: string): Stored | null {
@@ -545,6 +548,7 @@ function comparable(def: McpDef): string {
     env: def.env ?? {},
     headers: def.headers ?? {},
     extra: [...(def.extra ?? [])].map((line) => line.trim()).sort(),
+    tables: def.tables ?? [],
   });
 }
 
@@ -569,7 +573,13 @@ function planWrites(pairs: Pair[]): Plan {
     const key = `${path}::${pair.name}`;
 
     const stored = pair.stored;
+    if (stored?.partial) {
+      issues.push({ ...here(), code: "shape", message: `edit '${pair.name}' in ${pair.dest.label} by hand: ${stored.partial}` });
+      continue;
+    }
     const translated = toNative(pair.entry, stored?.carry ?? [], dialect, new Set(Object.keys(stored?.entry ?? {})));
+    // Subtables this model doesn't show (`env_http_headers`, `tools.<tool>`) stay in the file they came from.
+    if (stored?.tables && translated.native.format === "toml-mcp") translated.native.def.tables = stored.tables;
     for (const note of translated.dropped) dropped.push(`${pair.dest.label}: ${note}`);
     previews.set(key, renderNative(translated.native, pair.name, path, spec.headerKey));
 
@@ -659,8 +669,7 @@ function planWrites(pairs: Pair[]): Plan {
     }
     for (const [path, document] of documents) {
       try {
-        backupFile(path);
-        writeTextAtomic(path, document.text);
+        writeTomlChecked(path, tomlReadForWrite(path), document.text);
         written.push(document.dest.label);
       } catch (error) {
         failed.push(`${document.dest.label}: ${error instanceof Error ? error.message : String(error)}`);
@@ -729,7 +738,7 @@ export async function handleMcpRawPut(
   { paseo }: PluginHandlerContext,
 ) {
   const empty = { ok: false, preview: "", dropped: [] as string[] };
-  const destinations = await buildDestinations(paseo);
+  const destinations = await buildDestinations(paseo, { fresh: true });
   const dest = destinations.find((candidate) => candidate.id === destId);
   if (!dest) {
     return {
@@ -913,7 +922,7 @@ export async function handleMcpImportApply(
   }: { servers: Array<{ name: string; json: string }>; targets: string[]; overwrite: boolean; allowPlaceholders: boolean },
   { paseo }: PluginHandlerContext,
 ) {
-  const destinations = await buildDestinations(paseo);
+  const destinations = await buildDestinations(paseo, { fresh: true });
   const issues: JsonIssue[] = [];
   const skipped: string[] = [];
   const pairs: Pair[] = [];

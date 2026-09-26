@@ -1,4 +1,5 @@
 import type { PluginTheme } from "@getpaseo/plugin";
+import * as HostRN from "@getpaseo/plugin/client/react-native";
 import React, { createContext, useContext, useMemo, useState } from "react";
 import { ActivityIndicator, Clipboard, Image, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 
@@ -313,11 +314,14 @@ export function Card({
   level = 1,
   padded = true,
   tone,
+  grow,
 }: {
   children: React.ReactNode;
   level?: 1 | 2;
   padded?: boolean;
   tone?: Status;
+  /** Fill the height it is given: cards in one gallery row line up. */
+  grow?: boolean;
 }) {
   const t = useTokens();
   return (
@@ -331,6 +335,7 @@ export function Card({
         // An unpadded card holds a list of Rows, which bring their own padding and dividers.
         gap: padded ? t.space.md : 0,
         overflow: "hidden",
+        ...(grow ? { flexGrow: 1 } : {}),
       }}
     >
       {children}
@@ -518,6 +523,103 @@ export function Tag({ label, tone }: { label: string; tone?: Status }) {
       }}
     >
       <Text style={{ fontSize: 11, lineHeight: 15, fontWeight: "600", color }}>{label}</Text>
+    </View>
+  );
+}
+
+/** The app's icon component (Lucide names), when the host provides one; looked up at runtime so an app without it still renders. */
+export const HostIcon = (HostRN as unknown as { Icon?: React.ComponentType<{ name: string; size?: number; color?: string }> }).Icon;
+
+/**
+ * A quiet square button with an app icon, and its label for screen readers.
+ * Without app icons it falls back to a ghost text button with the label.
+ */
+export function IconButton({ icon, label, onPress }: { icon: string; label: string; onPress: () => void }) {
+  const t = useTokens();
+  if (!HostIcon) return <Button label={label} variant="ghost" onPress={onPress} />;
+  const size = t.compact ? 40 : 30;
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      onPress={onPress}
+      hitSlop={t.control.hit}
+      style={({ pressed }) => ({
+        width: size,
+        height: size,
+        borderRadius: t.radius.sm,
+        borderWidth: 1,
+        borderColor: t.color.border,
+        backgroundColor: pressed ? alpha(t.color.muted, 0.12) : "transparent",
+        alignItems: "center",
+        justifyContent: "center",
+      })}
+    >
+      <HostIcon name={icon} size={16} color={t.color.muted} />
+    </Pressable>
+  );
+}
+
+/** A tick box with its label beside it; the whole row presses. */
+export function Checkbox({ checked, onChange, label, children }: { checked: boolean; onChange: (next: boolean) => void; label: string; children?: React.ReactNode }) {
+  const t = useTokens();
+  return (
+    <Pressable
+      accessibilityRole="checkbox"
+      accessibilityLabel={label}
+      accessibilityState={{ checked }}
+      {...({ "aria-checked": checked } as object)}
+      onPress={() => onChange(!checked)}
+      hitSlop={t.control.hit}
+      style={{ flexDirection: "row", alignItems: "flex-start", gap: t.space.sm }}
+    >
+      <View
+        style={{
+          width: 18,
+          height: 18,
+          marginTop: 1,
+          borderRadius: 4,
+          borderWidth: 1.5,
+          borderColor: checked ? t.color.accent : t.color.borderStrong,
+          backgroundColor: checked ? t.color.accent : "transparent",
+          alignItems: "center",
+          justifyContent: "center",
+        }}
+      >
+        {checked ? <Text style={{ color: t.color.accentFg, fontSize: 12, lineHeight: 14, fontWeight: "700" }}>✓</Text> : null}
+      </View>
+      <View style={{ flex: 1, minWidth: 0 }}>{children ?? <Text style={t.text.body}>{label}</Text>}</View>
+    </Pressable>
+  );
+}
+
+/** A filter: one row of pressable pills, the first usually "All". */
+export function Pills<T extends string>({ options, value, onChange }: { options: ReadonlyArray<{ value: T; label: string }>; value: T; onChange: (value: T) => void }) {
+  const t = useTokens();
+  return (
+    <View style={{ flexDirection: "row", flexWrap: "wrap", gap: t.space.xs }}>
+      {options.map((option) => {
+        const active = option.value === value;
+        return (
+          <Pressable
+            key={option.value}
+            accessibilityRole="button"
+            accessibilityState={{ selected: active }}
+            onPress={() => onChange(option.value)}
+            hitSlop={t.control.hit}
+            style={{
+              paddingVertical: t.compact ? 7 : 4,
+              paddingHorizontal: 10,
+              borderRadius: t.radius.pill,
+              borderWidth: 1,
+              borderColor: active ? t.color.accentLine : t.color.border,
+              backgroundColor: active ? t.color.accentWash : "transparent",
+            }}
+          >
+            <Text style={{ fontSize: 12, fontWeight: "600", color: active ? t.color.accent : t.color.muted }}>{option.label}</Text>
+          </Pressable>
+        );
+      })}
     </View>
   );
 }
