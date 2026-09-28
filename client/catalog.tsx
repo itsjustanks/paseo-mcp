@@ -10,6 +10,8 @@ import {
   cardMatches,
   alreadyHave,
   alreadyHaveLine,
+  similarName,
+  similarNameLine,
   hiddenLine,
   hideAdded,
   mcpCatalog,
@@ -100,7 +102,7 @@ function CardIcon({ url }: { url?: string }) {
   return <Image source={{ uri: url }} accessibilityIgnoresInvertColors style={{ width: 20, height: 20, borderRadius: 4 }} onError={() => setFailed(true)} />;
 }
 
-function ServerCard({ card, have, onAdd, onAddByHand }: { card: CatalogCard; have: { name: string } | null; onAdd: () => void; onAddByHand: (name: string) => void }) {
+function ServerCard({ card, have, similar, onAdd, onAddByHand }: { card: CatalogCard; have: { name: string } | null; similar: string | null; onAdd: () => void; onAddByHand: (name: string) => void }) {
   const t = useTokens();
   const trust = TRUST[card.trust];
   const byHand = byHandOnly(card);
@@ -125,6 +127,7 @@ function ServerCard({ card, have, onAdd, onAddByHand }: { card: CatalogCard; hav
         {card.shelf !== "recommended" && sourceLabel(card) !== trust.label ? <Tag label={sourceLabel(card)} /> : null}
       </View>
       {have ? <Text numberOfLines={2} style={t.text.caption}>{alreadyHaveLine(card, have)}</Text> : null}
+      {!have && similar ? <Text numberOfLines={2} style={t.text.caption}>{similarNameLine(card, similar)}</Text> : null}
       {card.warning ? <Text style={[t.text.caption, { color: t.color.warning }]}>{card.warning}</Text> : null}
       {!card.installable ? <Text style={t.text.caption}>{card.blockedReason}</Text> : null}
       <View style={{ flexDirection: "row", flexWrap: "wrap", gap: t.space.sm, alignItems: "center" }}>
@@ -183,6 +186,7 @@ export function CatalogGallery({
   const cards = data?.cards ?? [];
   const matching = cards.filter((card) => (card.shelf === "registry" ? category === "all" || card.entry.category === category : cardMatches(card, query, category)));
   const haves = useMemo(() => new Map(cards.map((card) => [card.key, alreadyHave(card, owned)] as const)), [cards, owned]);
+  const similars = useMemo(() => new Map(cards.map((card) => [card.key, similarName(card, owned)] as const)), [cards, owned]);
   const { shown, hidden } = hideAdded(matching, showAdded, (card) => Boolean(haves.get(card.key)));
   const fromLibrary = (id: string) => shown.filter((card) => card.shelf !== "registry" && card.shelf !== "recommended" && card.library?.id === id);
   const fromRegistry = (id: string) => shown.filter((card) => card.shelf === "registry" && card.library?.id === id);
@@ -230,7 +234,7 @@ export function CatalogGallery({
   const grid = (list: CatalogCard[]) => (
     <Grid min={230}>
       {list.map((card) => (
-        <ServerCard key={card.key} card={card} have={haves.get(card.key) ?? null} onAdd={() => setPicked(card)} onAddByHand={onAddByHand} />
+        <ServerCard key={card.key} card={card} have={haves.get(card.key) ?? null} similar={similars.get(card.key) ?? null} onAdd={() => setPicked(card)} onAddByHand={onAddByHand} />
       ))}
       {t.compact ? null : [0, 1, 2].map((index) => <View key={`filler-${index}`} />)}
     </Grid>

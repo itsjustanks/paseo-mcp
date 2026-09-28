@@ -5,7 +5,7 @@
  */
 import assert from "node:assert/strict";
 import test from "node:test";
-import { alreadyHave, alreadyHaveLine, curatedCard, hiddenLine, hideAdded, ownedFromRow, type CatalogCard, type OwnedServer } from "../shared/catalog";
+import { alreadyHave, alreadyHaveLine, curatedCard, hiddenLine, hideAdded, ownedFromRow, similarName, similarNameLine, type CatalogCard, type OwnedServer } from "../shared/catalog";
 import { CURATED_CATALOG } from "../shared/catalog-curated";
 import type { Destination, McpAuthAccount, McpHealth, McpServerRow } from "../shared/contracts";
 import { COPY_ALL_EXPLAINER, COPY_ALL_LABEL } from "../shared/copy-all";
@@ -172,6 +172,7 @@ test("words: the explainer and Copy say it plainly", () => {
 
 const card = (id: string) => curatedCard(CURATED_CATALOG.find((entry) => entry.id === id)!);
 const have = (id: string, owned: OwnedServer[]) => alreadyHave(card(id), owned);
+const similar = (id: string, owned: OwnedServer[]) => similarName(card(id), owned);
 
 test("already have: the same endpoint, including the other transport and a query", () => {
   assert.deepEqual(have("linear", [{ name: "work-tracker", url: "https://mcp.linear.app/sse?token=abc" }]), { name: "work-tracker", how: "endpoint" });
@@ -195,18 +196,27 @@ test("already have: the same package, any version", () => {
   assert.equal(have("playwright", [{ name: "other", command: "npx", args: ["@acme/mcp"] }]), null);
 });
 
-test("already have: a server named exactly after the card, any case, ignoring an -mcp ending and a prefix two of yours share (ikit-)", () => {
+test("a server named after the card is NOT hidden (0.15.1): it gets a note instead; exact names only", () => {
   const ikitOther = { name: "ikit-docs", command: "node" };
-  assert.deepEqual(have("notion", [{ name: "ikit-notion", url: "https://notion-proxy.internal.example/mcp" }, ikitOther]), { name: "ikit-notion", how: "name" });
-  assert.equal(have("notion", [{ name: "ikit-notion", url: "https://notion-proxy.internal.example/mcp" }]), null, "a prefix only one server has isn't one you use");
-  assert.deepEqual(have("notion", [{ name: "Notion", command: "node", args: ["notion.js"] }]), { name: "Notion", how: "name" });
-  assert.deepEqual(have("notion", [{ name: "notion_mcp", command: "node" }]), { name: "notion_mcp", how: "name" });
-  assert.deepEqual(have("heroui-pro", [{ name: "team-heroui-pro", command: "node" }, { name: "team-wiki", command: "node" }]), { name: "team-heroui-pro", how: "name" }, "by the card's id");
-  assert.deepEqual(have("cloudflare-docs", [{ name: "my-cloudflare-docs", command: "node" }, { name: "my-db", command: "node" }]), { name: "my-cloudflare-docs", how: "name" }, "by the card's name");
+  // The user's report: their own ikit-attio (self-hosted) hid Attio's official card.
+  const attio = [{ name: "ikit-attio", url: "https://attio-mcp-server.selfhosted.example/mcp" }, { name: "ikit-n8n", url: "https://n8n.selfhosted.example/mcp" }];
+  assert.equal(have("attio", attio), null, "a name alone doesn't make it the same service");
+  assert.equal(similar("attio", attio), "ikit-attio");
+  assert.equal(similarNameLine(card("attio"), "ikit-attio"), "You have your own server called ikit-attio; this is Attio's official one.");
+  assert.equal(similar("notion", [{ name: "ikit-notion", url: "https://notion-proxy.internal.example/mcp" }, ikitOther]), "ikit-notion");
+  assert.equal(similar("notion", [{ name: "ikit-notion", url: "https://notion-proxy.internal.example/mcp" }]), null, "a prefix only one server has isn't one you use");
+  assert.equal(similar("notion", [{ name: "Notion", command: "node", args: ["notion.js"] }]), "Notion");
+  assert.equal(similar("notion", [{ name: "notion_mcp", command: "node" }]), "notion_mcp");
+  assert.equal(similar("heroui-pro", [{ name: "team-heroui-pro", command: "node" }, { name: "team-wiki", command: "node" }]), "team-heroui-pro", "by the card's id");
+  assert.equal(similar("cloudflare-docs", [{ name: "my-cloudflare-docs", command: "node" }, { name: "my-db", command: "node" }]), "my-cloudflare-docs", "by the card's name");
   // A name that only contains the card's name, or a prefix of it, is not the same.
-  assert.equal(have("notion", [{ name: "notional", command: "node" }]), null);
-  assert.equal(have("notion", [{ name: "notion-calendar-sync", command: "node" }]), null);
-  assert.equal(have("jam", [{ name: "jamf", command: "node" }]), null);
+  assert.equal(similar("notion", [{ name: "notional", command: "node" }]), null);
+  assert.equal(similar("notion", [{ name: "notion-calendar-sync", command: "node" }]), null);
+  assert.equal(similar("jam", [{ name: "jamf", command: "node" }]), null);
+  // The same service by host still hides it, and then there is no note.
+  const onHost = [{ name: "ikit-notion", url: "https://mcp.notion.com/v2/workspace-mcp" }, ikitOther];
+  assert.equal(have("notion", onHost)?.how, "host");
+  assert.equal(similar("notion", onHost), null);
 });
 
 test("already have: hidden by default, counted, and the toggle shows each with a line naming yours", () => {
@@ -219,9 +229,10 @@ test("already have: hidden by default, counted, and the toggle shows each with a
   ];
   const owns = (entry: CatalogCard) => Boolean(alreadyHave(entry, owned));
   const hiddenView = hideAdded(cards, false, owns);
-  assert.deepEqual(hiddenView.shown.map((entry) => entry.entry.id), ["playwright", "stripe"]);
-  assert.equal(hiddenView.hidden, 3);
-  assert.equal(hiddenLine(hiddenView.hidden), "3 you already have are hidden.");
+  // ikit-notion runs on the user's own proxy host: a similar name, not the same service, so Notion stays.
+  assert.deepEqual(hiddenView.shown.map((entry) => entry.entry.id), ["notion", "playwright", "stripe"]);
+  assert.equal(hiddenView.hidden, 2);
+  assert.equal(hiddenLine(hiddenView.hidden), "2 you already have are hidden.");
   assert.equal(hideAdded(cards, true, owns).shown.length, 5);
   assert.equal(alreadyHaveLine(card("zapier"), { name: "automations" }), "You have a Zapier server already, called automations.");
   assert.equal(alreadyHaveLine(card("linear"), { name: "linear" }), "You have a Linear server already.");

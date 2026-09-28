@@ -64,7 +64,7 @@ const context = { paseo: { config: { get: async () => ({ config: { providers } }
 const { handleMcpCopyPlan, handleMcpCopyAll } = await import("../server/copy-all");
 const { handleMcpAdd, handleMcpApply, handleMcpSync, hasInlineCredentials } = await import("../server/handlers");
 const { daemonRead, resetDaemonReads } = await import("../server/daemon-cache");
-const { alreadyHave, endpointKey } = await import("../shared/catalog");
+const { alreadyHave, endpointKey, similarName } = await import("../shared/catalog");
 const { CURATED_CATALOG } = await import("../shared/catalog-curated");
 const { curatedCard } = await import("../shared/catalog");
 
@@ -411,8 +411,11 @@ test("fix 9: names match exactly (after a prefix you use and -mcp), runners and 
   assert.equal(have("linear", [{ name: "sentry-to-linear", command: "node" }]), null);
   assert.equal(have("notion", [{ name: "notion-archive", command: "node" }]), null);
   assert.equal(have("linear", [{ name: "my-linear-notes", command: "node" }]), null);
-  assert.deepEqual(have("notion", [{ name: "ikit-notion", command: "node" }, { name: "ikit-wiki", command: "node" }]), { name: "ikit-notion", how: "name" });
-  assert.deepEqual(have("notion", [{ name: "notion-mcp", command: "node" }]), { name: "notion-mcp", how: "name" });
+  // 0.15.1: an exact name is a note (similarName), not a hide.
+  assert.equal(have("notion", [{ name: "ikit-notion", command: "node" }, { name: "ikit-wiki", command: "node" }]), null);
+  assert.equal(similarName(card("notion"), [{ name: "ikit-notion", command: "node" }, { name: "ikit-wiki", command: "node" }]), "ikit-notion");
+  assert.equal(similarName(card("notion"), [{ name: "notion-mcp", command: "node" }]), "notion-mcp");
+  assert.equal(similarName(card("github"), [{ name: "old-github", command: "node" }]), null);
   // Generic runners: two different servers behind mcp-remote are not one package.
   assert.equal(endpointKey({ command: "npx", args: ["-y", "mcp-remote", "https://mcp.linear.app/sse"] }), "");
   assert.equal(endpointKey({ command: "npx", args: ["-y", "supergateway", "--sse", "https://x.example/sse"] }), "");

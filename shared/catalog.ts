@@ -992,13 +992,13 @@ function nameMatches(owned: string, card: CatalogEntry, prefixes: ReadonlySet<st
  *   `mcp.zapier.com`: paths often carry a personal token, so the address
  *   alone rarely matches; not `vercel.app` or `localhost`), or
  * - runs the same package (npm, PyPI, OCI; any version), not a generic
- *   runner like `mcp-remote`, or
- * - is named exactly after the card's id or name, ignoring case, an `-mcp`
- *   ending, and a prefix two or more of your servers share (`ikit-notion` is
- *   Notion when you also have `ikit-linear`).
+ *   runner like `mcp-remote`.
+ * A matching NAME alone is not enough (0.15.1): `ikit-attio` on the user's own
+ * host is their own Attio server, not Attio's, and hiding the official card
+ * for it hid the one they were looking for. See `similarName` for the note.
  * Returns the first of your servers that matches, or null.
  */
-export function alreadyHave(card: Pick<CatalogCard, "added" | "entry">, owned: readonly OwnedServer[]): { name: string; how: "added" | "endpoint" | "host" | "package" | "name" } | null {
+export function alreadyHave(card: Pick<CatalogCard, "added" | "entry">, owned: readonly OwnedServer[]): { name: string; how: "added" | "endpoint" | "host" | "package" } | null {
   if (card.added) return { name: card.added.name, how: "added" };
   const key = endpointKey(card.entry);
   const host = hostOf(card.entry.url);
@@ -1008,11 +1008,28 @@ export function alreadyHave(card: Pick<CatalogCard, "added" | "entry">, owned: r
     if (key && theirs === key) return { name: server.name, how: key.startsWith("pkg:") ? "package" : "endpoint" };
     if (hostRule && hostOf(server.url) === host) return { name: server.name, how: "host" };
   }
-  const prefixes = ownPrefixes(owned);
-  for (const server of owned) {
-    if (nameMatches(server.name, card.entry, prefixes)) return { name: server.name, how: "name" };
-  }
   return null;
+}
+
+/**
+ * A server of yours NAMED after this card (`ikit-attio` for Attio) that is not
+ * the same service by address, host or package: the card stays in the
+ * gallery with a note, since it is most likely your own or a third party's
+ * server for that app. Exact name after a prefix two or more of your servers
+ * share and an `-mcp` ending; `old-github` is not GitHub.
+ */
+export function similarName(card: Pick<CatalogCard, "added" | "entry">, owned: readonly OwnedServer[]): string | null {
+  if (alreadyHave(card, owned)) return null;
+  const prefixes = ownPrefixes(owned);
+  return owned.find((server) => nameMatches(server.name, card.entry, prefixes))?.name ?? null;
+}
+
+/** "You have your own server called ikit-attio; this is Attio's official one." */
+export function similarNameLine(card: Pick<CatalogCard, "entry" | "trust">, name: string): string {
+  const vendor = card.entry.name || card.entry.id;
+  return card.trust === "official"
+    ? `You have your own server called ${name}; this is ${vendor}'s official one.`
+    : `You have a server called ${name}; this one is from another source.`;
 }
 
 /** On a card shown through "Show ones I already have": "You have a Zapier server already, called ikit-zapier." */

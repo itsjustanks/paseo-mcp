@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.15.1 — 2026-09-28
+
+### Fixed
+- The Add gallery hid Attio's official server from a user whose own self-hosted server was called `ikit-attio`. A matching name no longer counts as "already have": only the same address, host or package does. A card named after one of your servers now stays in the gallery with a note, e.g. "You have your own server called ikit-attio; this is Attio's official one."
+- A timing test for the daemon-call cache (from 0.15.0) could fail under a loaded test run. Its 50 ms limit was tighter than what it proves, which is that a cached read doesn't wait on the 8 s daemon; the limit is now 1 s.
+
+### Gallery
+The public MCP Gallery list (itsjustanks/mcp-gallery, read by 0.13.0 and later) gained Calendly, Amie (amy.so), Slashy, Todoist, Miro, Granola and Fireflies. Each endpoint comes from the vendor's docs and was checked live. Gmail, Google Calendar and the other Google Workspace servers are official but in preview, and each user must register their own Google Cloud app, so they are not one-click yet.
+
 ## 0.15.0 — 2026-09-26
 
 The surface explains itself to someone who has never heard of MCP. **Copy to all my AI apps** copies every server to every AI app and account that lacks it, after a preview. The Servers tab is a gallery of the servers you have, and the Add gallery shows only what you don't have yet. The Add gallery and the sign-in read no longer wait on a busy daemon (`paseo-mcp.auth took 10.0 s`, `paseo-mcp.catalog took 5.7 s` on paseo-ankit).
