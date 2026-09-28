@@ -1140,7 +1140,7 @@ function extractLoginUrl(text: string): string {
   return rejoined.find((candidate) => callbackTarget(candidate) !== null) ?? printed[0] ?? "";
 }
 
-function cliPath(provider: "claude" | "codex"): string {
+export function cliPath(provider: "claude" | "codex"): string {
   for (const directory of searchPath()) {
     const candidate = join(directory, provider);
     if (existsSync(candidate)) return candidate;
@@ -1148,7 +1148,7 @@ function cliPath(provider: "claude" | "codex"): string {
   return "";
 }
 
-function accountEnvironment(provider: "claude" | "codex", accountDir: string) {
+export function accountEnvironment(provider: "claude" | "codex", accountDir: string) {
   const variable = envVarFor(provider);
   const defaultDir = join(HOME, provider === "claude" ? ".claude" : ".codex");
   const primary = !accountDir || resolve(accountDir) === resolve(defaultDir);

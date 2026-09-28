@@ -24,6 +24,7 @@ import {
   type OwnedServer,
 } from "../shared/catalog";
 import type { Destination, McpHealthStatus } from "../shared/contracts";
+import { SETUP_CLIENT_LABELS, byoVendor, claudeRedirectUri, oauthClientProblems, setupTargetSupport, stepLinks, type CatalogSetup } from "../shared/setup";
 import { healthPlainWord } from "../shared/servers";
 import { plainError } from "../shared/errors";
 import {
@@ -85,6 +86,21 @@ function publisherLine(card: CatalogCard): string {
   return card.shelf === "registry" ? `published as ${card.entry.publisher}` : card.entry.publisher;
 }
 
+/** The badge a "Needs setup" card wears, by kind (0.16.0). */
+const SETUP_BADGE: Record<CatalogSetup["kind"], string> = {
+  "byo-oauth": "Needs setup",
+  "per-org": "Needs your address",
+  "approved-clients": "Approved apps only",
+  admin: "Admin setup",
+};
+
+/** What the card's add button says: a setup that the sheet can finish is "Set up". */
+function addLabel(card: CatalogCard): string {
+  if (card.added) return "Add to more";
+  const kind = card.entry.setup?.kind;
+  return kind === "byo-oauth" || kind === "per-org" ? "Set up" : "Add";
+}
+
 /** A server that only ships a package the plugin won't start in one click: shown with its docs, added by hand. */
 function byHandOnly(card: CatalogCard): boolean {
   return card.shelf !== "recommended" && card.entry.transport === "stdio" && !card.installable;
@@ -124,19 +140,21 @@ function ServerCard({ card, have, similar, onAdd, onAddByHand }: { card: Catalog
         <Tag label={trust.label} tone={trust.tone} />
         <Tag label={card.entry.transport === "http" ? "Web" : "On this computer"} />
         <Tag label={authWord(card)} />
+        {card.entry.setup ? <Tag label={SETUP_BADGE[card.entry.setup.kind]} tone="attention" /> : null}
         {card.shelf !== "recommended" && sourceLabel(card) !== trust.label ? <Tag label={sourceLabel(card)} /> : null}
       </View>
       {have ? <Text numberOfLines={2} style={t.text.caption}>{alreadyHaveLine(card, have)}</Text> : null}
       {!have && similar ? <Text numberOfLines={2} style={t.text.caption}>{similarNameLine(card, similar)}</Text> : null}
       {card.warning ? <Text style={[t.text.caption, { color: t.color.warning }]}>{card.warning}</Text> : null}
-      {!card.installable ? <Text style={t.text.caption}>{card.blockedReason}</Text> : null}
+      {card.entry.setup ? <Text style={t.text.caption}>{card.entry.setup.reason}</Text> : !card.installable ? <Text style={t.text.caption}>{card.blockedReason}</Text> : null}
       <View style={{ flexDirection: "row", flexWrap: "wrap", gap: t.space.sm, alignItems: "center" }}>
         {byHand ? (
           <Button label="Add by hand" variant="secondary" onPress={() => onAddByHand(card.entry.id)} />
-        ) : (
-          <Button label={card.added ? "Add to more" : "Add"} variant="secondary" disabled={!card.installable} onPress={onAdd} />
+        ) : card.entry.setup && !card.installable ? null : (
+          <Button label={addLabel(card)} variant="secondary" disabled={!card.installable} onPress={onAdd} />
         )}
-        {card.entry.docs ? <Button label={byHand && card.shelf === "registry" ? "Repository" : "Docs"} variant="ghost" onPress={() => void Linking.openURL(card.entry.docs)} /> : null}
+        {card.entry.setup ? <Button label="How to set it up" variant={card.installable ? "ghost" : "secondary"} onPress={() => void Linking.openURL(card.entry.setup?.guideUrl ?? "")} /> : null}
+        {card.entry.docs && card.entry.docs !== card.entry.setup?.guideUrl ? <Button label={byHand && card.shelf === "registry" ? "Repository" : "Docs"} variant="ghost" onPress={() => void Linking.openURL(card.entry.docs)} /> : null}
       </View>
     </Card>
   );
@@ -348,10 +366,15 @@ function InstallSheet({
   const callInstall = useRpc(mcpCatalogInstall);
   const entry = card.entry;
   const added = card.added;
+  const setup = entry.setup;
+  const byo = setup?.kind === "byo-oauth";
+  // Needs setup (0.16.0): an app that can't take this server is shown, not picked.
+  const support = (dest: Destination) => setupTargetSupport(setup, dest);
+  const projectAllowed = !byo && !(setup?.kind === "approved-clients" && !setup.clients?.includes("claude"));
   // "Add to more": only the places that lack it are picked to start with.
-  const missingEditors = destinations.filter((dest) => !added?.editors.includes(dest.id));
+  const missingEditors = destinations.filter((dest) => !added?.editors.includes(dest.id) && support(dest).ok);
   const missingProjects = projects.filter((project) => !added?.projects.includes(project.path));
-  const [scope, setScope] = useState<"user" | "project">(() => (added && missingEditors.length === 0 && missingProjects.length > 0 ? "project" : "user"));
+  const [scope, setScope] = useState<"user" | "project">(() => (projectAllowed && added && missingEditors.length === 0 && missingProjects.length > 0 ? "project" : "user"));
   // Editors an agent can run by default; slots no provider is wired to start unticked.
   const [targets, setTargets] = useState<string[]>(() => {
     const wired = missingEditors.filter((dest) => dest.providerId);
@@ -360,7 +383,11 @@ function InstallSheet({
   const [projectPath, setProjectPath] = useState((missingProjects[0] ?? projects[0])?.path ?? "");
   const [name, setName] = useState(added?.name ?? entry.id);
   const [values, setValues] = useState<Record<string, string>>({});
-  const request = { key: card.key, scope, targets, projectPath, name: name.trim(), values };
+  const [clientId, setClientId] = useState("");
+  const [clientSecret, setClientSecret] = useState("");
+  // The preview only learns whether a secret was typed; the secret itself crosses once, on install.
+  const request = { key: card.key, scope, targets, projectPath, name: name.trim(), values, ...(byo ? { oauthClient: { clientId: clientId.trim(), hasSecret: Boolean(clientSecret.trim()) } } : {}) };
+  const secretIssues = byo && clientSecret.trim() ? oauthClientProblems({ clientId: "-", clientSecret }).filter((issue) => /secret/i.test(issue)) : [];
   const debounced = useDebounced(request, 350);
 
   const planQuery = useQuery({
@@ -371,7 +398,12 @@ function InstallSheet({
   });
   const install = useMutation({
     // Bound to the preview on screen: the host refuses if the entry or the change moved since.
-    mutationFn: () => callInstall({ ...request, planHash: planQuery.data?.planHash ?? "" }),
+    mutationFn: () =>
+      callInstall({
+        ...request,
+        oauthClient: byo ? { clientId: clientId.trim(), clientSecret: clientSecret.trim() } : undefined,
+        planHash: planQuery.data?.planHash ?? "",
+      }),
     onSuccess: (result) => {
       if (result.ok) {
         toast.show(result.message, { variant: "success" });
@@ -439,30 +471,46 @@ function InstallSheet({
     <View style={{ gap: t.space.lg }}>
       <Toolbar title={`Add ${entry.name}`} subtitle={`${publisherLine(card)} · ${card.trustNote}`} actions={<Button label="Back to catalogue" variant="ghost" onPress={onBack} />} />
       {card.warning ? <Notice tone="attention">{card.warning}</Notice> : null}
+      {byo && setup ? (
+        <ByoSetupSteps
+          setup={setup}
+          serverUrl={entry.url ?? ""}
+          redirectUri={plan?.redirectUri || claudeRedirectUri()}
+          clientId={clientId}
+          clientSecret={clientSecret}
+          secretIssues={secretIssues}
+          onClientId={setClientId}
+          onClientSecret={setClientSecret}
+        />
+      ) : null}
+      {setup && !byo ? <Notice tone="attention">{setup.reason}</Notice> : null}
 
       <Section title="Where">
-        <Segmented
-          value={scope}
-          onChange={setScope}
-          options={[
-            { value: "user", label: "My AI apps" },
-            { value: "project", label: "One project" },
-          ]}
-        />
+        {projectAllowed ? (
+          <Segmented
+            value={scope}
+            onChange={setScope}
+            options={[
+              { value: "user", label: "My AI apps" },
+              { value: "project", label: "One project" },
+            ]}
+          />
+        ) : null}
         {scope === "user" ? (
           <Card padded={false}>
             {destinations.length === 0 ? <EmptyState title="No AI app found" body="None of Claude, Codex, Kimi or Grok is set up on this computer yet." /> : null}
             {destinations.map((dest, index) => {
               const on = targets.includes(dest.id);
+              const can = support(dest);
               return (
                 <Row
                   key={dest.id}
                   first={index === 0}
-                  selected={on}
-                  onPress={() => setTargets((list) => (on ? list.filter((id) => id !== dest.id) : [...list, dest.id]))}
+                  selected={on && can.ok}
+                  onPress={can.ok ? () => setTargets((list) => (on ? list.filter((id) => id !== dest.id) : [...list, dest.id])) : undefined}
                   title={dest.label}
-                  subtitle={dest.configPath}
-                  trailing={added?.editors.includes(dest.id) ? <Tag label="has it" /> : on ? <Tag label="included" tone="ok" /> : <Tag label="skipped" />}
+                  subtitle={can.ok ? dest.configPath : can.reason}
+                  trailing={!can.ok ? <Tag label="can't take it" tone="attention" /> : added?.editors.includes(dest.id) ? <Tag label="has it" /> : on ? <Tag label="included" tone="ok" /> : <Tag label="skipped" />}
                 />
               );
             })}
@@ -510,7 +558,8 @@ function InstallSheet({
           {scope === "project" && (entry.inputs ?? []).some((input) => input.secret) ? (
             <Text style={t.text.caption}>Keys aren't asked for here: a project's file is often shared, so it gets a placeholder instead, shown below.</Text>
           ) : null}
-          {entry.auth === "oauth" && inputs.length === 0 ? <Text style={t.text.caption}>No key needed: you sign in with your account after it's added.</Text> : null}
+          {setup?.kind === "per-org" ? <Text style={t.text.caption}>{`Only lowercase letters, numbers and -. The rest of the address stays as ${setup.urlTemplate ?? ""}.`}</Text> : null}
+          {entry.auth === "oauth" && inputs.length === 0 && !byo ? <Text style={t.text.caption}>No key needed: you sign in with your account after it's added.</Text> : null}
           {entry.auth === "unknown" && inputs.length === 0 ? <Text style={t.text.caption}>No key is listed for this server. If it asks you to sign in once added, open it and choose Connect.</Text> : null}
         </Card>
       </Section>
@@ -558,13 +607,95 @@ function InstallSheet({
           label={scope === "user" ? `Add to ${targets.length} app${targets.length === 1 ? "" : "s"}` : "Add to the project"}
           variant="primary"
           loading={install.isPending}
-          disabled={!current || !plan?.ok}
+          disabled={!current || !plan?.ok || secretIssues.length > 0}
           onPress={() => install.mutate()}
         />
         <Button label="Cancel" variant="ghost" onPress={onBack} />
       </View>
       {install.data && !install.data.ok ? <ErrorText>{install.data.message}</ErrorText> : null}
     </View>
+  );
+}
+
+// ---------------------------------------------------- bring your own app
+
+/**
+ * The guided part of a bring-your-own-app sheet (0.16.0): the vendor's steps
+ * with their links, the exact redirect address to register, the scopes to
+ * add, then the client ID and the secret (masked; it goes to Claude Code's
+ * secure store and is never shown again).
+ */
+function ByoSetupSteps({
+  setup,
+  serverUrl,
+  redirectUri,
+  clientId,
+  clientSecret,
+  secretIssues,
+  onClientId,
+  onClientSecret,
+}: {
+  setup: CatalogSetup;
+  serverUrl: string;
+  redirectUri: string;
+  clientId: string;
+  clientSecret: string;
+  secretIssues: string[];
+  onClientId: (value: string) => void;
+  onClientSecret: (value: string) => void;
+}) {
+  const t = useTokens();
+  const apps = (setup.clients ?? []).map((id) => SETUP_CLIENT_LABELS[id]).join(" and ");
+  const vendor = byoVendor(serverUrl)?.vendor ?? "";
+  const host = (() => {
+    try {
+      return new URL(serverUrl).hostname;
+    } catch {
+      return serverUrl;
+    }
+  })();
+  return (
+    <Section title="Set it up" trailing={<Button label="Vendor's guide" variant="ghost" onPress={() => void Linking.openURL(setup.guideUrl)} />}>
+      <Text style={t.text.caption}>{`${setup.reason} Works with ${apps || "no app here yet"}.`}</Text>
+      <Card>
+        {(setup.steps ?? []).map((step, index) => {
+          const links = stepLinks(step);
+          const words = links.reduce((text, link) => text.replace(link, "").trim(), step).replace(/:\s*$/, ".");
+          return (
+            <View key={step} style={{ flexDirection: "row", gap: t.space.sm, alignItems: "flex-start" }}>
+              <Text style={[t.text.label, { minWidth: 18 }]}>{`${index + 1}.`}</Text>
+              <View style={{ flex: 1, gap: 2 }}>
+                <Text style={t.text.body}>{words}</Text>
+                {links.map((link) => (
+                  <Text key={link} accessibilityRole="link" numberOfLines={1} onPress={() => void Linking.openURL(link)} style={[t.text.caption, { color: t.color.accent }]}>
+                    {link.replace(/^https:\/\//, "").replace(/\?.*$/, "")}
+                  </Text>
+                ))}
+              </View>
+            </View>
+          );
+        })}
+      </Card>
+      <View style={{ gap: t.space.xs }}>
+        <Text style={t.text.label}>{`Redirect address · paste it into ${setup.redirectHint || "the redirect address field"}`}</Text>
+        <CodeBlock>{redirectUri}</CodeBlock>
+        <Text style={t.text.caption}>Exactly as shown. Claude Code listens there when you sign in.</Text>
+      </View>
+      {setup.scopes ? (
+        <View style={{ gap: t.space.xs }}>
+          <Text style={t.text.label}>Scopes to add</Text>
+          <CodeBlock>{setup.scopes.split(" ").join("\n")}</CodeBlock>
+        </View>
+      ) : null}
+      <Card>
+        <Field label="Client ID" value={clientId} onChangeText={onClientId} placeholder="Paste the client ID" />
+        <SecretField label="Client secret" value={clientSecret} onChangeText={onClientSecret} hint="Kept by Claude Code in its secure store, never in a config file, and never shown again." />
+        {secretIssues.map((issue) => (
+          <ErrorText key={issue}>{issue}</ErrorText>
+        ))}
+        <Text style={t.text.caption}>{`Used only to sign in to ${host}${vendor ? `, ${vendor}'s own server` : ""}. Paste it nowhere else.`}</Text>
+      </Card>
+    </Section>
   );
 }
 

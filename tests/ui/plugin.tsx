@@ -9,6 +9,7 @@ import { CURATED_CATALOG } from "../../shared/catalog-curated";
 import { GALLERY_META, libraryCard, mergeGallery, parseLibrary } from "../../shared/library";
 import { placeLabel } from "../../shared/copy-all";
 import { DEFAULT_LIBRARIES } from "../../shared/library-source";
+import { byoOauthPreview, planByoOauth } from "../../shared/setup";
 export function defineRpc<T>(contract: T) { return contract; }
 export function defineSettings<T>(definition: T) { return definition; }
 const params = new URLSearchParams(location.search);
@@ -171,11 +172,20 @@ const teamEntries = [
 // recommended card, a token server, a pinned npm package); without it the
 // library answers 404, as it does until itsjustanks/mcp-gallery is published.
 // ?registry turns the MCP Registry library on.
+const GW = "https://developers.google.com/workspace/guides/configure-mcp-servers";
+const setupFixtures = [
+  { server: { name: "com.google/gmail", title: "Gmail", description: "Search, read, draft, and label your Gmail messages.", version: "1.0.0", remotes: [{ type: "streamable-http", url: "https://gmailmcp.googleapis.com/mcp/v1" }] }, _meta: { [GALLERY_META]: { displayName: "Gmail", category: "productivity", auth: "oauth", publisher: "Google", docsUrl: GW, verifiedAt: "2026-09-28", setup: { kind: "byo-oauth", reason: "Google only lets in a sign-in app you create in your own Google Cloud project, and these servers are in preview.", guideUrl: GW, steps: ["Join the Google Workspace Developer Preview Program, which these servers need: https://developers.google.com/workspace/preview", "Create or pick a Google Cloud project: https://console.cloud.google.com/projectcreate", "Turn on the Gmail APIs for that project: https://console.cloud.google.com/flows/enableapi?apiid=gmail.googleapis.com,gmailmcp.googleapis.com", "Set up the consent screen. Under Audience pick Internal if you can, or External and add yourself as a test user: https://console.cloud.google.com/auth/branding", "Under Data Access, add the scopes listed below: https://console.cloud.google.com/auth/scopes", "Create a client of type Web application, and add the redirect address below under Authorized redirect URIs: https://console.cloud.google.com/auth/clients/create", "Copy the Client ID and Client secret into the boxes below. One client works for all your Google apps."], redirectHint: "Authorized redirect URIs", clients: ["claude"], scopes: "https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.compose" } } } },
+  { server: { name: "com.zendesk/mcp", title: "Zendesk", description: "Search and update tickets, users, and help center articles in your Zendesk.", version: "1.0.0", remotes: [{ type: "streamable-http", url: "https://{subdomain}.zendesk.com/api/mcp", variables: { subdomain: { description: "Your Zendesk subdomain", isRequired: true, isSecret: false } } }] }, _meta: { [GALLERY_META]: { displayName: "Zendesk", category: "support", auth: "oauth", publisher: "Zendesk", docsUrl: "https://www.zendesk.com/marketplace/apps/support/1191848/mcp-server/", verifiedAt: "2026-09-28", setup: { kind: "per-org", reason: "Zendesk runs this server on your own Zendesk address, so it needs your subdomain.", guideUrl: "https://www.zendesk.com/marketplace/apps/support/1191848/mcp-server/", urlTemplate: "https://{subdomain}.zendesk.com/api/mcp", label: "Your Zendesk subdomain" } } } },
+  { server: { name: "com.slack/mcp", title: "Slack", description: "Search and send Slack messages, and read channels and canvases.", version: "1.0.0", remotes: [{ type: "streamable-http", url: "https://mcp.slack.com/mcp" }] }, _meta: { [GALLERY_META]: { displayName: "Slack", category: "productivity", auth: "oauth", publisher: "Slack", docsUrl: "https://docs.slack.dev/ai/slack-mcp-server/", verifiedAt: "2026-09-28", setup: { kind: "approved-clients", reason: "Slack only lets its approved AI apps (and apps your workspace builds) connect. Add it from Claude's or ChatGPT's own app list.", guideUrl: "https://slack.com/help/articles/48855576908307-Guide-to-Model-Context-Protocol-in-Slack" } } } },
+  { server: { name: "com.box/mcp", title: "Box", description: "Search, read, and ask questions about your Box files.", version: "1.0.0", remotes: [{ type: "streamable-http", url: "https://mcp.box.com" }] }, _meta: { [GALLERY_META]: { displayName: "Box", category: "productivity", auth: "oauth", publisher: "Box", docsUrl: "https://developer.box.com/guides/box-mcp/remote/", verifiedAt: "2026-09-28", setup: { kind: "admin", reason: "A Box admin has to turn on the Box MCP server in the Admin Console and give you a client ID and secret first.", guideUrl: "https://developer.box.com/guides/box-mcp/remote/" } } } },
+];
 const galleryDoc = {
   servers: [
     { server: { name: "com.notion/mcp", description: "Pages, databases and comments in your Notion workspace.", version: "1.0.0", remotes: [{ type: "streamable-http", url: "https://mcp.notion.com/mcp" }] }, _meta: { [GALLERY_META]: { id: "notion", displayName: "Notion", category: "productivity", auth: "oauth", publisher: "Notion", iconUrl: "https://www.notion.so/images/favicon.ico", docsUrl: "https://developers.notion.com/docs/get-started-with-mcp", verifiedAt: "2026-09-24" } } },
     { server: { name: "com.acme/mcp", description: "Acme orders and invoices.", version: "2.1.0", remotes: [{ type: "streamable-http", url: "https://mcp.acme.example/mcp", headers: [{ name: "Authorization", value: "Bearer {ACME_TOKEN}", isRequired: true, isSecret: true, variables: { ACME_TOKEN: { description: "Acme API token", isRequired: true, isSecret: true } } }] }] }, _meta: { [GALLERY_META]: { displayName: "Acme", category: "payments", auth: "token", publisher: "Acme" } } },
     { server: { name: "io.github.microsoft/playwright-mcp", description: "Drive a browser: open pages, click, type and read.", version: "0.0.41", packages: [{ registryType: "npm", identifier: "@playwright/mcp", version: "0.0.41", transport: { type: "stdio" } }] }, _meta: { [GALLERY_META]: { id: "playwright-pinned", displayName: "Playwright (pinned)", category: "developer", auth: "none", publisher: "Microsoft" } } },
+    // ?setup (0.16.0): "Needs setup" cards, as the gallery lists them.
+    ...(params.has("setup") ? setupFixtures : []),
     { server: { name: "com.leaky/mcp", description: "Refused: a literal key in a header.", version: "1.0.0", remotes: [{ type: "streamable-http", url: "https://mcp.leaky.example/mcp", headers: [{ name: "Authorization", value: "Bearer sk_" + "live_51Habcdefghijklmnopqrstu" }] }] } },
   ],
   metadata: { count: 4 },
@@ -184,7 +194,7 @@ const galleryParse = parseLibrary(JSON.stringify(galleryDoc));
 const catalogCards = (query: string): CatalogCard[] => {
   const known = new Map(CURATED_CATALOG.filter((e) => e.url).map((e) => [e.url!.replace(/\/+$/, "").toLowerCase(), e.name]));
   const libraries: CatalogCard[][] = [];
-  if (params.has("gallery")) libraries.push(galleryParse.items.map((item) => libraryCard(item, { id: "mcp-gallery", name: "MCP Gallery", label: "raw.githubusercontent.com…/v0.1/servers.json" })));
+  if (params.has("gallery")) libraries.push(galleryParse.items.map((item) => libraryCard(item, { id: "mcp-gallery", name: "MCP Gallery", label: "raw.githubusercontent.com…/v0.2/servers.json" })));
   if (params.has("team")) libraries.push(teamEntries.map((e) => ({ ...teamCard(e, "raw.githubusercontent.com/…/mcp-catalogue.json"), library: { id: "team", name: "Team" } })));
   const q = query.trim().toLowerCase();
   const registry = params.has("registry") && q.length >= 2 ? Object.entries(registryFixtures).filter(([k]) => k.includes(q) || q.includes(k)).flatMap(([, list]) => list.map((server) => ({ ...registryCard(server, known), library: { id: "mcp-registry", name: "MCP Registry" } }))) : [];
@@ -210,6 +220,13 @@ const catalogProjects = [
 ];
 const catalogPlan = (input: any) => {
   const card = catalogCards("supabase jira").concat(catalogCards("jira")).find((c) => c.key === input.key) ?? catalogCards("").find((c) => c.key === input.key)!;
+  if (card.entry.setup?.kind === "byo-oauth") {
+    // As the host plans it (server/catalog.ts prepareByo), without the files.
+    const byo = planByoOauth(card.entry, input.targets.map((id: string) => destinations.find((d) => d.id === id)!).filter(Boolean), { clientId: input.oauthClient?.clientId ?? "", ...(input.oauthClient?.clientSecret !== undefined ? { clientSecret: input.oauthClient.clientSecret } : { hasSecret: input.oauthClient?.hasSecret === true }) });
+    const previews = byo.supported.map((d) => ({ file: d.configPath, label: d.label, text: byoOauthPreview(input.name, byo.definition) }));
+    const plan = { masked: byo.definition, envToSet: [] as any[], issues: byo.issues };
+    return { card, plan, ok: byo.issues.length === 0, issues: byo.issues, clash: null, previews, envToSet: [], notes: byo.notes, budget: budgetImpact("user", 7, "Claude · demo@example.com (primary)"), redirectUri: byo.redirectUri };
+  }
   const plan = planInstall(card.entry, input.scope, input.values ?? {}, card.shelf === "recommended" ? "curated" : card.shelf === "registry" ? "registry" : "team");
   const taken = input.scope === "user" ? servers.filter((s) => input.targets.some((t: string) => s.presentIn.includes(t))).map((s) => s.name) : ["supabase", "jam"];
   const clash = taken.includes(input.name) ? { files: input.scope === "user" ? input.targets.map((t: string) => destinations.find((d) => d.id === t)?.label ?? t) : [`${input.projectPath}/.mcp.json`], suggestion: `${input.name}-2` } : null;
@@ -222,7 +239,7 @@ const catalogPlan = (input: any) => {
     ...(input.scope === "project" ? [".mcp.json is usually in git: the change shows in git status, and everyone who pulls it gets this server.", ...(plan.envToSet.length ? [`The key is not written into the file. It says \${${plan.envToSet[0]!.name}} instead, which Claude Code fills in from its environment when it loads the file. Set ${plan.envToSet.map((e) => e.name).join(", ")} where Claude Code starts: for Paseo agents, the daemon's environment or the provider's env in Paseo's settings.`] : []), "Claude Code asks once before it uses a new project server; approve it at launch or in the workspace's MCP connections tab."] : []),
   ];
   const issues = [...plan.issues, ...(input.scope === "user" && input.targets.length === 0 ? ["Pick at least one editor."] : [])];
-  return { card, plan, ok: issues.length === 0 && !clash, issues, clash, previews, envToSet: plan.envToSet, notes, budget: input.scope === "user" ? budgetImpact("user", 7, "Claude · demo@example.com (primary) and 2 more") : budgetImpact("project", 9, "data-glue's .mcp.json") };
+  return { card, plan, redirectUri: "", ok: issues.length === 0 && !clash, issues, clash, previews, envToSet: plan.envToSet, notes, budget: input.scope === "user" ? budgetImpact("user", 7, "Claude · demo@example.com (primary) and 2 more") : budgetImpact("project", 9, "data-glue's .mcp.json") };
 };
 
 async function call(contract: any, input: any) {
@@ -370,7 +387,12 @@ async function call(contract: any, input: any) {
       libraries: libraryStates(input.query ?? ""),
       projects: catalogProjects,
     };
-    case "catalog-plan": { const { card: _c, plan: _p, ...out } = catalogPlan(input); return out; }
+    case "catalog-plan": {
+      // The plan must never be sent a secret (0.16.0 review); the preview records it if it is.
+      if (input.oauthClient?.clientSecret !== undefined) (window as any).__planSawSecret = true;
+      const { card: _c, plan: _p, ...out } = catalogPlan(input);
+      return out;
+    }
     case "catalog-install": {
       const planned = catalogPlan(input);
       if (!planned.ok) return { ok: false, message: planned.clash ? `A server called '${input.name}' is already in ${planned.clash.files.join(", ")}. Nothing was written. Use '${planned.clash.suggestion}' instead, or skip it.` : planned.issues[0], written: [], skipped: [], health: null, oauth: false, envToSet: planned.envToSet, budget: planned.budget };

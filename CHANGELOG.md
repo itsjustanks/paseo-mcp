@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.16.0 — 2026-09-28
+
+The everyday apps whose official servers can't be added in one click now show in the gallery, marked **Needs setup**, with the reason and the vendor's own guide. Two kinds can be finished from the gallery: a server that needs your own sign-in app (Gmail, Google Calendar, Drive, Docs and Sheets, HubSpot, Zoom) and one on your own address (Zendesk).
+
+### Needs setup
+- A library entry, or a recommended or team one, may carry `setup`: `kind` (`byo-oauth`, `per-org`, `approved-clients`, `admin`), a plain `reason`, an https `guideUrl`, and by kind `steps`, `redirectHint`, `clients`, `scopes`, `urlTemplate` and `label`. Read with the same rules as the rest of a library (`shared/setup.ts`): cleaned, capped, https links only, fields only where their kind uses them. A setup that doesn't check out blocks the card with the reason rather than being dropped.
+- The card: a badge (**Needs setup**, **Needs your address**, **Approved apps only**, **Admin setup**), the reason, and **How to set it up**. `approved-clients` without `clients` and `admin` are shown, never added; the host refuses them too.
+- **Bring your own sign-in app.** **Set up** opens a guided sheet: the steps with their links, the redirect address to register (`http://localhost:33418/callback`), the scopes, and boxes for the client ID and the (masked) secret. For each Claude account picked, the entry is written as Claude Code keeps a pre-registered client, `oauth: { clientId, callbackPort: 33418, scopes }`, and the secret goes to Claude Code's secure store through `claude mcp add-json --client-secret`, in the child's environment (`MCP_CLIENT_SECRET`), never its arguments. The file is backed up first and read back after; a name already there is refused before anything runs. User level only. The secret is in no answer, preview, log line or file the plugin writes. Codex, Kimi and Grok are skipped with the reason (Codex's config has no place for a client secret).
+- **Your own address.** **Set up** asks for the subdomain; only lowercase letters, digits and `-`, and the address it makes must stay on the vendor's host (`https://acme.zendesk.com/api/mcp`, never `evil.com/…`). Written as typed at both levels.
+- **Approved apps.** With `clients` (Dropbox: Claude Code and Codex), the approved apps get it and the rest are skipped with why, in the sheet and the result; a project's `.mcp.json` only when Claude Code is approved.
+- `paseo-mcp.catalog-install` takes an optional `oauthClient` (`clientId`, write-only `clientSecret`); `catalog-plan` takes `oauthClient` as `clientId` and `hasSecret`, and answers `redirectUri`.
+- New tests: `tests/setup.test.ts` (parsing, hostile text, non-https guides, per-org templates and values, shown-only kinds, curated and team setups, the per-app plan) and `tests/setup-host.test.ts` (against a sandbox HOME and a fake `claude`: the exact entry read back, the secret only in the child's environment, never in argv, answers or logs; Codex untouched; per-org at both apps; approved-only and admin never written).
+
+### Hardened after review (before release)
+- **Only vendors the plugin knows get a secret box.** A library entry named "Gmail" at another address could have collected a real Google client ID and secret: Claude Code sends the secret to whichever sign-in server the MCP server names. `byo-oauth` now only counts for a vendor in the plugin's own `BYO_OAUTH_VENDORS` (Google at `<name>mcp.googleapis.com`, HubSpot at `mcp.hubspot.com`, Zoom at `mcp.zoom.us`), with the guide and every step link https on that vendor's own sites. Anything else blocks the card. The sheet shows the exact host by the secret box: "Used only to sign in to gmailmcp.googleapis.com, Google's own server."
+- **Older plugins don't see these entries.** They are only in the gallery's new `v0.2/servers.json`; `v0.1` stays exactly as it was, so 0.15.x can't offer them as one click. 0.16.0 reads v0.2, and a saved v0.1 gallery address is read as v0.2 (on read, not saved; the settings version is unchanged).
+- **The secret crosses once.** The preview is asked for as you type, so it now gets only whether a secret was typed (`oauthClient.hasSecret`); `catalog-plan` drops a `clientSecret`. The secret goes to the daemon only when you press Add. Problems with the secret itself show under its box.
+- **A second Claude account at `~/.claude`** was written into the primary `~/.claude.json`. Claude Code now runs with `CLAUDE_CONFIG_DIR` set to the folder of the file being written.
+- **A Claude Code that hangs** is stopped after 30 s and killed 5 s later (it was only asked to stop, so the add could wait forever). When it fails, hangs or can't store the secret, the entry it had already written is taken out again (backup first), so no server is left that can't sign in and a retry isn't refused as a clash.
+- **A name starting with `-`** was read by Claude Code as an option. `--` now comes before the name.
+- The app list for a bring-your-own install is read fresh, as for every other write.
+- **Two installs of one server at once** (two open panels) both passed the name check, and the second one's clean-up took out the first one's entry. Adds now run one at a time per config file, so the second sees the name and is refused before Claude Code runs; a run Claude Code refused as "already exists" takes nothing out.
+- A team entry's setup is checked on its cleaned text, so a hidden character (U+FEFF, `\v`) inside a host can't split a link past the vendor check. Links in any case (`HTTPS://`), in the reason and the redirect hint, and the entry's docs link count too.
+- An install that skips the contract with `hasSecret` and no secret is refused before Claude Code runs.
+- A per-org address can't be under a shared hosting domain (`{subdomain}.github.io`, `.vercel.app`, `.pages.dev` …), where each subdomain is someone else's site.
+- New tests: two installs at once, a hidden character inside a step's host, any-case and reason links, an off-vendor docs link, an install with no secret, the look-alike blocked (plugin and validator), the hosts that don't count (`storage.googleapis.com`, a bucket host, `googleapis.com.evil.example`, a port), off-vendor guide and step links, shared hosting, the secret-free plan, the v0.1 → v0.2 read, the `~/.claude` account, a hung Claude Code, a secret that can't be stored, and a `-h` name.
+
+### Gallery
+The MCP Gallery gains 14 "Needs setup" entries, each from the vendor's own page: Gmail, Google Calendar, Google Drive, Google Docs, Google Sheets (Google Workspace MCP, developer preview), HubSpot, Zoom, Dropbox, Slack, Canva, Box, Salesforce (Headless 360, beta), Zendesk and Microsoft 365 (Work IQ Mail, preview). Its schema and validator check `setup`, including the same vendor list, shared hosting and hidden-character rules as the plugin. They are in `v0.2/servers.json`; `v0.1/servers.json` is built from it without them (`npm run build`), and the validator fails if the two drift.
+
 ## 0.15.1 — 2026-09-28
 
 ### Fixed

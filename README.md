@@ -43,7 +43,7 @@ and which library it came from.
 | Shelf | Where it comes from |
 | --- | --- |
 | Recommended | 31 official servers shipped with the plugin (`shared/catalog-curated.ts`), each URL copied from the vendor's docs, which the card links to. Always shown; a library never hides one (see Merging) |
-| Libraries | Every library in **Libraries** at the bottom of the gallery, most trusted first (see Merging). By default that is the **MCP Gallery** (`https://raw.githubusercontent.com/itsjustanks/mcp-gallery/main/v0.1/servers.json`). Add your own by address or file; the 0.12.0 team catalogue is now the library called **Team** |
+| Libraries | Every library in **Libraries** at the bottom of the gallery, most trusted first (see Merging). By default that is the **MCP Gallery** (`https://raw.githubusercontent.com/itsjustanks/mcp-gallery/main/v0.2/servers.json`; a saved v0.1 address, the default before 0.16.0, is read as v0.2). Add your own by address or file; the 0.12.0 team catalogue is now the library called **Team** |
 | Registries | A library whose address is a registry, searched once you type two letters, latest versions only, cached a day per search, up to three pages of 100. The official **MCP Registry** (`registry.modelcontextprotocol.io`) is listed but off; switch it on in **Libraries**. Only remote servers are added in one click. A server that only ships a package (npm, PyPI, an image) is shown, marked "Runs code on this server", with its **Repository** and **Add by hand** (the form opens with its name filled in, nothing else) |
 
 ### Libraries
@@ -192,6 +192,58 @@ stored value is in it: of an address only the scheme and host stay (a host's fir
 it is a plain word like `mcp`; a path that is not plain lowercase words becomes `{PATH}`; query keys become `PARAM_1…n`
 with their values as inputs); every header and env value is a placeholder; of a command, only the command, its package
 and flag names stay.
+
+### Needs setup
+
+Some official servers can't be added in one click. A library entry says so in `_meta["io.github.itsjustanks/mcp-gallery"].setup`
+(a recommended or team entry in a `setup` field), and the card shows a badge, the reason in one line, and **How to set
+it up** (the vendor's own page):
+
+| `kind` | Badge | What the gallery does | Examples in the MCP Gallery |
+| --- | --- | --- | --- |
+| `byo-oauth` | Needs setup | **Set up** opens a guided sheet: the vendor's steps with their links, the exact redirect address to register, the scopes to add, then the client ID and secret you copy back | Gmail, Google Calendar, Drive, Docs, Sheets, HubSpot, Zoom |
+| `per-org` | Needs your address | **Set up** asks for your subdomain or org and fills the address in | Zendesk |
+| `approved-clients` | Approved apps only | Only the vendor's approved AI apps can sign in. With `clients`, the approved apps the plugin writes to get it and the rest are skipped with why; without, it is shown, not added | Dropbox (Claude Code, Codex), Slack, Canva |
+| `admin` | Admin setup | Shown, not added: an administrator turns it on first | Box, Salesforce, Microsoft 365 |
+
+Fields: `kind`, `reason` (one plain line, 200 characters at most), `guideUrl` (https), and by kind `steps` (up to 10
+short lines; an https address in one is shown as a link), `redirectHint` (the vendor's name for the redirect field),
+`clients` (`claude`, `codex`), `scopes` (space-separated), `urlTemplate` and `label`. It is untrusted text like the rest
+of a library: cleaned of hidden characters, capped, https links only, and a field its kind doesn't use is an error. A
+setup that doesn't check out makes the card "not installable" with the reason; it is never dropped, which would show a
+gated server as one click. The rules are in `shared/setup.ts`.
+
+**Bring your own sign-in app (`byo-oauth`).** The vendor accepts only an OAuth client you register (no dynamic
+registration). The sheet shows `http://localhost:33418/callback`, the address Claude Code listens on when an entry's
+`oauth.callbackPort` is 33418 ("Use pre-configured OAuth credentials", code.claude.com/docs/en/mcp); register exactly
+that. One port for every app, so one Google client covers all five Google servers. For each Claude account you pick,
+the entry is `{ "type": "http", "url": …, "oauth": { "clientId": …, "callbackPort": 33418, "scopes": … } }`. The
+client secret is never written to a file: Claude Code keeps it in its secure store (the macOS Keychain, or
+`~/.claude/.credentials.json` elsewhere), and only its own `claude mcp add` / `add-json --client-secret` puts it there.
+So for this one server the plugin backs the file up, refuses a name that's already there, runs `claude mcp add-json
+--scope user --client-secret -- <name> <json>` for that account (`CLAUDE_CONFIG_DIR` set to the folder of the file it
+writes, unset for `~/.claude.json`) with the secret in the child's environment as `MCP_CLIENT_SECRET` (never in its
+arguments, never logged, never in an answer), then reads the file back and compares it with the plan. If Claude Code
+fails, hangs (stopped after 30 s, killed 5 s later) or can't store the secret, the entry it had already written is taken
+out again, so nothing is left that can't sign in. The preview is worked out without the secret (it only learns that one
+was typed); the secret crosses to the daemon once, when you press Add.
+
+**Only vendors the plugin knows.** Claude Code sends the client secret to whichever sign-in server the MCP server names,
+so a library entry called "Gmail" at another address could collect a real one. `byo-oauth` is honoured only for a
+vendor in the plugin's own `BYO_OAUTH_VENDORS` list (`shared/setup.ts`; never read from a library), at that vendor's
+own MCP host: Google (`<name>mcp.googleapis.com`), HubSpot (`mcp.hubspot.com`) and Zoom (`mcp.zoom.us`). The guide and
+every link in the steps must be https on that vendor's own sites. Anything else blocks the card, and the sheet names
+the exact host next to the secret box. A new vendor takes a plugin release. It is user level only: the secret can't go in a project's file. Codex is skipped with the reason: its
+`[mcp_servers.<name>.oauth]` table takes `client_id`, `callback_url` and `callback_port` but no secret
+(developers.openai.com/codex/mcp), and these vendors' token endpoints require one. Kimi and Grok have no such setting.
+After adding, sign in with **Connect** as for any OAuth server. To change the secret, remove the server and add it again.
+
+**Your own address (`per-org`).** `urlTemplate` holds one `{subdomain}` or `{org}`, as the whole first label of the
+vendor's host (`https://{subdomain}.zendesk.com/api/mcp`) or one whole path segment, and must be the server's own
+address. What you type must be lowercase letters, digits and `-` (1 to 63, not starting or ending with `-`, not
+something that reads like a key); the address it makes is checked again, and a host that isn't the template's is
+refused. The value is written as typed at both levels (it names your organisation; it is not a secret), and a value
+that fails is never shown in the preview's address.
 
 ## Add project servers to agents
 

@@ -26,6 +26,7 @@ import {
   type CatalogInput,
 } from "./catalog";
 import { TEAM_LIBRARY_ID, libraryTrustRank } from "./library-source";
+import { parseSetup, setupBlockedReason } from "./setup";
 
 /**
  * Libraries (0.13.0), the pure part: a library document read into catalogue
@@ -82,6 +83,8 @@ export const GalleryMetaSchema = z.object({
   docsUrl: z.string().max(2048).optional().catch(undefined),
   verifiedAt: z.string().max(40).optional().catch(undefined),
   publisher: z.string().max(400).optional().catch(undefined),
+  /** "Needs setup" (0.16.0): read on its own by parseSetup, never dropped quietly. */
+  setup: z.unknown().optional(),
 });
 export type GalleryMeta = z.output<typeof GalleryMetaSchema>;
 
@@ -357,6 +360,21 @@ export function libraryItem(server: Json, meta: unknown): LibraryItem | { refuse
   }
   if (inputs.list.length > INPUTS_MAX) return { refused: `it asks for ${inputs.list.length} values, more than the ${INPUTS_MAX} the plugin fills in` };
   if (inputs.list.length) entry.inputs = inputs.list;
+  // Needs setup (0.16.0). A setup that doesn't check out blocks the card with
+  // the reason: dropping it would show a gated server as one click.
+  if (curation.setup !== undefined) {
+    const read = parseSetup(curation.setup, entry);
+    if (!read.setup) blockedReason ||= `Its setup notes can't be used (${read.problem}); see its docs.`;
+    else {
+      entry.setup = read.setup;
+      blockedReason ||= setupBlockedReason(read.setup);
+      if (read.setup.kind === "per-org") {
+        // The value in the address is the organisation, asked for by the setup's label.
+        const id = placeholdersIn(read.setup.urlTemplate ?? "")[0] ?? "";
+        entry.inputs = [{ id, label: read.setup.label || id, secret: false, required: true, hint: undefined }, ...(entry.inputs ?? []).filter((input) => input.id !== id)];
+      }
+    }
+  }
   entry = withCredentialSecrets(entry, "team");
   // Checked here, not only before the answer goes out, so the library's row says why.
   const problem = entryProblem(entry);
@@ -390,7 +408,7 @@ export function parseLibrary(text: string): LibraryParse {
   if (!document || !Array.isArray(document.servers)) {
     const team = parseTeamCatalogue(text);
     if (team.error) return empty('expected the MCP Registry\'s { "servers": [ … ] }, a list of entries, or { "entries": [ … ] }');
-    return { items: team.entries.map((entry) => ({ entry: cleanEntryText(entry), name: entry.id, blockedReason: "" })), refused: team.refused, error: "" };
+    return { items: team.entries.map((entry) => ({ entry: cleanEntryText(entry), name: entry.id, blockedReason: cleanText(setupBlockedReason(entry.setup)) })), refused: team.refused, error: "" };
   }
   const items: LibraryItem[] = [];
   const refused: LibraryParse["refused"] = [];

@@ -16,7 +16,13 @@ import { z } from "zod";
  *     private library that must not be hosted.
  */
 
-export const DEFAULT_LIBRARY_URL = "https://raw.githubusercontent.com/itsjustanks/mcp-gallery/main/v0.1/servers.json";
+export const DEFAULT_LIBRARY_URL = "https://raw.githubusercontent.com/itsjustanks/mcp-gallery/main/v0.2/servers.json";
+/**
+ * The gallery file up to 0.15.x. It stays as it was, without the servers that
+ * need setting up: a plugin before 0.16.0 can't read `setup` and would offer
+ * them as one click. From 0.16.0 the gallery is read from v0.2.
+ */
+export const GALLERY_V01_URL = "https://raw.githubusercontent.com/itsjustanks/mcp-gallery/main/v0.1/servers.json";
 export const OFFICIAL_REGISTRY_URL = "https://registry.modelcontextprotocol.io";
 
 /** The library the 0.12.0 team catalogue setting becomes. Its cards keep the Team badge and `team:` keys. */
@@ -48,6 +54,15 @@ export const DEFAULT_LIBRARIES: LibrarySource[] = [
   { id: GALLERY_LIBRARY_ID, name: "MCP Gallery", source: DEFAULT_LIBRARY_URL, format: "json", enabled: true, headerName: "" },
   { id: REGISTRY_LIBRARY_ID, name: "MCP Registry", source: OFFICIAL_REGISTRY_URL, format: "registry", enabled: false, headerName: "" },
 ];
+
+/**
+ * Libraries as they are read: a saved v0.1 gallery address (the default up
+ * to 0.15.x) is read as v0.2. Applied on read, not saved, so the settings
+ * version is unchanged and an older plugin still reads its own file.
+ */
+export function currentLibrarySources(libraries: LibrarySource[]): LibrarySource[] {
+  return libraries.map((library) => (library.source.trim() === GALLERY_V01_URL ? { ...library, source: DEFAULT_LIBRARY_URL } : library));
+}
 
 /** What makes a list of libraries unsavable: a duplicate id, or a header name that isn't one. "" when fine. */
 export function librariesProblem(libraries: LibrarySource[]): string {

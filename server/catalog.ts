@@ -24,10 +24,12 @@ import {
   type LibraryState,
 } from "../shared/catalog";
 import { CURATED_CATALOG } from "../shared/catalog-curated";
+import { byoOauthPreview, planByoOauth, scrubSecret, setupTargetSupport } from "../shared/setup";
+import { addWithClaudeClient } from "./byo-oauth";
 import type { Destination } from "../shared/contracts";
 import { probeMcp } from "../shared/health";
 import { libraryCard, mergeGallery, schemaReason } from "../shared/library";
-import { GALLERY_LIBRARY_ID, TEAM_LIBRARY_ID, libraryLocation, type LibraryLocation, type LibrarySource } from "../shared/library-source";
+import { GALLERY_LIBRARY_ID, TEAM_LIBRARY_ID, currentLibrarySources, libraryLocation, type LibraryLocation, type LibrarySource } from "../shared/library-source";
 import {
   DIALECTS,
   binaryOnPath,
@@ -96,7 +98,8 @@ export const hostCatalogSettings: typeof catalogSettings = {
 
 export function readCatalogSettings(): CatalogSettings {
   keepVersionCopy("catalog", 1);
-  return readSettingsDocument(catalogSettings, CATALOG_DEFAULTS);
+  const settings = readSettingsDocument(catalogSettings, CATALOG_DEFAULTS);
+  return { ...settings, libraries: currentLibrarySources(settings.libraries) };
 }
 
 /**
@@ -373,6 +376,8 @@ type InstallInput = {
   name: string;
   values?: Record<string, string>;
   planHash?: string;
+  /** The install has the secret; the plan only whether one was typed. */
+  oauthClient?: { clientId?: string; clientSecret?: string; hasSecret?: boolean };
 };
 
 /** The rules a card's entry is held to: ours for Recommended, the registry's for registry results, a team file's for every library. */
@@ -454,9 +459,14 @@ type Prepared = {
   definition: Record<string, unknown>;
   destinations: Destination[];
   projectFile: string;
+  redirectUri: string;
+  /** Set for a bring-your-own-app server: its client's secret goes to Claude Code, nowhere else. */
+  byo: { clientSecret: string } | null;
+  /** Picked apps that can't take this server, each "label: why" (0.16.0). */
+  skippedTargets: string[];
 };
 
-async function prepare(input: InstallInput, paseo: PluginHandlerContext["paseo"] | null): Promise<Prepared> {
+async function prepare(input: InstallInput, paseo: PluginHandlerContext["paseo"] | null, options: { fresh?: boolean; install?: boolean } = {}): Promise<Prepared> {
   const result: Prepared = {
     ok: false,
     issues: [],
@@ -471,6 +481,9 @@ async function prepare(input: InstallInput, paseo: PluginHandlerContext["paseo"]
     definition: {},
     destinations: [],
     projectFile: "",
+    redirectUri: "",
+    byo: null,
+    skippedTargets: [],
   };
   const card = resolveCard(input.key);
   if (!card) {
@@ -483,6 +496,7 @@ async function prepare(input: InstallInput, paseo: PluginHandlerContext["paseo"]
   if (card.shelf !== "registry") result.issues.push(...validateEntry(card.entry, originOf(card)));
   const name = input.name.trim();
   if (!SERVER_NAME.test(name)) result.issues.push("The name must be letters, numbers, hyphens and underscores (up to 64).");
+  if (card.entry.setup?.kind === "byo-oauth") return prepareByo(input, card, name, result, paseo, options);
 
   const plan = planInstall(card.entry, input.scope, input.values ?? {}, originOf(card));
   result.issues.push(...plan.issues);
@@ -493,9 +507,19 @@ async function prepare(input: InstallInput, paseo: PluginHandlerContext["paseo"]
   if (card.warning) result.notes.push(card.warning);
 
   if (input.scope === "user") {
-    const destinations = await buildDestinations(paseo);
-    const chosen = (input.targets ?? []).map((id) => destinations.find((dest) => dest.id === id)).filter((dest): dest is Destination => Boolean(dest));
-    if (chosen.length === 0) result.issues.push("Pick at least one editor.");
+    const destinations = await buildDestinations(paseo, options);
+    const picked = (input.targets ?? []).map((id) => destinations.find((dest) => dest.id === id)).filter((dest): dest is Destination => Boolean(dest));
+    // Needs setup (0.16.0): an app the vendor hasn't approved is skipped, with why.
+    const chosen = picked.filter((dest) => {
+      const support = setupTargetSupport(card.entry.setup, dest);
+      if (!support.ok) {
+        result.notes.push(`Skipped ${dest.label}: ${support.reason}`);
+        result.skippedTargets.push(`${dest.label}: ${support.reason}`);
+      }
+      return support.ok;
+    });
+    if (picked.length === 0) result.issues.push("Pick at least one editor.");
+    else if (chosen.length === 0) result.issues.push("None of the apps you picked can use this server.");
     result.destinations = chosen;
     const taken = new Set<string>();
     const clashFiles: string[] = [];
@@ -509,6 +533,8 @@ async function prepare(input: InstallInput, paseo: PluginHandlerContext["paseo"]
     }
     if (clashFiles.length > 0) result.clash = { files: clashFiles, suggestion: nameClash(name, taken).suggestion };
     if (chosen.length > 0) result.budget = budgetImpact("user", heaviest + 1, describeTargets(chosen.map((dest) => dest.label)));
+  } else if (card.entry.setup?.kind === "approved-clients" && !card.entry.setup.clients?.includes("claude")) {
+    result.issues.push("A project's .mcp.json is read by Claude Code, which isn't on this server's approved list.");
   } else {
     // A project registered since the last copy is looked for again, waiting for the daemon this once.
     const cached = await discoverProjects(paseo);
@@ -548,8 +574,54 @@ async function prepare(input: InstallInput, paseo: PluginHandlerContext["paseo"]
   return result;
 }
 
+/**
+ * A bring-your-own-app server (0.16.0): user scope only (the secret can't go
+ * in a project file), each picked app sorted into gets it or skipped with
+ * why, previews of the exact entry each Claude config gets, and the redirect
+ * address to register. The typed secret is kept on `byo` for the install and
+ * appears in nothing this returns.
+ */
+async function prepareByo(input: InstallInput, card: CatalogCard, name: string, result: Prepared, paseo: PluginHandlerContext["paseo"] | null, options: { fresh?: boolean; install?: boolean }): Promise<Prepared> {
+  // The plan has no secret, only hasSecret; the install must have the secret itself.
+  const typed = options.install ? (input.oauthClient?.clientSecret ?? "") : undefined;
+  const client = { clientId: input.oauthClient?.clientId ?? "", ...(typed === undefined ? { hasSecret: input.oauthClient?.hasSecret === true } : { clientSecret: typed }) };
+  if (input.scope !== "user") result.issues.push("This server is added to your own apps only: its client secret can't go in a project's file.");
+  // Written through Claude Code on install, so the install reads the apps fresh, as every write does.
+  const destinations = await buildDestinations(paseo, options);
+  const picked = (input.targets ?? []).map((id) => destinations.find((dest) => dest.id === id)).filter((dest): dest is Destination => Boolean(dest));
+  const plan = planByoOauth(card.entry, picked, client);
+  result.issues.push(...plan.issues);
+  result.notes.push(...plan.notes);
+  result.redirectUri = plan.redirectUri;
+  result.definition = plan.definition;
+  result.destinations = picked.filter((dest) => plan.supported.some((target) => target.id === dest.id));
+  result.skippedTargets = plan.skipped.map((entry) => `${entry.label}: ${entry.reason}`);
+  const taken = new Set<string>();
+  const clashFiles: string[] = [];
+  let heaviest = 0;
+  for (const dest of result.destinations) {
+    const names = destNames(dest);
+    names.forEach((entry) => taken.add(entry));
+    heaviest = Math.max(heaviest, names.length);
+    if (SERVER_NAME.test(name) && destReadOne(dest, name)) clashFiles.push(dest.label);
+    result.previews.push({ file: dest.configPath, label: dest.label, text: byoOauthPreview(name, plan.definition) });
+  }
+  if (clashFiles.length > 0) result.clash = { files: clashFiles, suggestion: nameClash(name, taken).suggestion };
+  if (result.destinations.length > 0) result.budget = budgetImpact("user", heaviest + 1, describeTargets(result.destinations.map((dest) => dest.label)));
+  const secret = (typed ?? "").trim();
+  result.byo = { clientSecret: secret };
+  result.planHash = planHash({ entry: card.entry, scope: input.scope, targets: input.targets ?? [], projectPath: input.projectPath ?? "", name, previews: result.previews });
+  // Belt and braces: nothing shown may hold the secret, whatever it looks like.
+  result.issues = [...new Set(result.issues.filter(Boolean))].map((line) => scrubSecret(line, secret));
+  result.notes = result.notes.map((line) => scrubSecret(line, secret));
+  result.ok = result.issues.length === 0 && result.clash === null;
+  return result;
+}
+
 export async function handleMcpCatalogPlan(input: InstallInput, { paseo }: PluginHandlerContext) {
-  const prepared = await prepare(input, paseo);
+  // The plan never holds a secret, even from a caller that skips the contract.
+  const oauthClient = input.oauthClient ? { clientId: input.oauthClient.clientId, hasSecret: input.oauthClient.hasSecret === true } : undefined;
+  const prepared = await prepare({ ...input, oauthClient }, paseo);
   return {
     ok: prepared.ok,
     issues: prepared.issues,
@@ -560,6 +632,7 @@ export async function handleMcpCatalogPlan(input: InstallInput, { paseo }: Plugi
     notes: prepared.notes,
     commandLine: prepared.commandLine,
     planHash: prepared.planHash,
+    redirectUri: prepared.redirectUri,
   };
 }
 
@@ -604,7 +677,7 @@ async function healthOf(definition: Record<string, unknown>, scope: InstallScope
 export const PLAN_CHANGED = "The server's details changed since you reviewed them; review again.";
 
 export async function handleMcpCatalogInstall(input: InstallInput, context: PluginHandlerContext) {
-  const prepared = await prepare(input, context.paseo);
+  const prepared = await prepare(input, context.paseo, { fresh: true, install: true });
   const base = { written: [] as string[], skipped: [] as string[], health: null, oauth: false, envToSet: prepared.envToSet, budget: prepared.budget };
   if (prepared.clash) {
     return {
@@ -617,9 +690,16 @@ export async function handleMcpCatalogInstall(input: InstallInput, context: Plug
   if (input.planHash !== prepared.planHash) return { ...base, ok: false, message: PLAN_CHANGED };
   const name = input.name.trim();
   const written: string[] = [];
-  const skipped: string[] = [];
+  const skipped: string[] = [...prepared.skippedTargets];
 
-  if (input.scope === "user") {
+  if (prepared.byo) {
+    // Through Claude Code's own add, one account at a time (server/byo-oauth.ts).
+    for (const dest of prepared.destinations) {
+      const outcome = await addWithClaudeClient(dest, name, prepared.definition, prepared.byo.clientSecret);
+      if (outcome.ok) written.push(dest.label);
+      else skipped.push(`${dest.label}: ${scrubSecret(outcome.message, prepared.byo.clientSecret)}`);
+    }
+  } else if (input.scope === "user") {
     const json = JSON.stringify(prepared.definition);
     const result = await handleMcpImportApply(
       { servers: [{ name, json }], targets: prepared.destinations.map((dest) => dest.id), overwrite: false, allowPlaceholders: json.includes("${") },

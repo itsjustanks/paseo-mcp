@@ -2,6 +2,7 @@ import { defineRpc, defineSettings } from "@getpaseo/plugin";
 import { z } from "zod";
 import { BUDGET_ATTENTION, BUDGET_PROBLEM, budgetTier } from "./budget";
 import { DEFAULT_LIBRARIES, LibrariesSchema, migrateCatalogValues } from "./library-source";
+import { cleanSetup, fillOrgTemplate, orgInputId, orgValueProblem, setupBlockedReason, setupProblems } from "./setup";
 import { sha256Hex } from "./sha256";
 
 /**
@@ -82,6 +83,45 @@ export type CatalogInput = z.output<typeof CatalogInputSchema>;
 export const CatalogAuthSchema = z.enum(["oauth", "header", "env", "none", "unknown"]);
 export type CatalogAuth = z.infer<typeof CatalogAuthSchema>;
 
+// ------------------------------------------------------------------- setup
+
+/** "Needs setup" (0.16.0): the schema lives here so the entry can hold it; the rules are in shared/setup.ts. */
+export const SETUP_KINDS = ["byo-oauth", "approved-clients", "admin", "per-org"] as const;
+export type SetupKind = (typeof SETUP_KINDS)[number];
+
+/** The AI apps a setup can name. `claude` is Claude Code, `codex` is Codex. */
+export const SETUP_CLIENTS = ["claude", "codex"] as const;
+export type SetupClient = (typeof SETUP_CLIENTS)[number];
+export const SETUP_CLIENT_LABELS: Record<SetupClient, string> = { claude: "Claude Code", codex: "Codex" };
+
+/** The placeholder a per-org address may hold, and nothing else. */
+export const ORG_PLACEHOLDERS = ["subdomain", "org"] as const;
+
+export const SETUP_REASON_MAX = 200;
+export const SETUP_STEP_MAX = 240;
+export const SETUP_STEPS_MAX = 10;
+
+export const CatalogSetupSchema = z.object({
+  kind: z.enum(SETUP_KINDS),
+  /** Why it can't be added in one click, in a plain line. */
+  reason: z.string().max(SETUP_REASON_MAX),
+  /** The vendor's own setup page (https). */
+  guideUrl: z.string().max(2048),
+  /** Short plain steps; an https address in one is shown as a link. */
+  steps: z.array(z.string().max(SETUP_STEP_MAX)).max(SETUP_STEPS_MAX).optional(),
+  /** byo-oauth: where, in the vendor's console, the redirect address goes ("Authorized redirect URIs"). The plugin fills in the address. */
+  redirectHint: z.string().max(80).optional(),
+  /** byo-oauth: the AI apps that take a pre-registered client; approved-clients: the vendor's approved apps the plugin can write to. */
+  clients: z.array(z.enum(SETUP_CLIENTS)).max(SETUP_CLIENTS.length).optional(),
+  /** byo-oauth: the scopes to ask for, space-separated, as the vendor's guide lists them. */
+  scopes: z.string().max(2048).optional(),
+  /** per-org: the address with one {subdomain} or {org}. */
+  urlTemplate: z.string().max(2048).optional(),
+  /** per-org: what to call the value ("Your Zendesk subdomain"). */
+  label: z.string().max(80).optional(),
+});
+export type CatalogSetup = z.output<typeof CatalogSetupSchema>;
+
 export const CatalogEntrySchema = z.object({
   id: z.string().regex(SERVER_NAME),
   name: z.string().min(1).max(80),
@@ -100,6 +140,8 @@ export const CatalogEntrySchema = z.object({
   verifiedAt: z.string().max(40).default(""),
   /** An https image shown on the card; never fetched by the host. */
   iconUrl: z.string().max(2048).optional(),
+  /** Why it can't be added in one click, and how to set it up (0.16.0; shared/setup.ts). */
+  setup: CatalogSetupSchema.optional(),
 });
 export type CatalogEntry = z.output<typeof CatalogEntrySchema>;
 
@@ -311,8 +353,11 @@ function credentialArg(arg: string, previous: string): boolean {
  */
 export function credentialInputIds(entry: CatalogEntry, origin: EntryOrigin = "team"): Set<string> {
   const ids = new Set<string>();
-  const add = (text: string) => placeholdersIn(text).forEach((id) => ids.add(id));
-  for (const input of entry.inputs ?? []) if (!publicInputName(input.id)) ids.add(input.id);
+  // A per-org value (0.16.0) is held to orgValueProblem instead: lowercase
+  // letters, digits and `-`, never a key, and it can't move the host.
+  const org = orgInputId(entry);
+  const add = (text: string) => placeholdersIn(text).forEach((id) => id !== org && ids.add(id));
+  for (const input of entry.inputs ?? []) if (!publicInputName(input.id) && input.id !== org) ids.add(input.id);
   for (const [name, value] of Object.entries(entry.headers ?? {})) if (!publicInputName(name)) add(value);
   for (const [name, value] of Object.entries(entry.env ?? {})) if (!publicInputName(name)) add(value);
   if (origin !== "curated") {
@@ -495,6 +540,8 @@ export function validateEntry(entry: CatalogEntry, origin: EntryOrigin): string[
     if (hasEnvReference(entry.docs)) issues.push("docs holds a ${…} reference");
   }
   if (entry.iconUrl !== undefined && !httpsImage(entry.iconUrl)) issues.push("iconUrl must be an https link");
+  // Checked as it will be shown: cleaned first, so a hidden character can't split a link past the check.
+  if (entry.setup) issues.push(...setupProblems(cleanSetup(entry.setup), entry));
   if (origin === "curated") {
     if (!entry.docs) issues.push("a recommended entry must cite the vendor's docs");
     if (!/^\d{4}-\d{2}-\d{2}$/.test(entry.verifiedAt)) issues.push("a recommended entry needs verifiedAt as YYYY-MM-DD");
@@ -856,6 +903,7 @@ export function registryCard(server: RegistryServer, knownOfficialUrls: Readonly
 }
 
 export function curatedCard(entry: CatalogEntry): CatalogCard {
+  const blockedReason = setupBlockedReason(entry.setup);
   return {
     key: `recommended:${entry.id}`,
     shelf: "recommended",
@@ -863,12 +911,12 @@ export function curatedCard(entry: CatalogEntry): CatalogCard {
     trust: "official",
     trustNote: `Checked against ${entry.publisher}'s docs on ${entry.verifiedAt}.`,
     warning: "",
-    installable: true,
-    blockedReason: "",
+    installable: blockedReason === "",
+    blockedReason,
   };
 }
 
-/** An entry's shown text (name, publisher, description, input labels and hints) through cleanText. */
+/** An entry's shown text (name, publisher, description, input labels and hints, setup) through cleanText. */
 export function cleanEntryText(entry: CatalogEntry): CatalogEntry {
   return {
     ...entry,
@@ -878,10 +926,12 @@ export function cleanEntryText(entry: CatalogEntry): CatalogEntry {
     ...(entry.inputs
       ? { inputs: entry.inputs.map((input) => ({ ...input, label: cleanText(input.label) || input.id, ...(input.hint !== undefined ? { hint: cleanText(input.hint) } : {}) })) }
       : {}),
+    ...(entry.setup ? { setup: cleanSetup(entry.setup) } : {}),
   };
 }
 
 export function teamCard(entry: CatalogEntry, source: string): CatalogCard {
+  const blockedReason = setupBlockedReason(entry.setup);
   return {
     key: `team:${entry.id}`,
     shelf: "team",
@@ -889,8 +939,8 @@ export function teamCard(entry: CatalogEntry, source: string): CatalogCard {
     trust: "team",
     trustNote: `From your team catalogue (${cleanText(source)}).`,
     warning: "",
-    installable: true,
-    blockedReason: "",
+    installable: blockedReason === "",
+    blockedReason: cleanText(blockedReason),
   };
 }
 
@@ -1192,6 +1242,21 @@ export function planInstall(original: CatalogEntry, scope: InstallScope, values:
   const secretValues = new Set<string>();
 
   if (origin === "registry" && entry.transport === "stdio") issues.push(REGISTRY_PACKAGE_REASON);
+  // Needs setup (0.16.0): shown-only setups are refused, a bring-your-own-app
+  // server goes through its own sheet (planByoOauth), and a per-org value is
+  // held to orgValueProblem and may not move the address off its host.
+  const blocked = setupBlockedReason(entry.setup);
+  if (blocked) issues.push(blocked);
+  if (entry.setup?.kind === "byo-oauth") issues.push("This one is added with the sign-in app you register; use its setup steps.");
+  const org = orgInputId(entry);
+  if (org) {
+    const input = inputs.get(org);
+    if (input) inputs.set(org, { ...input, secret: false });
+    const value = (values[org] ?? "").trim();
+    const filled = fillOrgTemplate(entry.setup?.urlTemplate ?? "", value);
+    if (!value) issues.push(`${input?.label ?? entry.setup?.label ?? "The organisation"} is required`);
+    else if (filled.problem) issues.push(filled.problem);
+  }
   if (templatesOf(entry).some(hasEnvReference)) issues.push("The entry holds a ${…} reference; entries may only use {PLACEHOLDER} inputs.");
   for (const input of inputs.values()) {
     const value = (values[input.id] ?? "").trim();
@@ -1223,6 +1288,8 @@ export function planInstall(original: CatalogEntry, scope: InstallScope, values:
         }
         if (scope === "project" && input.secret) return `\${${varNames.get(id)}}`;
         const value = (values[id] ?? "").trim();
+        // A per-org value that fails its check is never shown in the address it would have made.
+        if (id === org && value && orgValueProblem(value)) return `{${id}}`;
         if (!value) empty = true;
         return masked && input.secret ? maskSecret(value) : value;
       });
@@ -1256,6 +1323,9 @@ export function planInstall(original: CatalogEntry, scope: InstallScope, values:
   };
   const definition = build(false);
   const masked = build(true);
+  if (org && typeof definition.url === "string" && definition.url && fillOrgTemplate(entry.setup?.urlTemplate ?? "", (values[org] ?? "").trim()).url !== definition.url) {
+    issues.push("That would point the server at another site.");
+  }
 
   if (scope === "project") {
     const text = JSON.stringify(definition);
@@ -1639,6 +1709,21 @@ export const CatalogInstallInputSchema = z.object({
   projectPath: z.string().default(""),
   name: z.string().min(1),
   values: z.record(z.string(), z.string()).default({}),
+  /**
+   * A bring-your-own-app server's client (0.16.0). The secret is write-only:
+   * it goes to Claude Code's secure store and nowhere else; no answer, preview,
+   * log line or file the plugin writes ever holds it.
+   */
+  oauthClient: z.object({ clientId: z.string().max(512).default(""), clientSecret: z.string().max(4096).default("") }).optional(),
+});
+
+/**
+ * The plan's input: the install's, except a byo client is its ID and whether
+ * a secret was typed. The preview is asked for as the user types; the secret
+ * crosses to the daemon once, on install. zod drops a `clientSecret` sent here.
+ */
+export const CatalogPlanInputSchema = CatalogInstallInputSchema.extend({
+  oauthClient: z.object({ clientId: z.string().max(512).default(""), hasSecret: z.boolean().default(false) }).optional(),
 });
 
 export const CatalogPreviewSchema = z.object({ file: z.string(), label: z.string(), text: z.string() });
@@ -1662,7 +1747,7 @@ export function commandLine(command: string, args: string[]): string {
 /** What installing would write, per file, with secrets masked. Writes nothing. */
 export const mcpCatalogPlan = defineRpc({
   name: "paseo-mcp.catalog-plan",
-  input: CatalogInstallInputSchema,
+  input: CatalogPlanInputSchema,
   output: z.object({
     ok: z.boolean(),
     issues: z.array(z.string()),
@@ -1675,6 +1760,8 @@ export const mcpCatalogPlan = defineRpc({
     commandLine: z.string(),
     /** Binds an install to this preview: see planHash. */
     planHash: z.string(),
+    /** A bring-your-own-app server: the exact redirect address to register with the vendor (0.16.0); "" otherwise. */
+    redirectUri: z.string().default(""),
   }),
 });
 
