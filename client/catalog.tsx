@@ -3,7 +3,7 @@ import { useRpc } from "@getpaseo/plugin/client";
 import { useToast } from "@getpaseo/plugin/client/react-native";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { Image, Linking, Text, View } from "react-native";
+import { Image, Text, View } from "react-native";
 import {
   CATALOG_CATEGORIES,
   CATEGORY_LABELS,
@@ -50,8 +50,10 @@ import {
   copyToClipboard,
   useTokens,
   type Status,
+  TYPE,
 } from "./ui";
 import { LibrariesPanel, SecretField } from "./libraries";
+import { useOpenLink } from "./links";
 
 type Project = { name: string; path: string; servers: number };
 
@@ -120,6 +122,7 @@ function CardIcon({ url }: { url?: string }) {
 
 function ServerCard({ card, have, similar, onAdd, onAddByHand }: { card: CatalogCard; have: { name: string } | null; similar: string | null; onAdd: () => void; onAddByHand: (name: string) => void }) {
   const t = useTokens();
+  const open = useOpenLink();
   const trust = TRUST[card.trust];
   const byHand = byHandOnly(card);
   return (
@@ -132,7 +135,7 @@ function ServerCard({ card, have, similar, onAdd, onAddByHand }: { card: Catalog
         <Text numberOfLines={1} style={t.text.caption}>{publisherLine(card)}{card.version ? ` · v${card.version}` : ""}</Text>
         {(card.shelf === "registry" || card.shelf === "library") && card.trust !== "official" ? <Text numberOfLines={2} style={t.text.caption}>{card.trustNote}</Text> : null}
       </View>
-      <Text numberOfLines={2} style={[t.text.body, { color: t.color.muted, minHeight: t.compact ? 40 : 36 }]}>
+      <Text numberOfLines={2} style={[t.text.body, { minHeight: 44 }]}>
         {card.entry.description || "No description."}
       </Text>
       <View style={{ flexDirection: "row", flexWrap: "wrap", gap: t.space.xs }}>
@@ -146,15 +149,15 @@ function ServerCard({ card, have, similar, onAdd, onAddByHand }: { card: Catalog
       {have ? <Text numberOfLines={2} style={t.text.caption}>{alreadyHaveLine(card, have)}</Text> : null}
       {!have && similar ? <Text numberOfLines={2} style={t.text.caption}>{similarNameLine(card, similar)}</Text> : null}
       {card.warning ? <Text style={[t.text.caption, { color: t.color.warning }]}>{card.warning}</Text> : null}
-      {card.entry.setup ? <Text style={t.text.caption}>{card.entry.setup.reason}</Text> : !card.installable ? <Text style={t.text.caption}>{card.blockedReason}</Text> : null}
+      {card.entry.setup ? <Text style={{ ...TYPE.secondary, color: t.color.fg }}>{card.entry.setup.reason}</Text> : !card.installable ? <Text style={{ ...TYPE.secondary, color: t.color.fg }}>{card.blockedReason}</Text> : null}
       <View style={{ flexDirection: "row", flexWrap: "wrap", gap: t.space.sm, alignItems: "center" }}>
         {byHand ? (
           <Button label="Add by hand" variant="secondary" onPress={() => onAddByHand(card.entry.id)} />
         ) : card.entry.setup && !card.installable ? null : (
           <Button label={addLabel(card)} variant="secondary" disabled={!card.installable} onPress={onAdd} />
         )}
-        {card.entry.setup ? <Button label="How to set it up" variant={card.installable ? "ghost" : "secondary"} onPress={() => void Linking.openURL(card.entry.setup?.guideUrl ?? "")} /> : null}
-        {card.entry.docs && card.entry.docs !== card.entry.setup?.guideUrl ? <Button label={byHand && card.shelf === "registry" ? "Repository" : "Docs"} variant="ghost" onPress={() => void Linking.openURL(card.entry.docs)} /> : null}
+        {card.entry.setup ? <Button label="How to set it up" variant={card.installable ? "ghost" : "secondary"} onPress={() => open(card.entry.setup?.guideUrl ?? "")} /> : null}
+        {card.entry.docs && card.entry.docs !== card.entry.setup?.guideUrl ? <Button label={byHand && card.shelf === "registry" ? "Repository" : "Docs"} variant="ghost" onPress={() => open(card.entry.docs)} /> : null}
       </View>
     </Card>
   );
@@ -250,7 +253,7 @@ export function CatalogGallery({
 
   // Empty fillers keep a short last row at column width instead of one card stretched across.
   const grid = (list: CatalogCard[]) => (
-    <Grid min={230}>
+    <Grid min={280}>
       {list.map((card) => (
         <ServerCard key={card.key} card={card} have={haves.get(card.key) ?? null} similar={similars.get(card.key) ?? null} onAdd={() => setPicked(card)} onAddByHand={onAddByHand} />
       ))}
@@ -645,6 +648,7 @@ function ByoSetupSteps({
   onClientSecret: (value: string) => void;
 }) {
   const t = useTokens();
+  const open = useOpenLink();
   const apps = (setup.clients ?? []).map((id) => SETUP_CLIENT_LABELS[id]).join(" and ");
   const vendor = byoVendor(serverUrl)?.vendor ?? "";
   const host = (() => {
@@ -655,8 +659,8 @@ function ByoSetupSteps({
     }
   })();
   return (
-    <Section title="Set it up" trailing={<Button label="Vendor's guide" variant="ghost" onPress={() => void Linking.openURL(setup.guideUrl)} />}>
-      <Text style={t.text.caption}>{`${setup.reason} Works with ${apps || "no app here yet"}.`}</Text>
+    <Section title="Set it up" trailing={<Button label="Vendor's guide" variant="ghost" onPress={() => open(setup.guideUrl)} />}>
+      <Text style={t.text.body}>{`${setup.reason} Works with ${apps || "no app here yet"}.`}</Text>
       <Card>
         {(setup.steps ?? []).map((step, index) => {
           const links = stepLinks(step);
@@ -667,7 +671,7 @@ function ByoSetupSteps({
               <View style={{ flex: 1, gap: 2 }}>
                 <Text style={t.text.body}>{words}</Text>
                 {links.map((link) => (
-                  <Text key={link} accessibilityRole="link" numberOfLines={1} onPress={() => void Linking.openURL(link)} style={[t.text.caption, { color: t.color.accent }]}>
+                  <Text key={link} accessibilityRole="link" numberOfLines={1} onPress={() => open(link)} style={[t.text.caption, { color: t.color.accent }]}>
                     {link.replace(/^https:\/\//, "").replace(/\?.*$/, "")}
                   </Text>
                 ))}

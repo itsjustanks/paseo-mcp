@@ -190,7 +190,8 @@ test("saved lists round-trip with their keys, and restored lists are marked", ()
   const parsed = parseReports(serializeReports({ health: null, tools: { report, keys } }));
   assert.deepEqual(parsed?.tools?.report, report);
   assert.deepEqual([...(parsed?.tools?.keys ?? [])], [["a", "k1"], ["b", "k2"]]);
-  const shown = restoredTools(report);
+  // A fixed clock a minute later: restored lists are kept only while young, and this one is dated.
+  const shown = restoredTools(report, Date.parse(report.checkedAt) + 60_000);
   assert.deepEqual(shown.servers[0]?.stale, { reason: RESTORED_REASON, asOf: report.checkedAt, restored: true });
   assert.equal(shown.servers[1]?.stale, undefined, "only real lists are marked");
   assert.equal(shown.stale?.asOf, report.checkedAt);

@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.17.0 — 2026-10-04
+
+The MCP page now looks and reads like AI Router, under the shared design standard for our Paseo plugins: bigger, readable text, the same header and tabs, a plain intro on every tab, and an Overview that explains MCP servers. Every feature and option stays.
+
+### Look
+- One type scale for every screen (`TYPE` in `client/ui.tsx`): 15 px for sentences, 14 for secondary lines, nothing below 13 (was 11 to 13). Page title 22, tab titles 20, section titles 17.
+- Header: the plug icon, "MCP servers", and the state with a coloured dot ("1 not working · on paseo").
+- Tabs: underline tabs with icons. When the labels don't fit (a phone, or a half-width window, measured), every tab shows its icon and the active one its label.
+- Every tab opens with its title, one or two plain sentences and "What you can do here" (behind "Learn more" on a phone).
+- Cards (with an icon and title), 44 px buttons with 15 px words, notices with an icon for each tone, switches, pills, tags and fields all match AI Router. The page is 980 px wide.
+- Gallery and server cards: three per row, so names and descriptions aren't cut off, and descriptions are in the full text colour.
+
+### Overview
+- A status card first: the state in words, the next step and its button, and the at-a-glance lines (health, AI apps, sign-in, tools, Paseo tools, projects).
+- Then what needs attention, **Use your servers in every AI app**, **What are MCP servers?**, **How it works** (four steps with arrows), **How to use it** (numbered steps), **Words you'll see**, and the AI Router card last. The words are in `shared/guide.ts`.
+
+### Plain words
+- A server's page: "On this computer" and "On the web" (was stdio and http), "Not installed" (was "no binary"), "AI apps" (was "Editors"), "Signed in" and "Needs sign-in" (was "OAuth connected" and "OAuth needed"), "Add to the 2 apps missing it" (was "Add to 2 missing"), and a plain note on why a program's tools aren't listed.
+- The remove confirmation says "app" and "project" (was "editor definition" and "project .mcp.json file"), and "The other app keeps jam".
+- The load card: "2 on this computer — a program starts for each agent session" (was "2 stdio — a child process per agent session").
+- AI Router's card no longer says "endpoint".
+
+### Newer Paseo, where the app has it (older apps unchanged)
+- Paseo 0.11: the MCP page is a full screen with the app's own sidebar row (`addScreen`, `addSidebarHeaderItem`, `SidebarRow`), and the command-center item opens it with `openScreen`. Older apps keep `addSurface` and `addSidebarItem`. Detected at runtime (`shared/host-features.ts`); `requirements.paseo` stays `>=0.8.0`.
+- Paseo 0.10: links (vendor guides, docs, sign-in pages, AI Router) open with the app's `openExternalUrl`, in the system browser. Older apps use `Linking.openURL`; when nothing opens, the link is copied and a toast says so.
+
+### Fixed
+- The workspace panel showed a stray word, "workspace", in plain serif text (since 0.14.0): the host's own `context` prop reached the panel's chat-section slot. The slot is now `chatSection`.
+- Two tests started failing on their own once their sample dates were more than a week old (0.16.0 fails them too). They now use a fixed clock.
+
+### Tests
+- `tests/design.test.ts`: every tab intro and the Overview guide in plain words; no font size below 13 and none outside the scale; native screens only when every part is there; the external link opener. 433 tests.
+
 ## 0.16.0 — 2026-09-28
 
 The everyday apps whose official servers can't be added in one click now show in the gallery, marked **Needs setup**, with the reason and the vendor's own guide. Two kinds can be finished from the gallery: a server that needs your own sign-in app (Gmail, Google Calendar, Drive, Docs and Sheets, HubSpot, Zoom) and one on your own address (Zendesk).

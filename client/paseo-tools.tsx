@@ -260,7 +260,7 @@ export function PaseoToolsCard({ hostLabel }: { hostLabel: string }) {
   return (
     <Card>
       <Header state={state} onRefresh={() => refresh.mutate()} refreshing={refresh.isPending || query.isFetching} />
-      <Text style={[t.text.body, { color: t.color.muted, maxWidth: 680 }]}>
+      <Text style={t.text.body}>
         {`Paseo's own MCP server. The daemon adds it to agents it starts, with ${plural(state.tools.length, "tool")} for agents, terminals, schedules, workspaces and the browser. ${toolListOrigin(state)}`}
       </Text>
       {catalogueDriftLine(state) ? <Notice tone="attention">{catalogueDriftLine(state)}</Notice> : null}

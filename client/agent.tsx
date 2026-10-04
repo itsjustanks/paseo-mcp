@@ -60,7 +60,7 @@ export function McpAgentPanel(props: PluginAgentPanelProps) {
         intro={<AgentIntro agentId={props.agentId} />}
         providerId={provider ?? undefined}
         agentId={props.agentId}
-        context={<ContextSection workspaceId={props.workspaceId} agentId={props.agentId} providerId={provider} />}
+        chatSection={<ContextSection workspaceId={props.workspaceId} agentId={props.agentId} providerId={provider} />}
       />
     </TokensProvider>
   );

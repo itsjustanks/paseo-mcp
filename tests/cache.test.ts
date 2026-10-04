@@ -90,14 +90,15 @@ const failed = (name: string, note: string, kind: "unavailable" | "auth-required
 test("a tool list survives a failed ask, marked with its time and the reason", () => {
   const earlier = report("2026-09-23T04:00:00.000Z", [listed("docs", 3), listed("search", 2)]);
   const next = report("2026-09-23T05:00:00.000Z", [failed("docs", "timeout after 5s"), listed("search", 4)]);
-  const merged = keepLastGoodTools(earlier, next, () => true);
+  // A fixed clock: lists are kept only while young, and these are dated.
+  const merged = keepLastGoodTools(earlier, next, () => true, Date.parse(next.checkedAt));
   assert.equal(merged.checkedAt, next.checkedAt);
   assert.equal(merged.servers[0]!.tools.length, 3);
   assert.deepEqual(merged.servers[0]!.stale, { reason: "timeout after 5s", asOf: earlier.checkedAt });
   assert.equal(merged.servers[1]!.tools.length, 4);
   assert.equal(merged.servers[1]!.stale, undefined);
   // A second failure keeps the original time, not the time of the first failure.
-  const again = keepLastGoodTools(merged, report("2026-09-23T06:00:00.000Z", [failed("docs", "refused"), listed("search", 4)]), () => true);
+  const again = keepLastGoodTools(merged, report("2026-09-23T06:00:00.000Z", [failed("docs", "refused"), listed("search", 4)]), () => true, Date.parse("2026-09-23T06:00:00.000Z"));
   assert.equal(again.servers[0]!.stale?.asOf, earlier.checkedAt);
   assert.equal(again.servers[0]!.stale?.reason, "refused");
 });
@@ -105,7 +106,7 @@ test("a tool list survives a failed ask, marked with its time and the reason", (
 test("an edited definition, a sign-in wall or a first failure is shown as it is", () => {
   const earlier = report("2026-09-23T04:00:00.000Z", [listed("docs", 3), listed("crm", 5)]);
   const next = report("2026-09-23T05:00:00.000Z", [failed("docs", "timeout after 5s"), failed("crm", "sign in to list tools", "auth-required"), failed("new", "refused")]);
-  const merged = keepLastGoodTools(earlier, next, (name) => name !== "docs");
+  const merged = keepLastGoodTools(earlier, next, (name) => name !== "docs", Date.parse(next.checkedAt));
   assert.equal(merged.servers[0]!.kind, "unavailable", "the URL changed, so the old list does not apply");
   assert.equal(merged.servers[1]!.kind, "auth-required");
   assert.equal(merged.servers[2]!.kind, "unavailable");

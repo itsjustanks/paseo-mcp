@@ -70,7 +70,7 @@ function ContextBudget({ load, providerId }: { load: WorkspaceLoad; providerId?:
       ? `${loads}${cost.builtIn ? ` and about ${cost.tools} tools` : ""} — enough to exhaust its context before it starts`
       : `${loads}${cost.builtIn ? ` and about ${cost.tools} tools` : ""} — a real share of its context goes to tool definitions`;
   const why = cost.deferred && load.toolSearch
-    ? `${toolSearchOnLine(load.toolSearch)} The count still matters: each stdio server is a child process per agent session and each server a connection, so past ${BUDGET_ATTENTION} servers the cost shows and past ${BUDGET_PROBLEM} it is heavy.`
+    ? `${toolSearchOnLine(load.toolSearch)} The count still matters: each server on this computer starts a program for every agent session, and each server is a connection, so past ${BUDGET_ATTENTION} servers the cost shows and past ${BUDGET_PROBLEM} it is heavy.`
     : load.toolSearch
       ? `${toolSearchLine(load.toolSearch, cost.tools)} Cursor stops at 40 tools. Past ${BUDGET_ATTENTION} servers the cost shows, past ${BUDGET_PROBLEM} agents can fail with "Prompt is too long" before their first tool call.`
       : `Every server's tool definitions are sent with the first prompt. Claude Code defers them past 10% of the window; Cursor stops at 40 tools. Past ${BUDGET_ATTENTION} servers the cost shows, past ${BUDGET_PROBLEM} agents can fail with "Prompt is too long" before their first tool call.`;
@@ -192,8 +192,8 @@ export function WorkspaceContext({
         />
         <Facts
           items={[
-            { value: `${cost.stdio} stdio — a child process per agent session` },
-            { value: `${cost.http} http — no local process` },
+            { value: `${cost.stdio} on this computer — a program starts for each agent session` },
+            { value: `${cost.http} on the web — nothing runs here` },
             cost.unknown ? { value: `${cost.unknown} unreadable` } : null,
           ]}
         />

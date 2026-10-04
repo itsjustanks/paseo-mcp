@@ -2,11 +2,12 @@ import { useRpc, useSettings } from "@getpaseo/plugin/client";
 import { useToast } from "@getpaseo/plugin/client/react-native";
 import { useQuery } from "@tanstack/react-query";
 import React, { useState } from "react";
-import { Linking, Text, View } from "react-native";
+import { Text, View } from "react-native";
 import { mcpSiblings } from "../shared/contracts";
 import { promoSettings } from "../shared/settings";
 import { AI_ROUTER } from "../shared/siblings";
 import { Button, Card, Tag, copyToClipboard, useTokens } from "./ui";
+import { useOpenLink } from "./links";
 
 export const SIBLINGS_QUERY_KEY = ["paseo-mcp", "siblings"] as const;
 
@@ -20,6 +21,7 @@ export const SIBLINGS_QUERY_KEY = ["paseo-mcp", "siblings"] as const;
 export function AiRouterCard() {
   const t = useTokens();
   const toast = useToast();
+  const openLink = useOpenLink();
   const settings = useSettings(promoSettings);
   const callSiblings = useRpc(mcpSiblings);
   const [dismissed, setDismissed] = useState(false);
@@ -44,28 +46,20 @@ export function AiRouterCard() {
       toast.error("Could not save that. Try Hide again.");
     });
   };
-  const open = () => {
-    Linking.openURL(AI_ROUTER.repoUrl).catch(() => {
-      const copied = copyToClipboard(AI_ROUTER.repoUrl);
-      toast.show(copied ? `No browser here — copied ${AI_ROUTER.repoUrl}` : `No browser here — the plugin is at ${AI_ROUTER.repoUrl}`, { variant: "warning" });
-    });
-  };
+  const open = () => openLink(AI_ROUTER.repoUrl);
   const copy = () =>
     copyToClipboard(AI_ROUTER.installSource)
       ? toast.show("AI Router install source copied.", { variant: "success" })
       : toast.show(`No clipboard here — the install source is ${AI_ROUTER.installSource}`, { variant: "warning" });
 
   return (
-    <Card>
-      <View style={{ flexDirection: "row", alignItems: "center", gap: t.space.sm }}>
-        <Text style={[t.text.heading, { flex: 1, minWidth: 0 }]}>{`Check out ${AI_ROUTER.name}`}</Text>
-        <Button label="Hide" variant="ghost" onPress={hide} />
-      </View>
-      <Text style={[t.text.body, { color: t.color.muted, maxWidth: 680 }]}>{AI_ROUTER.pitch}</Text>
+    <Card title={`Check out ${AI_ROUTER.name}`} icon="Route" subtitle="Another Paseo plugin that works well with this one">
+      <Text style={t.text.body}>{AI_ROUTER.pitch}</Text>
       <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: t.space.sm }}>
-        <Button label="View plugin" onPress={open} />
+        <Button label="View plugin" icon="ExternalLink" onPress={open} />
         {/* Nothing in this slot until the host has answered, so the button does not turn into a badge under the pointer. */}
-        {siblings.isPending ? null : installed ? <Tag label="Installed" tone="ok" /> : <Button label="Copy install source" onPress={copy} />}
+        {siblings.isPending ? null : installed ? <Tag label="Installed" tone="ok" /> : <Button label="Copy install source" icon="Copy" onPress={copy} />}
+        <Button label="Hide" variant="ghost" onPress={hide} />
       </View>
     </Card>
   );

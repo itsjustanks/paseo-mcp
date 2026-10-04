@@ -1,18 +1,45 @@
-import type { PluginClientContext } from "@getpaseo/plugin/client";
+import type { PluginClientContext, PluginSurfaceProps } from "@getpaseo/plugin/client";
+import type { ComponentType } from "react";
 import { McpAgentPanel } from "./client/agent";
 import { SignInCardSchema, makeSignInCard } from "./client/chat";
 import { McpSurface, McpWorkspacePanel } from "./client/mcp";
 import { registerSurfaceOpener } from "./client/navigate";
 import { HealthSettingsScreen, InjectionSettingsScreen } from "./client/settings";
+import { MCP_SCREEN_ID, McpSidebarItem, SidebarRow, type OpenScreen, type SidebarItemProps } from "./client/sidebar";
 import { McpChip } from "./client/tools";
 import { mcpHealthCached } from "./shared/contracts";
 import { SIGN_IN_KIND, SIGN_IN_VERSION } from "./shared/chat";
+import { supportsNativeScreens } from "./shared/host-features";
 import { backoffMs } from "./shared/schedule";
 
+/**
+ * What Paseo 0.11 adds to the client context: full screens and native sidebar
+ * rows (the 0.8 SDK types don't have them). Present means the app supports
+ * them; older apps keep the surface and the sidebar item as before.
+ */
+type ScreensClient = {
+  addScreen?: (contribution: { id: string; title: string; Component: ComponentType<PluginSurfaceProps> }) => () => void;
+  addSidebarHeaderItem?: (contribution: { id: string; title: string; Component: ComponentType<SidebarItemProps> }) => () => void;
+  openScreen?: OpenScreen;
+};
+
 export default function contribute(client: PluginClientContext) {
-  // Panels have no openSurface of their own; lend them this one.
-  registerSurfaceOpener((id) => client.openSurface(id));
-  client.addSurface("mcp", McpSurface);
+  const screens = client as PluginClientContext & ScreensClient;
+  const native = supportsNativeScreens(client, SidebarRow);
+  // Opens the MCP page, whichever way this app shows it. Panels have no opener of their own; they borrow this one.
+  const openMain = (capabilities: { openSurface(id: string): void; openScreen?: OpenScreen }) => {
+    if (native && typeof capabilities.openScreen === "function") capabilities.openScreen({ screenId: MCP_SCREEN_ID });
+    else capabilities.openSurface(MCP_SCREEN_ID);
+  };
+  if (native) {
+    screens.addScreen!({ id: MCP_SCREEN_ID, title: "MCP servers", Component: McpSurface });
+    screens.addSidebarHeaderItem!({ id: MCP_SCREEN_ID, title: "MCP", Component: McpSidebarItem });
+    registerSurfaceOpener(() => screens.openScreen!({ screenId: MCP_SCREEN_ID }));
+  } else {
+    registerSurfaceOpener((id) => client.openSurface(id));
+    client.addSurface(MCP_SCREEN_ID, McpSurface);
+    client.addSidebarItem({ id: MCP_SCREEN_ID, title: "MCP", icon: "Plug", surface: MCP_SCREEN_ID });
+  }
   client.addWorkspacePanel({
     id: "mcp-connections",
     title: "MCP connections",
@@ -29,7 +56,6 @@ export default function contribute(client: PluginClientContext) {
     locations: ["workspace", "explorer"],
     Component: McpAgentPanel,
   });
-  client.addSidebarItem({ id: "mcp", title: "MCP", icon: "Plug", surface: "mcp" });
   client.addCommandCenterItem({
     id: "open-workspace-mcp",
     title: "Open workspace MCP connections",
@@ -88,8 +114,8 @@ export default function contribute(client: PluginClientContext) {
     icon: "Plug",
     keywords: ["mcp", "servers", "oauth", "add", "sync"],
     context: "global",
-    onSelect({ openSurface }) {
-      openSurface("mcp");
+    onSelect(context) {
+      openMain(context as typeof context & { openScreen?: OpenScreen });
     },
   });
   // The chip, `/mcp` and the in-chat sign-in card all open the agent's MCP

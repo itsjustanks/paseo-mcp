@@ -1,30 +1,35 @@
-import React from "react";
-import { Pressable, ScrollView, Text, View } from "react-native";
-import { HostIcon, useTokens } from "./ui";
+import React, { useState } from "react";
+import { Pressable, ScrollView, Text, View, type LayoutChangeEvent } from "react-native";
+import { TAB_INTROS, TAB_ORDER, type TabId } from "../shared/guide";
+import { Bullets, Disclosure, HostIcon, IconBadge, TYPE, useTokens } from "./ui";
 
 /**
- * Five sections, one job each, in one row. Icons are Lucide names drawn by the
- * Paseo app; `heading` is the one line under the bar saying what the section
- * is for (the bar already names it). Same pattern as AI Router's tabs.
+ * Five sections, one job each, in one row: the same underline tabs, intros
+ * and type as AI Router (the shared design standard). Icons are Lucide names
+ * drawn by the Paseo app; the words live in shared/guide.ts.
  */
-export const TABS = [
-  { id: "overview", label: "Overview", icon: "LayoutDashboard", heading: "Whether every server works and is in every AI app, and what to do next." },
-  { id: "servers", label: "Servers", icon: "Server", heading: "Every server you have, one card each. Use a card's settings button to see its tools, sign in, change or remove it." },
-  { id: "projects", label: "Projects", icon: "FolderCode", heading: "Servers a project brings with it, listed in its .mcp.json file. They're shown here; sign in from that project's workspace." },
-  { id: "transfer", label: "Import & Export", icon: "ArrowLeftRight", heading: "Add one server by hand, paste the setup text from a server's instructions, or save every server to a backup file." },
-  { id: "guide", label: "Guide & Setup", icon: "BookOpen", heading: "Five steps from a server's instructions to every AI app on this computer, and what to do when something doesn't work." },
-] as const;
+export const TABS = TAB_ORDER.map((id) => ({ id, ...TAB_INTROS[id] }));
 
-export type SectionId = (typeof TABS)[number]["id"];
+export type SectionId = TabId;
+
+/** About what one tab needs with its label (icon, name, padding). */
+const LABELLED_TAB_WIDTH = 150;
 
 /**
- * An underline tab bar in one row. Narrow screens show every section's icon
- * and the active one's label beside its icon, so nothing is hidden. Without
+ * An underline tab bar in one row. When the full labels do not fit (a narrow
+ * screen, or a half-width desktop window, measured here), every tab shows its
+ * icon and the active tab its label beside it, so nothing is cut off. Without
  * app icons, the labels scroll sideways instead.
  */
 export function TabBar({ active, onSelect }: { active: SectionId; onSelect: (id: SectionId) => void }) {
   const t = useTokens();
-  const iconsOnly = t.compact && Boolean(HostIcon);
+  const [width, setWidth] = useState<number | null>(null);
+  const tight = t.compact || (width !== null && width < TABS.length * LABELLED_TAB_WIDTH);
+  const iconsOnly = tight && Boolean(HostIcon);
+  const onLayout = (event: LayoutChangeEvent) => {
+    const next = Math.round(event.nativeEvent.layout.width);
+    if (next !== width) setWidth(next);
+  };
   const items = TABS.map((tab) => {
     const selected = tab.id === active;
     const color = selected ? t.color.accent : t.color.muted;
@@ -42,8 +47,8 @@ export function TabBar({ active, onSelect }: { active: SectionId; onSelect: (id:
           alignItems: "center",
           justifyContent: "center",
           gap: 6,
-          minHeight: t.compact ? 44 : 40,
-          paddingHorizontal: t.compact ? 10 : 12,
+          minHeight: 44,
+          paddingHorizontal: t.compact ? 8 : 11,
           marginBottom: -1,
           borderBottomWidth: 2,
           borderBottomColor: selected ? t.color.accent : "transparent",
@@ -53,7 +58,7 @@ export function TabBar({ active, onSelect }: { active: SectionId; onSelect: (id:
       >
         {HostIcon ? <HostIcon name={tab.icon} size={16} color={color} /> : null}
         {!iconsOnly || selected ? (
-          <Text numberOfLines={1} style={{ color: selected ? t.color.accent : t.color.fg, fontSize: 13, fontWeight: selected ? "700" : "500" }}>
+          <Text numberOfLines={1} style={{ ...TYPE.secondary, color: selected ? t.color.accent : t.color.fg, fontWeight: selected ? "700" : "500" }}>
             {tab.label}
           </Text>
         ) : null}
@@ -61,10 +66,10 @@ export function TabBar({ active, onSelect }: { active: SectionId; onSelect: (id:
     );
   });
   const bar = { flexDirection: "row" as const, borderBottomWidth: 1, borderBottomColor: t.color.border };
-  if (t.compact && !HostIcon) {
+  if (tight && !HostIcon) {
     // The rule sits on a wrapper: a horizontal ScrollView does not draw its own bottom border on the web.
     return (
-      <View style={{ borderBottomWidth: 1, borderBottomColor: t.color.border }}>
+      <View onLayout={onLayout} style={{ borderBottomWidth: 1, borderBottomColor: t.color.border }}>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} accessibilityRole="tablist" accessibilityLabel="MCP sections" style={{ flexGrow: 0 }}>
           {items}
         </ScrollView>
@@ -72,15 +77,42 @@ export function TabBar({ active, onSelect }: { active: SectionId; onSelect: (id:
     );
   }
   return (
-    <View accessibilityRole="tablist" accessibilityLabel="MCP sections" style={bar}>
+    <View accessibilityRole="tablist" accessibilityLabel="MCP sections" onLayout={onLayout} style={bar}>
       {items}
     </View>
   );
 }
 
-/** One line under the tabs saying what the section is for. */
-export function SectionHeading({ section }: { section: SectionId }) {
+/**
+ * The top of each tab: its icon, a clear title, one or two plain sentences on
+ * what it is for, and "What you can do here". On a phone that list folds away
+ * behind "Learn more", so the tab's own content stays near the top.
+ */
+export function TabIntro({ section }: { section: SectionId }) {
   const t = useTokens();
-  const tab = TABS.find((entry) => entry.id === section)!;
-  return <Text style={[t.text.body, { color: t.color.muted, maxWidth: 760 }]}>{tab.heading}</Text>;
+  const tab = TAB_INTROS[section];
+  const list = (
+    <View style={{ gap: 10, padding: 14, borderRadius: 14, backgroundColor: t.color.surface1, borderWidth: 1, borderColor: t.color.border }}>
+      {!t.compact ? <Text style={{ ...TYPE.secondary, fontWeight: "600", color: t.color.muted }}>What you can do here</Text> : null}
+      <Bullets items={tab.canDo} columns={!t.compact} />
+    </View>
+  );
+  return (
+    <View style={{ gap: 14 }}>
+      <View style={{ flexDirection: "row", alignItems: "flex-start", gap: 14 }}>
+        <IconBadge name={tab.icon} size={t.compact ? 40 : 46} />
+        <View style={{ flex: 1, gap: 4, minWidth: 0 }}>
+          <Text accessibilityRole="header" style={t.text.display}>{tab.title}</Text>
+          <Text style={t.text.lead}>{tab.summary}</Text>
+        </View>
+      </View>
+      {t.compact ? (
+        <Disclosure key={section} title="Learn more: what you can do here">
+          {list}
+        </Disclosure>
+      ) : (
+        list
+      )}
+    </View>
+  );
 }

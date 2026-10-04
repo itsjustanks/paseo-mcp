@@ -15,7 +15,7 @@ import {
   type LibrarySource,
 } from "../shared/library-source";
 import { plainError } from "../shared/errors";
-import { Button, Card, ConfirmButton, ErrorText, Field, Loading, Row, Segmented, Tag, Toggle, useTokens, type Status } from "./ui";
+import { Button, Card, ConfirmButton, ErrorText, Field, Loading, Row, Segmented, Tag, Toggle, TYPE, useTokens, type Status } from "./ui";
 
 const STATE: Record<LibraryState["state"], { label: string; tone: Status }> = {
   off: { label: "off", tone: "neutral" },
@@ -52,13 +52,13 @@ export function SecretField({ label, value, onChangeText, hint, placeholder }: {
         style={{
           borderWidth: 1,
           borderColor: t.color.border,
-          borderRadius: t.radius.sm,
+          borderRadius: t.radius.md,
           backgroundColor: t.color.surface0,
-          paddingVertical: t.compact ? 10 : 7,
-          paddingHorizontal: 10,
+          paddingVertical: 10,
+          paddingHorizontal: 12,
           color: t.color.fg,
           minHeight: t.control.min,
-          fontSize: t.compact ? 14 : 13,
+          fontSize: TYPE.body.fontSize,
         }}
       />
       {hint ? <Text style={t.text.caption}>{hint}</Text> : null}

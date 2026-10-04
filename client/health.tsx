@@ -12,6 +12,7 @@ import {
   type McpHealthReport,
 } from "../shared/contracts";
 import { cachedReadInterval, clockTime, failureStreak, type CachedRead } from "../shared/schedule";
+import { healthPlainWord } from "../shared/servers";
 
 export { CHECKING_POLL_MS, cachedReadInterval, type CachedRead } from "../shared/schedule";
 import { canOpenMcp, openMcp } from "./navigate";
@@ -78,21 +79,9 @@ export function healthStatus(status: McpHealth["status"]): Status {
   return "error";
 }
 
+/** The health word every screen shows: the same plain words as the Overview ("Working", "Not installed"). */
 export function healthWord(status: McpHealth["status"]): string {
-  switch (status) {
-    case "ok":
-      return "healthy";
-    case "auth-required":
-      return "OAuth";
-    case "warn":
-      return "warning";
-    case "binary-missing":
-      return "no binary";
-    case "down":
-      return "down";
-    default:
-      return "unchecked";
-  }
+  return healthPlainWord(status);
 }
 
 /** Results that need attention, split by where the definition lives relative to `directory`. */

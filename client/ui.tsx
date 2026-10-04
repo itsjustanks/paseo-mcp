@@ -76,6 +76,29 @@ export function isDarkSurface(color: string): boolean {
 const SUCCESS = { dark: "#3ecf8e", light: "#12855a" };
 const WARNING = { dark: "#e0a33e", light: "#a16207" };
 
+// ---------------------------------------------------------------------- type
+
+/**
+ * One type scale for every Paseo plugin of ours (the shared design standard,
+ * from AI Router 0.13.0), so sentences stay readable: nothing below 13 px,
+ * descriptions at 15, section titles at 17, tab titles at 20 and the page
+ * title at 22; headline numbers get 26. Spread one into a style:
+ * `{ ...TYPE.body, color }`. The `t.text` tokens below are built from it.
+ */
+export const TYPE = {
+  page: { fontSize: 22, lineHeight: 28, fontWeight: "700" },
+  tabTitle: { fontSize: 20, lineHeight: 26, fontWeight: "700" },
+  section: { fontSize: 17, lineHeight: 23, fontWeight: "600" },
+  lead: { fontSize: 16, lineHeight: 24 },
+  item: { fontSize: 15, lineHeight: 21, fontWeight: "600" },
+  body: { fontSize: 15, lineHeight: 22 },
+  secondary: { fontSize: 14, lineHeight: 20 },
+  small: { fontSize: 13, lineHeight: 18 },
+  mono: { fontSize: 13, lineHeight: 19, fontFamily: "monospace" },
+  /** A headline number, such as a token count. */
+  figure: { fontSize: 26, lineHeight: 32, fontWeight: "700" },
+} as const;
+
 // -------------------------------------------------------------------- tokens
 
 export type Tokens = ReturnType<typeof tokens>;
@@ -127,27 +150,25 @@ export function tokens(theme: PluginTheme, compact: boolean) {
       // sits above the disabled tint contrast-wise without shouting.
       placeholder: alpha(fg, 0.5),
     },
-    // Compact means narrow, not cramped: type grows a point and padding grows,
-    // because a phone is held further from nobody's face than a monitor.
+    // The shared TYPE scale, the same on wide and narrow screens. Muted grey is
+    // only for times, ids and hints (`caption`); sentences use `body`.
     text: {
-      display: { fontSize: 20, fontWeight: "700" as const, lineHeight: 26, color: fg },
-      value: { fontSize: compact ? 24 : 28, fontWeight: "700" as const, lineHeight: compact ? 30 : 34, color: fg },
-      heading: { fontSize: 15, fontWeight: "600" as const, lineHeight: 20, color: fg },
-      body: { fontSize: compact ? 14 : 13, fontWeight: "400" as const, lineHeight: compact ? 20 : 18, color: fg },
-      bodyStrong: { fontSize: compact ? 14 : 13, fontWeight: "600" as const, lineHeight: compact ? 20 : 18, color: fg },
-      label: { fontSize: 12, fontWeight: "500" as const, lineHeight: 16, color: muted },
-      caption: { fontSize: compact ? 12 : 11, fontWeight: "400" as const, lineHeight: 16, color: muted },
-      mono: {
-        fontSize: compact ? 12 : 11,
-        lineHeight: 17,
-        color: muted,
-        fontFamily: compact ? "monospace" : "Menlo",
-      },
+      page: { ...TYPE.page, color: fg },
+      display: { ...TYPE.tabTitle, color: fg },
+      value: { ...TYPE.figure, color: fg },
+      heading: { ...TYPE.section, color: fg },
+      lead: { ...TYPE.lead, color: fg },
+      body: { ...TYPE.body, fontWeight: "400" as const, color: fg },
+      bodyStrong: { ...TYPE.item, color: fg },
+      label: { ...TYPE.secondary, fontWeight: "500" as const, color: fg },
+      caption: { ...TYPE.secondary, fontWeight: "400" as const, color: muted },
+      small: { ...TYPE.small, fontWeight: "600" as const, color: fg },
+      mono: { ...TYPE.mono, color: fg, fontFamily: compact ? "monospace" : "Menlo" },
     },
     space: { xs: 4, sm: 8, md: 12, lg: 16, xl: 24, indent: 18 },
-    radius: { sm: 6, md: 10, pill: 999 },
-    control: { min: compact ? 40 : 28, hit: { top: 6, bottom: 6, left: 6, right: 6 } },
-    maxWidth: 1100,
+    radius: { sm: 8, md: 10, lg: 16, pill: 999 },
+    control: { min: compact ? 44 : 36, button: 44, hit: { top: 6, bottom: 6, left: 6, right: 6 } },
+    maxWidth: 980,
   };
 }
 
@@ -181,6 +202,17 @@ export function statusColor(t: Tokens, status: Status): string {
 
 // ----------------------------------------------------------------- structure
 
+/** The app's icon component (Lucide names), when the host provides one; looked up at runtime so an app without it still renders. */
+export const HostIcon = (HostRN as unknown as { Icon?: React.ComponentType<{ name: string; size?: number; color?: string }> }).Icon;
+
+/** The icon each tone shows beside its words, so colour is never the only channel. */
+export const TONE_ICON: Record<Status, string> = { ok: "CircleCheck", attention: "TriangleAlert", error: "CircleAlert", neutral: "Info", busy: "Loader" };
+
+/** The colour a tone is drawn in; neutral uses the accent, so "one step left" doesn't read as a warning. */
+function inkOf(t: Tokens, tone: Status | "accent"): string {
+  return tone === "accent" || tone === "neutral" ? t.color.accent : statusColor(t, tone);
+}
+
 export function Screen({
   t,
   children,
@@ -193,7 +225,7 @@ export function Screen({
   /** A header rendered above the scroll area already carries the top padding. */
   paddingTop?: number;
 }) {
-  const pad = t.compact ? 16 : 20;
+  const pad = t.compact ? 16 : 24;
   const body = (
     <View style={{ maxWidth: t.maxWidth, width: "100%", alignSelf: "center", gap: t.space.lg }}>{children}</View>
   );
@@ -213,16 +245,43 @@ export function Screen({
   );
 }
 
-/** Title, "Selected host: …" caption, and one status pill — the header every Paseo plugin shares. */
-export function Header({ title, caption, pill }: { title: string; caption: string; pill?: React.ReactNode }) {
+/** A soft circle with an icon in it: the visual anchor of cards, steps and status. Nothing without the app's icons. */
+export function IconBadge({ name, tone = "accent", size = 32 }: { name: string; tone?: Status | "accent"; size?: number }) {
   const t = useTokens();
+  if (!HostIcon) return null;
+  const color = inkOf(t, tone);
   return (
-    <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", gap: t.space.md }}>
-      <View style={{ gap: 3, flexShrink: 1, minWidth: 0 }}>
-        <Text style={t.text.display}>{title}</Text>
-        <Text style={t.text.label}>{caption}</Text>
+    <View
+      accessible={false}
+      importantForAccessibility="no-hide-descendants"
+      style={{ width: size, height: size, borderRadius: size / 2, backgroundColor: alpha(color, 0.14), alignItems: "center", justifyContent: "center", flexShrink: 0 }}
+    >
+      <HostIcon name={name} size={Math.round(size * 0.5)} color={color} />
+    </View>
+  );
+}
+
+/**
+ * The page header every plugin of ours shares: the plugin's icon, its name,
+ * and one line on its state with a coloured dot (and the word, so colour is
+ * never the only channel).
+ */
+export function Header({ title, status, caption, icon: name = "Plug" }: { title: string; status: { status: Status; label: string }; caption?: string; icon?: string }) {
+  const t = useTokens();
+  const color = statusColor(t, status.status);
+  return (
+    <View style={{ flexDirection: "row", alignItems: "center", gap: 14 }}>
+      <IconBadge name={name} size={t.compact ? 40 : 46} />
+      <View style={{ flex: 1, gap: 2, minWidth: 0 }}>
+        <Text accessibilityRole="header" numberOfLines={1} style={t.text.page}>{title}</Text>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+          <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: color }} />
+          <Text style={[t.text.caption, { flexShrink: 1 }]}>
+            <Text style={{ color, fontWeight: "600" }}>{status.label}</Text>
+            {caption ? ` · ${caption}` : ""}
+          </Text>
+        </View>
       </View>
-      {pill}
     </View>
   );
 }
@@ -243,14 +302,14 @@ export function Grid({ children, min = 240 }: { children: React.ReactNode; min?:
   );
 }
 
-/** A numbered heading for a walkthrough card. Index 0 draws no number. */
+/** A numbered heading for a walkthrough card: a filled accent circle with the number. Index 0 draws no number. */
 export function Step({ index, title }: { index: number; title: string }) {
   const t = useTokens();
   return (
-    <View style={{ flexDirection: "row", alignItems: "center", gap: t.space.sm }}>
+    <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
       {index > 0 ? (
-        <View style={{ width: 22, height: 22, borderRadius: 11, backgroundColor: t.color.accentWash, alignItems: "center", justifyContent: "center" }}>
-          <Text style={{ fontSize: 12, fontWeight: "700", color: t.color.accent }}>{index}</Text>
+        <View style={{ width: 28, height: 28, borderRadius: 14, backgroundColor: t.color.accent, alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+          <Text style={{ ...TYPE.secondary, fontWeight: "700", color: t.color.accentFg }}>{index}</Text>
         </View>
       ) : null}
       <Text style={[t.text.heading, { flexShrink: 1 }]}>{title}</Text>
@@ -282,8 +341,8 @@ export function Toolbar({
         }}
       >
         {title || subtitle ? (
-          <View style={{ gap: 2, flexShrink: 1 }}>
-            {title ? <Text style={t.text.display}>{title}</Text> : null}
+          <View style={{ gap: 4, flexShrink: 1 }}>
+            {title ? <Text accessibilityRole="header" style={t.text.display}>{title}</Text> : null}
             {subtitle ? <Text style={t.text.caption}>{subtitle}</Text> : null}
           </View>
         ) : null}
@@ -294,13 +353,14 @@ export function Toolbar({
   );
 }
 
+/** A titled group: the title at section size, an optional trailing action, then its content. */
 export function Section({ title, trailing, children }: { title?: string; trailing?: React.ReactNode; children: React.ReactNode }) {
   const t = useTokens();
   return (
-    <View style={{ gap: t.space.sm }}>
+    <View style={{ gap: t.space.md }}>
       {title ? (
         <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: t.space.sm }}>
-          <Text style={t.text.label}>{title.toUpperCase()}</Text>
+          <Text accessibilityRole="header" style={[t.text.heading, { flexShrink: 1 }]}>{title}</Text>
           {trailing}
         </View>
       ) : null}
@@ -309,12 +369,19 @@ export function Section({ title, trailing, children }: { title?: string; trailin
   );
 }
 
+/**
+ * A card. With `title` it opens with AI Router's card header: an icon badge,
+ * the title at section size and an optional subtitle. `tone` tints its border.
+ */
 export function Card({
   children,
   level = 1,
   padded = true,
   tone,
   grow,
+  title,
+  icon: name,
+  subtitle,
 }: {
   children: React.ReactNode;
   level?: 1 | 2;
@@ -322,23 +389,85 @@ export function Card({
   tone?: Status;
   /** Fill the height it is given: cards in one gallery row line up. */
   grow?: boolean;
+  title?: string;
+  icon?: string;
+  subtitle?: string;
 }) {
   const t = useTokens();
+  const pad = t.compact ? 16 : 18;
   return (
     <View
       style={{
         backgroundColor: level === 1 ? t.color.surface1 : t.color.surface2,
-        borderRadius: t.radius.md,
+        borderRadius: t.radius.lg,
         borderWidth: 1,
-        borderColor: tone ? alpha(statusColor(t, tone), 0.35) : t.color.borderSubtle,
-        padding: padded ? (t.compact ? t.space.md : t.space.lg) : 0,
+        borderColor: tone ? alpha(statusColor(t, tone), 0.4) : t.color.border,
+        padding: padded ? pad : 0,
         // An unpadded card holds a list of Rows, which bring their own padding and dividers.
-        gap: padded ? t.space.md : 0,
+        gap: padded ? 14 : 0,
         overflow: "hidden",
         ...(grow ? { flexGrow: 1 } : {}),
       }}
     >
+      {title ? (
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 12, ...(padded ? {} : { padding: pad, paddingBottom: 8 }) }}>
+          {name ? <IconBadge name={name} tone={tone && tone !== "neutral" ? tone : "accent"} size={34} /> : null}
+          <View style={{ flex: 1, gap: 2, minWidth: 0 }}>
+            <Text accessibilityRole="header" style={t.text.heading}>{title}</Text>
+            {subtitle ? <Text style={t.text.caption}>{subtitle}</Text> : null}
+          </View>
+        </View>
+      ) : null}
       {children}
+    </View>
+  );
+}
+
+/**
+ * The big status card at the top of Overview: a tinted band with an icon and
+ * the state in words, then whatever details and actions follow. Neutral uses
+ * the accent, so "one step left" does not read as a warning.
+ */
+export function HeroCard({ tone, icon: name, title, lead, children }: { tone: Status; icon: string; title: string; lead?: React.ReactNode; children?: React.ReactNode }) {
+  const t = useTokens();
+  const color = inkOf(t, tone);
+  return (
+    <View style={{ backgroundColor: t.color.surface1, borderColor: alpha(color, 0.4), borderWidth: 1, borderRadius: 18, overflow: "hidden" }}>
+      <View style={{ flexDirection: "row", alignItems: "center", gap: 16, padding: t.compact ? 16 : 18, backgroundColor: alpha(color, 0.09) }}>
+        <IconBadge name={name} tone={tone === "neutral" || tone === "busy" ? "accent" : tone} size={t.compact ? 44 : 52} />
+        <View style={{ flex: 1, gap: 4, minWidth: 0 }}>
+          <Text accessibilityRole="header" style={[t.text.display, tone === "error" ? { color } : null]}>{title}</Text>
+          {lead ? typeof lead === "string" ? <Text style={t.text.body}>{lead}</Text> : lead : null}
+        </View>
+      </View>
+      {children ? <View style={{ padding: t.compact ? 16 : 18, gap: 12 }}>{children}</View> : null}
+    </View>
+  );
+}
+
+/** A thin rule between the parts of a card. */
+export function Divider() {
+  const t = useTokens();
+  return <View style={{ height: 1, backgroundColor: t.color.border }} />;
+}
+
+/** Short lines, each with a check mark in the accent colour. `columns` lays them out two across when there is room. */
+export function Bullets({ items, columns, icon: name = "Check" }: { items: readonly string[]; columns?: boolean; icon?: string }) {
+  const t = useTokens();
+  return (
+    <View style={{ flexDirection: columns ? "row" : "column", flexWrap: columns ? "wrap" : "nowrap", columnGap: 20, rowGap: 8 }}>
+      {items.map((line) => (
+        <View key={line} style={{ flexDirection: "row", alignItems: "flex-start", gap: 10, ...(columns ? { flexBasis: "45%", minWidth: 240, flexGrow: 1, flexShrink: 1 } : {}) }}>
+          {HostIcon ? (
+            <View style={{ paddingTop: 3 }}>
+              <HostIcon name={name} size={16} color={t.color.accent} />
+            </View>
+          ) : (
+            <Text style={[t.text.body, { color: t.color.accent }]}>•</Text>
+          )}
+          <Text style={[t.text.body, { flex: 1 }]}>{line}</Text>
+        </View>
+      ))}
     </View>
   );
 }
@@ -374,7 +503,7 @@ export function Row({
   const t = useTokens();
   const body = (
     <View style={{ gap: t.space.sm }}>
-      <View style={{ flexDirection: t.compact ? "column" : "row", alignItems: t.compact ? "stretch" : "center", gap: t.space.sm }}>
+      <View style={{ flexDirection: t.compact ? "column" : "row", alignItems: t.compact ? "stretch" : "center", gap: t.space.md }}>
         {leading ? <View style={{ flexShrink: 0 }}>{leading}</View> : null}
         <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
           {typeof title === "string" ? (
@@ -399,6 +528,7 @@ export function Row({
               flexDirection: "row",
               gap: t.space.sm,
               flexShrink: 0,
+              alignItems: "center",
               justifyContent: t.compact ? "flex-start" : "flex-end",
             }}
           >
@@ -411,11 +541,11 @@ export function Row({
   );
 
   const style = {
-    paddingVertical: t.compact ? t.space.md : t.space.sm + 2,
-    paddingHorizontal: t.space.md,
+    paddingVertical: t.space.md,
+    paddingHorizontal: t.compact ? t.space.md : t.space.lg,
     borderTopWidth: first ? 0 : 1,
     borderTopColor: t.color.borderSubtle,
-    borderLeftWidth: tone ? 2 : 0,
+    borderLeftWidth: tone ? 3 : 0,
     borderLeftColor: tone ? statusColor(t, tone) : "transparent",
     backgroundColor: selected ? t.color.accentWash : "transparent",
   };
@@ -439,11 +569,11 @@ export function Facts({ items }: { items: Array<{ value: string; tone?: Status }
   const list = items.filter(Boolean) as Array<{ value: string; tone?: Status }>;
   if (list.length === 0) return null;
   return (
-    <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 6 }}>
+    <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", columnGap: 8, rowGap: 2 }}>
       {list.map((item, index) => (
         <React.Fragment key={`${item.value}-${index}`}>
           {index > 0 ? <Text style={[t.text.caption, { opacity: 0.5 }]}>·</Text> : null}
-          <Text style={[t.text.caption, item.tone ? { color: statusColor(t, item.tone) } : null]}>{item.value}</Text>
+          <Text style={[t.text.caption, item.tone ? { color: statusColor(t, item.tone), fontWeight: "600" } : null]}>{item.value}</Text>
         </React.Fragment>
       ))}
     </View>
@@ -459,7 +589,7 @@ export function StatusPill({ status, label }: { status: Status; label: string })
   return (
     <View style={{ flexDirection: "row", alignItems: "center", gap: 6, flexShrink: 0 }}>
       <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: color }} />
-      <Text style={[t.text.caption, { color, fontWeight: "600" }]}>{label}</Text>
+      <Text style={{ ...TYPE.secondary, color: status === "neutral" ? t.color.fg : color, fontWeight: "600" }}>{label}</Text>
     </View>
   );
 }
@@ -482,7 +612,11 @@ export function StatusLine({
   action?: { label: string; onPress: () => void } | null;
 }) {
   const t = useTokens();
-  const link = action ? <Button label={`${action.label} →`} variant="ghost" onPress={action.onPress} /> : null;
+  const link = action ? (
+    <Pressable accessibilityRole="link" accessibilityLabel={action.label} hitSlop={t.control.hit} onPress={action.onPress} style={{ paddingVertical: 4 }}>
+      <Text style={{ ...TYPE.secondary, color: t.color.accent, fontWeight: "600" }}>{`${action.label} →`}</Text>
+    </Pressable>
+  ) : null;
   const state = (
     <>
       <StatusPill status={status} label={value} />
@@ -492,9 +626,9 @@ export function StatusLine({
   // Narrow: the name and its link on one line, the state under it, so the link never wraps onto a line of its own.
   if (t.compact) {
     return (
-      <View style={{ gap: 2 }}>
-        <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: t.space.sm, minHeight: 24 }}>
-          <Text style={t.text.label}>{label}</Text>
+      <View style={{ gap: 2, paddingVertical: 2 }}>
+        <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: t.space.sm, minHeight: 28 }}>
+          <Text style={{ ...TYPE.body, fontWeight: "500", color: t.color.fg }}>{label}</Text>
           {link}
         </View>
         <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", columnGap: t.space.sm, rowGap: 2 }}>{state}</View>
@@ -502,42 +636,43 @@ export function StatusLine({
     );
   }
   return (
-    <View style={{ flexDirection: "row", alignItems: "center", gap: t.space.sm, minHeight: 28 }}>
-      <Text style={[t.text.label, { width: 96 }]}>{label}</Text>
-      <View style={{ flex: 1, minWidth: 0, flexDirection: "row", flexWrap: "wrap", alignItems: "center", columnGap: t.space.sm, rowGap: 2 }}>{state}</View>
+    <View style={{ flexDirection: "row", alignItems: "center", gap: 10, minHeight: 32 }}>
+      <Text style={{ ...TYPE.body, fontWeight: "500", color: t.color.fg, width: 140 }}>{label}</Text>
+      <View style={{ flex: 1, minWidth: 0, flexDirection: "row", flexWrap: "wrap", alignItems: "center", columnGap: 10, rowGap: 2 }}>{state}</View>
       {link}
     </View>
   );
 }
 
+/** A small label in a soft pill of its tone. */
 export function Tag({ label, tone }: { label: string; tone?: Status }) {
   const t = useTokens();
   const color = tone ? statusColor(t, tone) : t.color.muted;
   return (
     <View
       style={{
-        backgroundColor: tone ? alpha(color, 0.16) : t.color.surface2,
-        borderRadius: t.radius.sm,
+        alignSelf: "flex-start",
+        backgroundColor: tone ? alpha(color, 0.12) : t.color.surface2,
+        borderColor: tone ? alpha(color, 0.45) : t.color.border,
+        borderWidth: 1,
+        borderRadius: t.radius.pill,
         paddingVertical: 2,
-        paddingHorizontal: 7,
+        paddingHorizontal: 10,
       }}
     >
-      <Text style={{ fontSize: 11, lineHeight: 15, fontWeight: "600", color }}>{label}</Text>
+      <Text style={{ ...TYPE.small, fontWeight: "600", color: tone ? color : t.color.fg }}>{label}</Text>
     </View>
   );
 }
-
-/** The app's icon component (Lucide names), when the host provides one; looked up at runtime so an app without it still renders. */
-export const HostIcon = (HostRN as unknown as { Icon?: React.ComponentType<{ name: string; size?: number; color?: string }> }).Icon;
 
 /**
  * A quiet square button with an app icon, and its label for screen readers.
  * Without app icons it falls back to a ghost text button with the label.
  */
-export function IconButton({ icon, label, onPress }: { icon: string; label: string; onPress: () => void }) {
+export function IconButton({ icon: name, label, onPress }: { icon: string; label: string; onPress: () => void }) {
   const t = useTokens();
   if (!HostIcon) return <Button label={label} variant="ghost" onPress={onPress} />;
-  const size = t.compact ? 40 : 30;
+  const size = t.compact ? 44 : 38;
   return (
     <Pressable
       accessibilityRole="button"
@@ -547,15 +682,15 @@ export function IconButton({ icon, label, onPress }: { icon: string; label: stri
       style={({ pressed }) => ({
         width: size,
         height: size,
-        borderRadius: t.radius.sm,
+        borderRadius: t.radius.md,
         borderWidth: 1,
         borderColor: t.color.border,
-        backgroundColor: pressed ? alpha(t.color.muted, 0.12) : "transparent",
+        backgroundColor: pressed ? alpha(t.color.muted, 0.12) : t.color.surface2,
         alignItems: "center",
         justifyContent: "center",
       })}
     >
-      <HostIcon name={icon} size={16} color={t.color.muted} />
+      <HostIcon name={name} size={18} color={t.color.fg} />
     </Pressable>
   );
 }
@@ -571,14 +706,14 @@ export function Checkbox({ checked, onChange, label, children }: { checked: bool
       {...({ "aria-checked": checked } as object)}
       onPress={() => onChange(!checked)}
       hitSlop={t.control.hit}
-      style={{ flexDirection: "row", alignItems: "flex-start", gap: t.space.sm }}
+      style={{ flexDirection: "row", alignItems: "flex-start", gap: 10 }}
     >
       <View
         style={{
-          width: 18,
-          height: 18,
+          width: 20,
+          height: 20,
           marginTop: 1,
-          borderRadius: 4,
+          borderRadius: 5,
           borderWidth: 1.5,
           borderColor: checked ? t.color.accent : t.color.borderStrong,
           backgroundColor: checked ? t.color.accent : "transparent",
@@ -586,7 +721,7 @@ export function Checkbox({ checked, onChange, label, children }: { checked: bool
           justifyContent: "center",
         }}
       >
-        {checked ? <Text style={{ color: t.color.accentFg, fontSize: 12, lineHeight: 14, fontWeight: "700" }}>✓</Text> : null}
+        {checked ? <Text style={{ color: t.color.accentFg, fontSize: 13, lineHeight: 15, fontWeight: "700" }}>✓</Text> : null}
       </View>
       <View style={{ flex: 1, minWidth: 0 }}>{children ?? <Text style={t.text.body}>{label}</Text>}</View>
     </Pressable>
@@ -597,7 +732,7 @@ export function Checkbox({ checked, onChange, label, children }: { checked: bool
 export function Pills<T extends string>({ options, value, onChange }: { options: ReadonlyArray<{ value: T; label: string }>; value: T; onChange: (value: T) => void }) {
   const t = useTokens();
   return (
-    <View style={{ flexDirection: "row", flexWrap: "wrap", gap: t.space.xs }}>
+    <View style={{ flexDirection: "row", flexWrap: "wrap", gap: t.space.sm }}>
       {options.map((option) => {
         const active = option.value === value;
         return (
@@ -608,15 +743,16 @@ export function Pills<T extends string>({ options, value, onChange }: { options:
             onPress={() => onChange(option.value)}
             hitSlop={t.control.hit}
             style={{
-              paddingVertical: t.compact ? 7 : 4,
-              paddingHorizontal: 10,
+              minHeight: t.compact ? 40 : 34,
+              justifyContent: "center",
+              paddingHorizontal: 12,
               borderRadius: t.radius.pill,
               borderWidth: 1,
               borderColor: active ? t.color.accentLine : t.color.border,
               backgroundColor: active ? t.color.accentWash : "transparent",
             }}
           >
-            <Text style={{ fontSize: 12, fontWeight: "600", color: active ? t.color.accent : t.color.muted }}>{option.label}</Text>
+            <Text style={{ ...TYPE.secondary, fontWeight: "600", color: active ? t.color.accent : t.color.fg }}>{option.label}</Text>
           </Pressable>
         );
       })}
@@ -626,6 +762,10 @@ export function Pills<T extends string>({ options, value, onChange }: { options:
 
 export type ButtonVariant = "primary" | "secondary" | "ghost" | "danger";
 
+/**
+ * AI Router's button: 44 px tall, 15 px words. Ghost is a text link in the
+ * accent colour, for secondary actions beside a filled one.
+ */
 export function Button({
   label,
   onPress,
@@ -633,6 +773,7 @@ export function Button({
   disabled,
   loading,
   grow,
+  icon: name,
 }: {
   label: string;
   onPress: () => void;
@@ -640,15 +781,19 @@ export function Button({
   disabled?: boolean;
   loading?: boolean;
   grow?: boolean;
+  /** A Lucide icon before the label, when the app draws icons. */
+  icon?: string;
 }) {
   const t = useTokens();
   const off = Boolean(disabled) || Boolean(loading);
+  const ghost = variant === "ghost";
   const palette = {
     primary: { bg: t.color.accent, border: t.color.accent, fg: t.color.accentFg },
     secondary: { bg: t.color.surface2, border: t.color.border, fg: t.color.fg },
     ghost: { bg: "transparent", border: "transparent", fg: t.color.accent },
     danger: { bg: t.color.dangerWash, border: t.color.dangerLine, fg: t.color.danger },
   }[variant];
+  const fg = off ? t.color.disabled : palette.fg;
   return (
     <Pressable
       accessibilityRole="button"
@@ -659,23 +804,21 @@ export function Button({
       hitSlop={t.control.hit}
       style={({ pressed }) => ({
         flexGrow: grow ? 1 : 0,
-        minHeight: t.control.min,
-        paddingHorizontal: variant === "ghost" ? 8 : 12,
-        borderRadius: t.radius.sm,
-        borderWidth: 1,
-        borderColor: off && variant !== "ghost" ? t.color.borderSubtle : palette.border,
+        minHeight: ghost ? 36 : t.control.button,
+        paddingHorizontal: ghost ? 6 : 14,
+        borderRadius: t.radius.md,
+        borderWidth: ghost ? 0 : 1,
+        borderColor: off && !ghost ? t.color.borderSubtle : palette.border,
         backgroundColor: off && variant === "primary" ? alpha(t.color.accent, 0.25) : palette.bg,
         alignItems: "center",
         justifyContent: "center",
         flexDirection: "row",
-        gap: 6,
+        gap: 8,
         opacity: pressed ? 0.75 : 1,
       })}
     >
-      {loading ? <ActivityIndicator size="small" color={off ? t.color.disabled : palette.fg} /> : null}
-      <Text style={{ fontSize: t.compact ? 13 : 12, fontWeight: "600", color: off ? t.color.disabled : palette.fg }}>
-        {label}
-      </Text>
+      {loading ? <ActivityIndicator size="small" color={fg} /> : name && HostIcon ? <HostIcon name={name} size={16} color={fg} /> : null}
+      <Text style={{ ...TYPE.body, fontWeight: "600", color: fg }}>{label}</Text>
     </Pressable>
   );
 }
@@ -696,7 +839,6 @@ export function Toggle({
 }) {
   const t = useTokens();
   const off = Boolean(disabled) || Boolean(loading);
-  const color = value ? t.color.success : t.color.muted;
   return (
     <Pressable
       accessibilityRole="switch"
@@ -707,21 +849,27 @@ export function Toggle({
       disabled={off}
       hitSlop={t.control.hit}
       onPress={() => onChange(!value)}
-      style={{ flexDirection: "row", alignItems: "center", gap: 6, minHeight: t.control.min, opacity: off ? 0.6 : 1 }}
+      style={{ flexDirection: "row", alignItems: "center", gap: 8, minHeight: t.control.min, opacity: off ? 0.6 : 1 }}
     >
       <View
         style={{
-          width: 32,
-          height: 18,
-          borderRadius: 9,
+          width: 44,
+          height: 26,
+          borderRadius: 13,
           padding: 2,
-          backgroundColor: value ? alpha(t.color.success, 0.35) : alpha(t.color.muted, 0.25),
-          alignItems: value ? "flex-end" : "flex-start",
+          borderWidth: 1,
+          borderColor: value ? t.color.accent : t.color.border,
+          backgroundColor: value ? t.color.accent : t.color.surface2,
+          justifyContent: "center",
         }}
       >
-        <View style={{ width: 14, height: 14, borderRadius: 7, backgroundColor: color }} />
+        <View style={{ width: 20, height: 20, borderRadius: 10, backgroundColor: value ? t.color.accentFg : t.color.muted, alignSelf: value ? "flex-end" : "flex-start" }} />
       </View>
-      {loading ? <ActivityIndicator size="small" color={t.color.muted} /> : <Text style={[t.text.caption, { color, fontWeight: "600" }]}>{value ? "on" : "off"}</Text>}
+      {loading ? (
+        <ActivityIndicator size="small" color={t.color.muted} />
+      ) : (
+        <Text style={{ ...TYPE.secondary, fontWeight: "600", color: value ? t.color.fg : t.color.muted }}>{value ? "On" : "Off"}</Text>
+      )}
     </Pressable>
   );
 }
@@ -771,8 +919,8 @@ export function Segmented<T extends string>({
       style={{
         flexDirection: "row",
         backgroundColor: t.color.surface2,
-        borderRadius: t.radius.sm,
-        padding: 2,
+        borderRadius: t.radius.md,
+        padding: 3,
         alignSelf: "flex-start",
       }}
     >
@@ -787,30 +935,33 @@ export function Segmented<T extends string>({
             onPress={() => onChange(option.value)}
             hitSlop={t.control.hit}
             style={{
-              paddingVertical: t.compact ? 8 : 5,
-              paddingHorizontal: 12,
+              paddingHorizontal: 14,
               minHeight: t.control.min,
               alignItems: "center",
               justifyContent: "center",
-              borderRadius: t.radius.sm - 2,
+              borderRadius: t.radius.md - 2,
               backgroundColor: active ? t.color.surface0 : "transparent",
             }}
           >
-            <Text
-              style={{
-                fontSize: t.compact ? 13 : 12,
-                fontWeight: "600",
-                color: option.disabled ? t.color.disabled : active ? t.color.fg : t.color.muted,
-              }}
-            >
-              {option.label}
-            </Text>
+            <Text style={{ ...TYPE.secondary, fontWeight: "600", color: option.disabled ? t.color.disabled : active ? t.color.fg : t.color.muted }}>{option.label}</Text>
           </Pressable>
         );
       })}
     </View>
   );
 }
+
+const inputStyle = (t: Tokens, mono: boolean | undefined) =>
+  ({
+    borderWidth: 1,
+    borderColor: t.color.border,
+    borderRadius: t.radius.md,
+    backgroundColor: t.color.surface0,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    color: t.color.fg,
+    ...(mono ? { fontFamily: t.compact ? "monospace" : "Menlo", fontSize: TYPE.mono.fontSize } : { fontSize: TYPE.body.fontSize }),
+  }) as const;
 
 export function Field({
   label,
@@ -835,7 +986,7 @@ export function Field({
 }) {
   const t = useTokens();
   return (
-    <View style={{ gap: 4 }}>
+    <View style={{ gap: 6 }}>
       {label ? <Text style={t.text.label}>{label}</Text> : null}
       <TextInput
         value={value}
@@ -848,18 +999,7 @@ export function Field({
         autoCorrect={false}
         autoCapitalize="none"
         spellCheck={false}
-        style={{
-          borderWidth: 1,
-          borderColor: t.color.border,
-          borderRadius: t.radius.sm,
-          backgroundColor: t.color.surface0,
-          paddingVertical: t.compact ? 10 : 7,
-          paddingHorizontal: 10,
-          color: t.color.fg,
-          minHeight: minHeight ?? (multiline ? 120 : t.control.min),
-          textAlignVertical: multiline ? "top" : "center",
-          ...(mono ? { fontFamily: t.compact ? "monospace" : "Menlo", fontSize: t.compact ? 12 : 11.5 } : { fontSize: t.compact ? 14 : 13 }),
-        }}
+        style={{ ...inputStyle(t, mono), minHeight: minHeight ?? (multiline ? 120 : t.control.min), textAlignVertical: multiline ? "top" : "center" }}
       />
       {hint ? <Text style={t.text.caption}>{hint}</Text> : null}
     </View>
@@ -891,7 +1031,7 @@ export function ComboBox({
     .filter((option) => !query || option.value.toLowerCase().includes(query) || option.label.toLowerCase().includes(query))
     .slice(0, 12);
   return (
-    <View style={{ gap: 4 }}>
+    <View style={{ gap: 6 }}>
       <Text style={t.text.label}>{label}</Text>
       <TextInput
         value={value}
@@ -907,21 +1047,10 @@ export function ComboBox({
         autoCorrect={false}
         autoCapitalize="none"
         spellCheck={false}
-        style={{
-          borderWidth: 1,
-          borderColor: !allowCustom && value && !known ? t.color.danger : t.color.border,
-          borderRadius: t.radius.sm,
-          backgroundColor: t.color.surface0,
-          paddingVertical: t.compact ? 10 : 7,
-          paddingHorizontal: 10,
-          color: t.color.fg,
-          minHeight: t.control.min,
-          fontFamily: t.compact ? "monospace" : "Menlo",
-          fontSize: t.compact ? 12 : 11.5,
-        }}
+        style={{ ...inputStyle(t, true), borderColor: !allowCustom && value && !known ? t.color.danger : t.color.border, minHeight: t.control.min }}
       />
       {open && matches.length > 0 ? (
-        <View style={{ backgroundColor: t.color.surface2, borderRadius: t.radius.sm, overflow: "hidden" }}>
+        <View style={{ backgroundColor: t.color.surface2, borderRadius: t.radius.md, overflow: "hidden" }}>
           {matches.map((option, index) => (
             <Pressable
               key={option.value}
@@ -931,8 +1060,8 @@ export function ComboBox({
                 setOpen(false);
               }}
               style={({ pressed }) => ({
-                paddingVertical: t.compact ? 10 : 7,
-                paddingHorizontal: 10,
+                paddingVertical: 10,
+                paddingHorizontal: 12,
                 borderTopWidth: index === 0 ? 0 : 1,
                 borderTopColor: t.color.borderSubtle,
                 backgroundColor: pressed ? t.color.accentWash : option.value === value ? t.color.surface0 : "transparent",
@@ -973,11 +1102,13 @@ export function CodeBlock({ children, tone, copy = true }: { children: string; t
         flexDirection: "row",
         alignItems: "flex-start",
         gap: t.space.sm,
-        backgroundColor: t.color.surface2,
-        borderRadius: t.radius.sm,
-        borderLeftWidth: tone ? 2 : 0,
-        borderLeftColor: tone ? statusColor(t, tone) : "transparent",
-        padding: t.space.sm,
+        backgroundColor: t.color.surface0,
+        borderWidth: 1,
+        borderColor: t.color.border,
+        borderRadius: t.radius.md,
+        borderLeftWidth: tone ? 3 : 1,
+        borderLeftColor: tone ? statusColor(t, tone) : t.color.border,
+        padding: 12,
       }}
     >
       <Text selectable style={[t.text.mono, { flex: 1, minWidth: 0 }]}>
@@ -994,15 +1125,14 @@ export function CodeBlock({ children, tone, copy = true }: { children: string; t
             setTimeout(() => setCopied(false), 1500);
           }}
         >
-          <Text style={[t.text.caption, { fontWeight: "600", color: copied ? t.color.success : t.color.accent }]}>
-            {copied ? "Copied" : "Copy"}
-          </Text>
+          <Text style={{ ...TYPE.secondary, fontWeight: "600", color: copied ? t.color.success : t.color.accent }}>{copied ? "Copied" : "Copy"}</Text>
         </Pressable>
       ) : null}
     </View>
   );
 }
 
+/** A message on a soft fill of its tone, with the tone's icon; neutral uses the accent. */
 export function Notice({
   tone = "neutral",
   children,
@@ -1013,21 +1143,27 @@ export function Notice({
   onDismiss?: () => void;
 }) {
   const t = useTokens();
-  const color = statusColor(t, tone);
+  const color = inkOf(t, tone);
   return (
     <View
       style={{
         flexDirection: "row",
-        alignItems: "center",
-        gap: t.space.sm,
-        backgroundColor: alpha(color, 0.12),
-        borderRadius: t.radius.sm,
-        borderLeftWidth: 2,
+        alignItems: "flex-start",
+        gap: 10,
+        backgroundColor: alpha(color, 0.08),
+        borderRadius: 12,
+        borderWidth: 1,
+        borderColor: alpha(color, 0.3),
+        borderLeftWidth: 4,
         borderLeftColor: color,
-        paddingVertical: t.space.sm,
-        paddingHorizontal: t.space.md,
+        padding: 14,
       }}
     >
+      {HostIcon ? (
+        <View style={{ paddingTop: 2 }}>
+          <HostIcon name={TONE_ICON[tone]} size={18} color={color} />
+        </View>
+      ) : null}
       <View style={{ flex: 1, minWidth: 0 }}>
         {typeof children === "string" ? <Text style={t.text.body}>{children}</Text> : children}
       </View>
@@ -1041,7 +1177,7 @@ export function EmptyState({ title, body, action }: { title: string; body: strin
   return (
     <View style={{ padding: t.space.xl, gap: t.space.sm, alignItems: "flex-start" }}>
       <Text style={t.text.heading}>{title}</Text>
-      <Text style={[t.text.body, { color: t.color.muted, maxWidth: 520 }]}>{body}</Text>
+      <Text style={[t.text.body, { maxWidth: 560 }]}>{body}</Text>
       {action ? <View style={{ paddingTop: t.space.sm }}>{action}</View> : null}
     </View>
   );
@@ -1059,7 +1195,7 @@ export function Loading({ label }: { label?: string }) {
 
 export function ErrorText({ children }: { children: string }) {
   const t = useTokens();
-  return <Text style={[t.text.caption, { color: t.color.danger }]}>{children}</Text>;
+  return <Text style={[t.text.body, { color: t.color.danger }]}>{children}</Text>;
 }
 
 /**
@@ -1072,8 +1208,8 @@ export function StaleNote({ what, at, reason, onRetry }: { what: string; at: str
   return (
     <Notice tone="attention">
       <View style={{ gap: t.space.xs }}>
-        <Text style={t.text.body}>{`Could not refresh ${what}. Showing what was read at ${at}.`}</Text>
-        <Text style={t.text.caption}>{reason}</Text>
+        <Text style={t.text.bodyStrong}>{`Could not refresh ${what}. Showing what was read at ${at}.`}</Text>
+        <Text style={t.text.body}>{reason}</Text>
         {onRetry ? (
           <View style={{ flexDirection: "row" }}>
             <Button label="Try again" variant="ghost" onPress={onRetry} />
@@ -1084,6 +1220,7 @@ export function StaleNote({ what, at, reason, onRetry }: { what: string; at: str
   );
 }
 
+/** A "Learn more" style toggle: a chevron and a label in the accent colour; the children show while it is open. */
 export function Disclosure({ title, children, open: initial = false }: { title: string; children: React.ReactNode; open?: boolean }) {
   const t = useTokens();
   const [open, setOpen] = useState(initial);
@@ -1091,13 +1228,18 @@ export function Disclosure({ title, children, open: initial = false }: { title: 
     <View style={{ gap: t.space.sm }}>
       <Pressable
         accessibilityRole="button"
+        accessibilityLabel={title}
         accessibilityState={{ expanded: open }}
         onPress={() => setOpen((value) => !value)}
         hitSlop={t.control.hit}
-        style={{ flexDirection: "row", alignItems: "center", gap: 6, minHeight: t.control.min, justifyContent: "flex-start" }}
+        style={{ flexDirection: "row", alignItems: "center", gap: 6, minHeight: 36, alignSelf: "flex-start" }}
       >
-        <Text style={{ fontSize: 11, color: t.color.muted }}>{open ? "▾" : "▸"}</Text>
-        <Text style={[t.text.caption, { fontWeight: "600" }]}>{title}</Text>
+        {HostIcon ? (
+          <HostIcon name={open ? "ChevronDown" : "ChevronRight"} size={16} color={t.color.accent} />
+        ) : (
+          <Text style={{ ...TYPE.body, color: t.color.accent }}>{open ? "▾" : "▸"}</Text>
+        )}
+        <Text style={{ ...TYPE.body, fontWeight: "600", color: t.color.accent, flexShrink: 1 }}>{title}</Text>
       </Pressable>
       {open ? <View style={{ gap: t.space.sm, paddingLeft: t.space.indent }}>{children}</View> : null}
     </View>
@@ -1111,7 +1253,7 @@ export function Coverage({ present, total, label }: { present: number; total: nu
   const status: Status = fraction === 1 ? "ok" : fraction === 0 ? "neutral" : "attention";
   return (
     <View style={{ gap: 4, minWidth: 120, flexGrow: 1 }}>
-      <View style={{ height: 4, borderRadius: 2, backgroundColor: alpha(t.color.muted, 0.2), overflow: "hidden" }}>
+      <View style={{ height: 6, borderRadius: 3, backgroundColor: alpha(t.color.muted, 0.2), overflow: "hidden" }}>
         <View style={{ width: `${Math.round(fraction * 100)}%`, height: "100%", backgroundColor: statusColor(t, status) }} />
       </View>
       <Text style={t.text.caption}>{label ?? `${present} of ${total}`}</Text>
@@ -1124,7 +1266,7 @@ export function Meter({ fraction, label, tone = "neutral" }: { fraction: number;
   const value = Math.max(0, Math.min(1, Number.isFinite(fraction) ? fraction : 0));
   return (
     <View style={{ gap: 4, flexGrow: 1, minWidth: 120 }}>
-      <View style={{ height: 4, borderRadius: 2, backgroundColor: alpha(t.color.muted, 0.2), overflow: "hidden" }}>
+      <View style={{ height: 6, borderRadius: 3, backgroundColor: alpha(t.color.muted, 0.2), overflow: "hidden" }}>
         <View style={{ width: `${Math.round(value * 100)}%`, height: "100%", backgroundColor: statusColor(t, tone) }} />
       </View>
       <Text style={t.text.caption}>{label}</Text>

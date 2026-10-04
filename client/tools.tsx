@@ -71,7 +71,7 @@ export function toolsWord(entry: McpServerTools): string {
     case "auth-required":
       return "sign in to list";
     case "stdio":
-      return "runs on demand";
+      return "listed while it runs";
     default:
       return "not listed";
   }
@@ -202,7 +202,7 @@ function reasonText(entry: McpServerTools): string {
     case "auth-required":
       return "This server lists its tools once you've signed in. Connect from this server's sign-in rows below; the list then appears in the AI app.";
     case "stdio":
-      return `Command server: ${entry.note}. The plugin does not start processes, so nothing is listed here rather than guessed.`;
+      return "This server is a program on this computer that starts only while an assistant uses it, so its tools are listed then. Nothing is listed here rather than guessed.";
     default:
       return `Tools could not be listed: ${entry.note || "the server gave no answer"}.`;
   }

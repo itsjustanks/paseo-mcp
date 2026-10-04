@@ -11,6 +11,7 @@ import {
   type InjectionProvider,
   type InjectionSettings,
 } from "../shared/settings";
+import { TYPE } from "./ui";
 
 type Ready = Extract<SettingsState<typeof injectionSettings.schema>, { status: "ready" }>;
 
@@ -47,7 +48,7 @@ export function describeInjection(values: InjectionSettings): string {
 }
 
 function InjectionControls({ settings, theme }: { settings: Ready; theme: PluginSurfaceProps["theme"] }) {
-  const muted = useMemo(() => ({ color: theme.colors.foregroundMuted, fontSize: 13 }), [theme]);
+  const muted = useMemo(() => ({ ...TYPE.secondary, color: theme.colors.foregroundMuted }), [theme]);
   const save = useCallback(
     (patch: Partial<InjectionSettings>) => {
       void settings.save({ ...settings.values, ...patch }, settings.revision);
@@ -137,7 +138,7 @@ export function describeHealth(values: HealthSettings): string {
 }
 
 function HealthControls({ settings, theme }: { settings: HealthReady; theme: PluginSurfaceProps["theme"] }) {
-  const muted = useMemo(() => ({ color: theme.colors.foregroundMuted, fontSize: 13 }), [theme]);
+  const muted = useMemo(() => ({ ...TYPE.secondary, color: theme.colors.foregroundMuted }), [theme]);
   const save = useCallback(
     (patch: Partial<HealthSettings>) => {
       void settings.save({ ...settings.values, ...patch }, settings.revision);

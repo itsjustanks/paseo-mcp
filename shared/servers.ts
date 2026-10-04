@@ -308,42 +308,42 @@ export function removePlan(
   const targets = chosen.map((dest) => dest.id);
   const credentialCount = chosen.filter((dest) => server.inlineCredentialsIn.includes(dest.id)).length;
   const labels = chosen.map((dest) => dest.label);
-  const where = scope === "everywhere" ? "everywhere" : scope === "all" ? `all ${plural(chosen.length, "editor")}` : labels[0];
+  const where = scope === "everywhere" ? "everywhere" : scope === "all" ? `all ${plural(chosen.length, "app")}` : labels[0];
   const lines: string[] = [];
   if (chosen.length > 0) {
     lines.push(
       scope === "one"
-        ? `1 definition will be deleted, from ${labels[0]}.`
-        : `${plural(chosen.length, "editor definition")} will be deleted: ${labels.join(", ")}.`,
+        ? `It will be deleted from ${labels[0]}.`
+        : `It will be deleted from ${plural(chosen.length, "app")}: ${labels.join(", ")}.`,
     );
   }
   if (scope === "everywhere") {
     lines.push(
       files.length > 0
-        ? `${plural(files.length, "project .mcp.json file")} will lose it too: ${files.map((entry) => entry.path).join(", ")}. Those files are usually version-controlled, so the change shows up in git status.`
-        : "No project .mcp.json defines it, so only the editor configs change.",
+        ? `${plural(files.length, "project")} will lose it too: ${files.map((entry) => entry.path).join(", ")}. Those files are usually kept in git, so the change shows up in git status.`
+        : "No project lists it, so only your AI apps change.",
     );
   } else if (projects.length > 0) {
     lines.push(
-      `${plural(projects.length, "project .mcp.json file")} still define${projects.length === 1 ? "s" : ""} it (${projects.map((entry) => entry.project).join(", ")}); Claude Code reads those back in that project. Choose Remove everywhere to take it out of them too.`,
+      `${plural(projects.length, "project")} still list${projects.length === 1 ? "s" : ""} it (${projects.map((entry) => entry.project).join(", ")}), and Claude Code picks it up again in ${projects.length === 1 ? "that project" : "those projects"}. Choose Remove everywhere to take it out of them too.`,
     );
   }
   if (scope === "one" && present.length > 1) {
-    lines.push(`The other ${plural(present.length - 1, "editor")} keep${present.length - 1 === 1 ? "s" : ""} ${server.name}.`);
+    lines.push(present.length - 1 === 1 ? `The other app keeps ${server.name}.` : `The other ${plural(present.length - 1, "app")} keep ${server.name}.`);
   }
   if (credentialCount > 0) {
     lines.push(
       chosen.length === 1
-        ? "It carries credentials inside the definition; those are lost with it."
+        ? "It has a key saved in its settings; the key is lost with it."
         : credentialCount === chosen.length
-          ? "Every one of them carries credentials inside the definition; those are lost with it."
+          ? "Every one of them has a key saved in its settings; those keys are lost with it."
           : credentialCount === 1
-            ? "One of them carries credentials inside the definition; those are lost with it."
-            : `${credentialCount} of them carry credentials inside the definition; those are lost with them.`,
+            ? "One of them has a key saved in its settings; that key is lost with it."
+            : `${credentialCount} of them have a key saved in their settings; those keys are lost with them.`,
     );
   }
   lines.push(
-    "Each file is backed up before it is written. OAuth grants held by the editor are not touched. There is no undo: Export this server first if you might want it back.",
+    "Each file is backed up before it is written. The apps' sign-ins are not touched. There is no undo: Export this server first if you might want it back.",
   );
   return {
     scope,
@@ -355,10 +355,10 @@ export function removePlan(
     lines,
     confirmLabel:
       scope === "everywhere"
-        ? `Remove from ${[chosen.length > 0 ? plural(chosen.length, "editor") : "", files.length > 0 ? plural(files.length, "project file") : ""].filter(Boolean).join(" and ")}`
+        ? `Remove from ${[chosen.length > 0 ? plural(chosen.length, "app") : "", files.length > 0 ? plural(files.length, "project") : ""].filter(Boolean).join(" and ")}`
         : scope === "all"
-          ? `Remove from ${plural(chosen.length, "editor")}`
-          : "Remove from this editor",
+          ? `Remove from ${plural(chosen.length, "app")}`
+          : "Remove from this app",
   };
 }
 

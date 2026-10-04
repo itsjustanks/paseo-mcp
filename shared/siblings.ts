@@ -6,7 +6,7 @@ export const AI_ROUTER = {
   /** The plugin id Paseo installs it under. */
   id: "ai-router",
   name: "AI Router",
-  pitch: "One endpoint for every model — pair your Claude, Codex and other accounts once on an OmniRoute server, then switch models in any chat.",
+  pitch: "One connection for all your team's AI accounts: sign in to Claude, Codex and the rest once on a shared router, then use any of their models in any chat.",
   repoUrl: "https://github.com/itsjustanks/paseo-plugin-ai-router",
   installSource: "git:https://github.com/itsjustanks/paseo-plugin-ai-router.git:apps/paseo",
 } as const;

@@ -4,7 +4,7 @@ import { useRpc, useWorkspace } from "@getpaseo/plugin/client";
 import { useToast } from "@getpaseo/plugin/client/react-native";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Linking, Text, View } from "react-native";
+import { Text, View } from "react-native";
 import { z } from "zod";
 import {
   healthNeedsAttention,
@@ -35,7 +35,7 @@ import { ownedFromRow } from "../shared/catalog";
 import { CURATED_CATALOG } from "../shared/catalog-curated";
 import { SERVER_FILTERS, healthPlainNote, healthPlainWord, projectFilesFor, providerName, removePlan, serverGallery, signInState, type RemovePlan, type RemoveScope, type ServerCardModel, type ServerFilter } from "../shared/servers";
 import { COPY_ALL_EXPLAINER, COPY_ALL_LABEL } from "../shared/copy-all";
-import { MCP_EXPLAINER, MCP_LEARN_MORE, overviewNextStep, overviewVerdict, type OverviewTarget } from "../shared/overview";
+import { overviewNextStep, overviewVerdict, type OverviewTarget } from "../shared/overview";
 import { summarizeTools } from "../shared/tools";
 import {
   ParsedServerSchema,
@@ -60,7 +60,9 @@ import { CopyAllPanel } from "./copy-all";
 import { HealthSummary, ServerHealthTag, healthCheckedLabel, healthStatus, healthWord, splitIssues, useHealth } from "./health";
 import { setSignInFocus, useSignInFocus } from "./focus";
 import { canOpenMcp, openMcp, takePendingServer } from "./navigate";
-import { SectionHeading, TabBar, type SectionId } from "./navigation";
+import { OverviewGuide } from "./guide";
+import { useOpenLink } from "./links";
+import { TabBar, TabIntro, type SectionId } from "./navigation";
 import { PaseoToolsAgentRow, PaseoToolsDisclosure, PaseoToolsLine } from "./paseo-tools";
 import { AiRouterCard } from "./promo";
 import { ServerTools, toolsStatus, toolsWord, useTools } from "./tools";
@@ -70,12 +72,14 @@ import {
   CodeBlock,
   ConfirmButton,
   Disclosure,
+  Divider,
   EmptyState,
   ErrorText,
   Facts,
   Field,
   Grid,
   Header,
+  HeroCard,
   IconButton,
   Loading,
   Notice,
@@ -92,6 +96,7 @@ import {
   Toggle,
   Toolbar,
   TokensProvider,
+  TYPE,
   copyToClipboard,
   useTokens,
   useUi,
@@ -544,6 +549,7 @@ function AuthRows({
   onlyAccount?: { provider: string; email: string };
 }) {
   const t = useTokens();
+  const openLinkInBrowser = useOpenLink();
   const [redirects, setRedirects] = useState<Record<string, string>>({});
   const rows = accounts
     .filter(
@@ -660,7 +666,7 @@ function AuthRows({
                         <View style={{ flexDirection: "row", gap: t.space.sm }}>
                           {session.url ? (
                             <>
-                              <Button label="Open sign-in" onPress={() => void Linking.openURL(session.url)} />
+                              <Button label="Open sign-in" icon="ExternalLink" onPress={() => openLinkInBrowser(session.url)} />
                               <Button label="Copy link" onPress={() => onCopied(copyToClipboard(session.url))} />
                             </>
                           ) : null}
@@ -880,9 +886,9 @@ function RemovePanel({
     <View style={{ gap: t.space.sm }}>
       {!armed ? (
         <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: t.space.sm }}>
-          <Text style={t.text.caption}>Remove from</Text>
-          {present.length > 0 ? <Button label="this editor…" variant="danger" disabled={pending} onPress={() => onArm({ scope: "one" })} /> : null}
-          {present.length > 1 ? <Button label={`all ${plural(present.length, "editor")}`} variant="danger" disabled={pending} onPress={() => onArm({ scope: "all" })} /> : null}
+          <Text style={t.text.label}>Remove from</Text>
+          {present.length > 0 ? <Button label="this app…" variant="danger" disabled={pending} onPress={() => onArm({ scope: "one" })} /> : null}
+          {present.length > 1 ? <Button label={`all ${plural(present.length, "app")}`} variant="danger" disabled={pending} onPress={() => onArm({ scope: "all" })} /> : null}
           <Button label={`everywhere (${everywhereCount})`} variant="danger" disabled={pending} onPress={() => onArm({ scope: "everywhere" })} />
         </View>
       ) : null}
@@ -971,14 +977,14 @@ function ServerGalleryCard({ card, checking, onOpen }: { card: ServerCardModel; 
       <View style={{ flexDirection: "row", alignItems: "flex-start", gap: t.space.sm }}>
         <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
           <Text numberOfLines={1} style={t.text.heading}>{card.name}</Text>
-          <Text numberOfLines={2} style={[t.text.body, { color: t.color.muted, minHeight: t.compact ? 40 : 36 }]}>{card.description}</Text>
+          <Text numberOfLines={2} style={[t.text.body, { minHeight: 44 }]}>{card.description}</Text>
         </View>
         <IconButton icon="Settings" label={`Settings for ${card.name}`} onPress={onOpen} />
       </View>
       <View style={{ gap: t.space.xs }}>
         <StatusPill status={waiting ? "busy" : card.health ? healthStatus(card.health) : "neutral"} label={waiting ? "Checking…" : card.healthWord} />
-        <Text numberOfLines={2} style={[t.text.caption, card.missing > 0 ? { color: t.color.warning } : null]}>{card.apps}</Text>
-        <Text numberOfLines={1} style={[t.text.caption, card.signIn === "needs" ? { color: t.color.warning } : null]}>{card.signInText}</Text>
+        <Text numberOfLines={2} style={{ ...TYPE.secondary, color: card.missing > 0 ? t.color.warning : t.color.fg }}>{card.apps}</Text>
+        <Text numberOfLines={1} style={{ ...TYPE.secondary, color: card.signIn === "needs" ? t.color.warning : t.color.fg }}>{card.signInText}</Text>
       </View>
     </Card>
   );
@@ -1000,6 +1006,23 @@ function editorFacts(presentIn: string[], destinations: Destination[]): string[]
     counts.set(name, (counts.get(name) ?? 0) + 1);
   }
   return [...counts.entries()].map(([name, count]) => (count > 1 ? `${name} ×${count}` : name));
+}
+
+/** The AI apps found on this computer, by name: "Claude", "Codex", "Kimi Code". */
+function appNames(destinations: Destination[]): string[] {
+  return [...new Set(destinations.map((dest) => dest.label.split(" · ")[0]!.trim()).filter(Boolean))];
+}
+
+/** The hero's tone and icons, from the verdict and where the next step goes. */
+function heroFor(status: Status, target: OverviewTarget, facts: { state: string; staleAt: string | null; servers: number; signIn: number }): { tone: Status; icon: string; action?: string } {
+  if (facts.state === "error") return { tone: "error", icon: "CircleAlert", action: "RefreshCw" };
+  if (facts.state === "loading") return { tone: "neutral", icon: "Loader", action: "RefreshCw" };
+  if (facts.staleAt) return { tone: "attention", icon: "Clock", action: "RefreshCw" };
+  if (facts.servers === 0) return { tone: "neutral", icon: "Plus", action: "Plus" };
+  if (status === "ok") return { tone: "ok", icon: "CircleCheck", action: "Server" };
+  if (target.section === "copy") return { tone: "attention", icon: "Copy", action: "Copy" };
+  if (status === "error") return { tone: "error", icon: "CircleAlert", action: "Search" };
+  return { tone: "attention", icon: facts.signIn > 0 && target.section === "servers" && target.filter === "sign-in" ? "KeyRound" : "TriangleAlert", action: "Search" };
 }
 
 export function McpSurface({ theme, layout, host }: PluginSurfaceProps) {
@@ -1454,9 +1477,8 @@ function McpBody({ layout, host }: PluginSurfaceProps) {
   // lacks it, through the same write as "Add to missing" (client/copy-all.tsx,
   // server/copy-all.ts). It replaces 0.14's "Sync accounts".
   const copyCard = (
-    <Card>
-      <Step index={0} title="Use your servers in every AI app" />
-      <Text style={[t.text.body, { maxWidth: 680 }]}>{COPY_ALL_EXPLAINER}</Text>
+    <Card title="Use your servers in every AI app" icon="Copy">
+      <Text style={t.text.body}>{COPY_ALL_EXPLAINER}</Text>
       {ready ? (
         <Text style={t.text.caption}>
           {gapServers.length > 0
@@ -1465,7 +1487,7 @@ function McpBody({ layout, host }: PluginSurfaceProps) {
         </Text>
       ) : null}
       <View style={{ flexDirection: "row", flexWrap: "wrap", gap: t.space.sm }}>
-        <Button label={COPY_ALL_LABEL} variant="secondary" onPress={() => setCopyOpen(true)} />
+        <Button label={COPY_ALL_LABEL} icon="Copy" variant="secondary" onPress={() => setCopyOpen(true)} />
       </View>
     </Card>
   );
@@ -1477,9 +1499,9 @@ function McpBody({ layout, host }: PluginSurfaceProps) {
   };
   const connectedCount = servers.filter((entry) => signInOf(entry) === "connected").length;
 
-  // At a glance: one line per question, each with the link to where it is dealt with.
+  // At a glance: one line per question, each with the link to where it is dealt with. Inside the hero.
   const glance = (
-    <Card>
+    <View style={{ gap: 4 }}>
       <StatusLine
         label="Health"
         {...(!health
@@ -1527,50 +1549,32 @@ function McpBody({ layout, host }: PluginSurfaceProps) {
           ? { value: projectGroups.length > 0 ? `${plural(projectGroups.length, "project has", "projects have")} their own servers` : "no project has its own servers", status: "neutral" as Status, action: { label: "Projects", onPress: () => go("projects") } }
           : { value: "reading", status: "neutral" as Status })}
       />
-    </Card>
+    </View>
   );
 
-  // Always on top: what this is, for someone who has never heard of MCP.
-  const explainer = (
-    <Card>
-      <Text style={t.text.heading}>What are MCP servers?</Text>
-      <Text style={[t.text.body, { maxWidth: 680 }]}>{MCP_EXPLAINER}</Text>
-      <Disclosure title="Learn more">
-        {MCP_LEARN_MORE.map((item) => (
-          <View key={item.title} style={{ gap: 2, maxWidth: 680 }}>
-            <Text style={t.text.bodyStrong}>{item.title}</Text>
-            <Text style={[t.text.body, { color: t.color.muted }]}>{item.body}</Text>
-          </View>
-        ))}
-      </Disclosure>
-    </Card>
-  );
-
+  // The hero says the state in words, with the next step, the at-a-glance lines and the actions under it.
+  const hero = heroFor(headerPill.status, nextStep.target, overviewFacts);
   const overview = (
     <View style={{ gap: t.space.lg }}>
-      {explainer}
-      <Card tone={headerPill.status === "neutral" ? undefined : headerPill.status}>
-        <Text style={t.text.label}>NEXT STEP</Text>
-        <View style={{ gap: t.space.xs }}>
-          <Text style={t.text.heading}>{nextStep.title}</Text>
-          <Text style={[t.text.body, { color: t.color.muted, maxWidth: 680 }]}>{nextStep.detail}</Text>
-          {matrixQuery.isError && !matrixQuery.data ? <ErrorText>{errorText(matrixQuery.error)}</ErrorText> : null}
-        </View>
-        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: t.space.sm }}>
+      <HeroCard tone={hero.tone} icon={hero.icon} title={headerPill.status === "ok" ? "All set: your servers are working" : nextStep.title} lead={nextStep.detail}>
+        {matrixQuery.isError && !matrixQuery.data ? <ErrorText>{errorText(matrixQuery.error)}</ErrorText> : null}
+        {glance}
+        <Divider />
+        <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: t.space.sm }}>
           <Button
             label={nextStep.label}
             variant="primary"
+            icon={hero.action}
             loading={nextStep.target.section === "refresh" && matrixQuery.isFetching}
             onPress={() => goTo(nextStep.target)}
           />
-          {servers.length > 0 && nextStep.label !== "Browse servers" ? <Button label="Browse servers" onPress={toServers("all")} /> : null}
+          {servers.length > 0 && nextStep.label !== "Browse servers" ? <Button label="Browse servers" icon="Server" onPress={toServers("all")} /> : null}
           <Button label="Read the walkthrough" variant="ghost" onPress={() => go("guide")} />
           {nextStep.target.section !== "refresh" ? (
             <Button label="Refresh" variant="ghost" loading={matrixQuery.isFetching || healthQuery.isFetching} onPress={refreshAll} />
           ) : null}
         </View>
-      </Card>
-      {glance}
+      </HeroCard>
       {attention.length > 0 ? (
         <Section title={`Needs attention · ${attention.length}`}>
           <Card padded={false}>
@@ -1597,6 +1601,7 @@ function McpBody({ layout, host }: PluginSurfaceProps) {
         </Section>
       ) : null}
       {copyCard}
+      <OverviewGuide apps={appNames(destinations)} onAdd={() => go("servers", { server: null })} onCopy={() => setCopyOpen(true)} />
       <AiRouterCard />
     </View>
   );
@@ -1676,7 +1681,7 @@ function McpBody({ layout, host }: PluginSurfaceProps) {
         </Card>
       ) : null}
       {gallery.cards.length > 0 ? (
-        <Grid min={230}>
+        <Grid min={280}>
           {gallery.cards.map((card) => (
             <ServerGalleryCard key={card.name} card={card} checking={healthQuery.isFetching} onOpen={() => selectServer(card.name)} />
           ))}
@@ -1741,9 +1746,9 @@ function McpBody({ layout, host }: PluginSurfaceProps) {
           <Text style={[t.text.display, { flexShrink: 1 }]} numberOfLines={1}>
             {server.name}
           </Text>
-          <Tag label={server.transport} />
-          {inlineCredentialCount > 0 ? <Tag label={`credentials in ${inlineCredentialCount}`} /> : null}
-          {oauthDestinations.length > 0 ? <Tag label={`OAuth on ${oauthDestinations.length}`} /> : null}
+          <Tag label={server.transport === "http" ? "On the web" : server.transport === "stdio" ? "On this computer" : "Kind unknown"} />
+          {inlineCredentialCount > 0 ? <Tag label={`Key saved in ${plural(inlineCredentialCount, "app")}`} /> : null}
+          {oauthDestinations.length > 0 ? <Tag label={`Sign-in in ${plural(oauthDestinations.length, "app")}`} /> : null}
           {serverHealth ? (
             <StatusPill status={healthStatus(serverHealth.status)} label={healthWord(serverHealth.status)} />
           ) : null}
@@ -1751,9 +1756,9 @@ function McpBody({ layout, host }: PluginSurfaceProps) {
         </View>
         <Facts
           items={[
-            { value: `${server.presentIn.length} of ${plural(destinations.length, "editor")}` },
+            { value: `In ${server.presentIn.length} of ${plural(destinations.length, "AI app")}` },
             ...editorFacts(server.presentIn, destinations).map((value) => ({ value })),
-            projectFilesFor(server.name, projectServers).length > 0 ? { value: plural(projectFilesFor(server.name, projectServers).length, "project .mcp.json file") } : null,
+            projectFilesFor(server.name, projectServers).length > 0 ? { value: `In ${plural(projectFilesFor(server.name, projectServers).length, "project")}` } : null,
             server.detail ? { value: server.detail } : null,
             healthQuery.data ? { value: healthCheckedLabel(healthQuery.data, (iso) => new Date(iso).toLocaleString()) } : null,
           ]}
@@ -1764,7 +1769,7 @@ function McpBody({ layout, host }: PluginSurfaceProps) {
         <View style={{ flexDirection: "row", flexWrap: "wrap", gap: t.space.sm }}>
           {missing.length > 0 ? (
             <Button
-              label={`Add to ${missing.length} missing`}
+              label={`Add to the ${plural(missing.length, "app")} missing it`}
               variant="primary"
               loading={applyMutation.isPending}
               onPress={() => applyMutation.mutate({ name: server.name, targets: missing.map((dest) => dest.id) })}
@@ -1872,7 +1877,7 @@ function McpBody({ layout, host }: PluginSurfaceProps) {
         </Notice>
       ) : null}
 
-      <Section title="Editors">
+      <Section title="AI apps">
         <Card padded={false}>
           {destinations.map((dest, index) => {
             const present = server.presentIn.includes(dest.id);
@@ -1890,15 +1895,15 @@ function McpBody({ layout, host }: PluginSurfaceProps) {
                 subtitle={
                   present
                     ? rawRow?.nativePreview ?? (rawQuery.isFetching ? "reading…" : undefined)
-                    : "not defined here"
+                    : "Not in this app"
                 }
                 meta={
                   present && server.inlineCredentialsIn.includes(dest.id) ? (
-                    <StatusPill status="ok" label="credentials in definition" />
+                    <StatusPill status="ok" label="Key saved in its settings" />
                   ) : present && destinationOauth?.known ? (
                     <StatusPill
                       status={destinationOauth.auth === "connected" ? "ok" : "attention"}
-                      label={destinationOauth.auth === "connected" ? "OAuth connected" : "OAuth needed"}
+                      label={destinationOauth.auth === "connected" ? "Signed in" : "Needs sign-in"}
                     />
                   ) : undefined
                 }
@@ -2282,8 +2287,7 @@ function McpBody({ layout, host }: PluginSurfaceProps) {
           </Card>
         ))}
       </Grid>
-      <Card>
-        <Step index={0} title="When something does not work" />
+      <Card title="When something doesn't work" icon="LifeBuoy">
         <Text style={t.text.body}>
           Sign-in happens on the computer running Paseo, which may not be the one in front of you. Connect opens the server's sign-in page in a browser there.
         </Text>
@@ -2316,18 +2320,18 @@ function McpBody({ layout, host }: PluginSurfaceProps) {
             ? transferSection
             : guideSection;
 
-  const pad = t.compact ? 16 : 20;
+  const pad = t.compact ? 16 : 24;
   return (
     <View style={{ flex: 1, backgroundColor: t.color.surface0 }}>
       {/* Padded the same way as Screen below, so the header, the tab bar and the content share one left edge. */}
       <View style={{ paddingHorizontal: pad, paddingTop: pad }}>
         <View style={{ width: "100%", maxWidth: t.maxWidth, alignSelf: "center", gap: t.space.md }}>
-          <Header title="MCP" caption={`Selected host: ${host.label}`} pill={<StatusPill status={headerPill.status} label={headerPill.label} />} />
+          <Header title="MCP servers" status={headerPill} caption={`on ${host.label}`} />
           <TabBar active={section} onSelect={(next) => { setCopyOpen(false); go(next, next === "servers" ? { server: null } : {}); }} />
         </View>
       </View>
       <Screen t={t} paddingTop={t.space.lg}>
-        {copyOpen || (section === "servers" && server) ? null : <SectionHeading section={section} />}
+        {copyOpen || (section === "servers" && server) ? null : <TabIntro section={section} />}
         {matrixStale ? (
           <StaleNote what="your AI apps' settings" at={readAt(matrixQuery.dataUpdatedAt)} reason={errorText(matrixQuery.error)} onRetry={refreshAll} />
         ) : matrixQuery.isError && section !== "overview" ? (
@@ -2413,7 +2417,7 @@ export function WorkspaceBody({
   intro,
   providerId,
   agentId,
-  context,
+  chatSection,
 }: Pick<PluginWorkspacePanelProps, "host" | "workspaceId"> & {
   caption?: string;
   intro?: React.ReactNode;
@@ -2421,8 +2425,12 @@ export function WorkspaceBody({
   providerId?: string;
   /** The agent panel's agent, so servers other plugins added to it are listed and counted. */
   agentId?: string;
-  /** 0.14.0: the agent panel's context section (client/chat.tsx), under the load. */
-  context?: React.ReactNode;
+  /**
+   * 0.14.0: the agent panel's chat section (client/chat.tsx), under the load.
+   * Not called `context`: the host hands every panel `context: "workspace"`,
+   * which the workspace panel passes on, and a string here was drawn as text.
+   */
+  chatSection?: React.ReactNode;
 }) {
   const t = useTokens();
   const toast = useToast();
@@ -2742,15 +2750,11 @@ export function WorkspaceBody({
     </View>
   ) : null;
 
-  const pad = t.compact ? 16 : 20;
+  const pad = t.compact ? 16 : 24;
   return (
     <View style={{ flex: 1, backgroundColor: t.color.surface0 }}>
       <View style={{ padding: pad, paddingBottom: t.space.md, gap: t.space.md, width: "100%", maxWidth: t.maxWidth, alignSelf: "center" }}>
-        <Header
-          title={workspace?.name ?? "MCP connections"}
-          caption={`Selected host: ${host.label} · ${caption}`}
-          pill={<StatusPill status={pill.status} label={pill.label} />}
-        />
+        <Header title={workspace?.name ?? "MCP connections"} status={pill} caption={`${caption} · on ${host.label}`} icon={agentId ? "Bot" : "FolderCode"} />
         {intro}
         {signInFocus && agentId ? (
           <SignInFocus
@@ -2762,7 +2766,7 @@ export function WorkspaceBody({
           />
         ) : null}
         {data && !server ? <WorkspaceContext data={data} providerId={providerId} attention={attention} added={agentId ? agentServersQuery.data?.pluginServers : undefined} /> : null}
-        {data && !server ? context : null}
+        {data && !server ? chatSection : null}
         <HealthSummary directory={workspace?.directory ?? ""} names={loaded} />
         <View style={{ flexDirection: "row" }}>
           <Button label="Refresh" variant="ghost" loading={workspaceQuery.isFetching || healthQuery.isFetching} onPress={refresh} />

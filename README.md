@@ -275,12 +275,20 @@ directly; if it is missing or invalid, the setting stays off.
 Five sections: **Overview**, **Servers**, **Projects**, **Import & Export**, **Guide & Setup**. The
 words are for people who have never heard of MCP: plain English, and any term explained where it appears.
 
-**Overview** opens with what this is: "MCP servers connect your AI assistants to the apps you already
-use, like Notion, Supabase or Linear, so an assistant can read and act in them. Add a server once here,
-and every AI app on this computer can use it." **Learn more** says what a server is, web servers versus
-ones that run on this computer, signing in, and why fewer servers keep assistants quick (the words are
-in `shared/overview.ts`). Then the next step, the at-a-glance lines (AI apps, sign-in, tools, Paseo's
-own tools, projects, in plain words), what needs attention, and **Use your servers in every AI app**.
+Since 0.17.0 it looks and reads like AI Router, the shared design standard of our Paseo plugins: one
+type scale (15 px sentences, nothing below 13; `TYPE` in `client/ui.tsx`), a header with the plug icon,
+"MCP servers" and the state with a coloured dot, underline tabs with icons (icons only, plus the active
+label, when the labels don't fit), and on every tab its title, one or two plain sentences and "What you
+can do here" (behind **Learn more** on a phone). The words are in `shared/guide.ts`, tested for plain
+English. On Paseo 0.11 the page is a full screen with the app's own sidebar row; on 0.10 and later links
+open in the system browser. Older apps keep the surface and sidebar item they had, decided at runtime
+(`shared/host-features.ts`), so `requirements.paseo` stays `>=0.8.0`.
+
+**Overview** opens with a status card: the state in words ("Fix the server that isn't working", "All
+set: your servers are working"), the next step and its button, and the at-a-glance lines (health, AI
+apps, sign-in, tools, Paseo's own tools, projects). Then what needs attention, **Use your servers in
+every AI app**, and the guide: **What are MCP servers?**, **How it works** (four steps with arrows),
+**How to use it** (numbered steps) and **Words you'll see**.
 
 **Copy to all my AI apps** (0.15.0; it replaces **Sync accounts**) copies every user-level server into
 every AI app and account on this host that doesn't have it: Claude → Codex and Kimi, Codex → Claude, and
@@ -321,9 +329,9 @@ Each server's page offers three scopes, each a two-step confirm that names the f
 
 | Scope | What is written |
 | --- | --- |
-| this editor | One editor config (pick which when the server is in several) |
-| all editors | Every editor config that defines it |
-| everywhere | All editors plus every registered project's `.mcp.json` that defines it |
+| this app | One AI app's config (pick which when the server is in several) |
+| all apps | Every AI app config that defines it |
+| everywhere | All apps plus every registered project's `.mcp.json` that defines it |
 
 Only **everywhere** keeps the server gone: Claude Code reads a project's `.mcp.json` straight back, so
 the other two scopes say which projects still define it. Project files are backed up first, rewritten

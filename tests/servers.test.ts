@@ -58,34 +58,34 @@ test("remove plan for one editor names the file, counts one, and says who keeps 
   assert.ok(plan);
   assert.deepEqual(plan.targets, [codex.id]);
   assert.equal(plan.title, "Remove jam from Codex · demo@example.com (primary)?");
-  assert.equal(plan.lines[0], "1 definition will be deleted, from Codex · demo@example.com (primary).");
-  assert.equal(plan.lines[1], "The other 2 editors keep jam.");
+  assert.equal(plan.lines[0], "It will be deleted from Codex · demo@example.com (primary).");
+  assert.equal(plan.lines[1], "The other 2 apps keep jam.");
   assert.match(plan.lines.at(-1)!, /no undo.*Export/i);
   assert.equal(plan.credentialCount, 0);
-  assert.equal(plan.confirmLabel, "Remove from this editor");
+  assert.equal(plan.confirmLabel, "Remove from this app");
 });
 
 test("remove plan for all editors lists every file, counts them, and flags inline credentials", () => {
   const plan = removePlan(server("heroui-pro", [claude.id, codex.id, work.id, kimi.id], [claude.id, codex.id]), destinations, "all");
   assert.ok(plan);
   assert.deepEqual(plan.targets, destinations.map((entry) => entry.id));
-  assert.equal(plan.title, "Remove heroui-pro from all 4 editors?");
-  assert.equal(plan.lines[0], `4 editor definitions will be deleted: ${destinations.map((entry) => entry.label).join(", ")}.`);
+  assert.equal(plan.title, "Remove heroui-pro from all 4 apps?");
+  assert.equal(plan.lines[0], `It will be deleted from 4 apps: ${destinations.map((entry) => entry.label).join(", ")}.`);
   assert.equal(plan.credentialCount, 2);
-  assert.equal(plan.lines[1], "2 of them carry credentials inside the definition; those are lost with them.");
-  assert.equal(plan.confirmLabel, "Remove from 4 editors");
+  assert.equal(plan.lines[1], "2 of them have a key saved in their settings; those keys are lost with them.");
+  assert.equal(plan.confirmLabel, "Remove from 4 apps");
 });
 
 test("remove plan wording for a single definition that carries its own token", () => {
   const plan = removePlan(server("supabase", [work.id], [work.id]), destinations, "all");
   assert.ok(plan);
-  assert.equal(plan.title, "Remove supabase from all 1 editor?");
-  assert.equal(plan.lines[1], "It carries credentials inside the definition; those are lost with it.");
+  assert.equal(plan.title, "Remove supabase from all 1 app?");
+  assert.equal(plan.lines[1], "It has a key saved in its settings; the key is lost with it.");
   // Scope one on the only editor says nothing about others keeping it.
   const one = removePlan(server("supabase", [work.id], [work.id]), destinations, "one", work.id);
   assert.ok(one);
   assert.equal(one.lines.length, 3);
-  assert.equal(one.lines[1], "It carries credentials inside the definition; those are lost with it.");
+  assert.equal(one.lines[1], "It has a key saved in its settings; the key is lost with it.");
 });
 
 test("remove plan is null when there is nothing to remove", () => {
@@ -117,20 +117,20 @@ test("remove plan for everywhere names every project file, counts them, and warn
   assert.equal(plan.title, "Remove jam from everywhere?");
   assert.deepEqual(plan.targets, [claude.id, codex.id]);
   assert.deepEqual(plan.projectFiles, [`${HOME}/projects/data-glue/.mcp.json`, `${HOME}/projects/unfold/.mcp.json`]);
-  assert.equal(plan.lines[0], `2 editor definitions will be deleted: ${claude.label}, ${codex.label}.`);
-  assert.match(plan.lines[1], /^2 project \.mcp\.json files will lose it too: .*data-glue\/\.mcp\.json, .*unfold\/\.mcp\.json\. .*git status/);
+  assert.equal(plan.lines[0], `It will be deleted from 2 apps: ${claude.label}, ${codex.label}.`);
+  assert.match(plan.lines[1], /^2 projects will lose it too: .*data-glue\/\.mcp\.json, .*unfold\/\.mcp\.json\. .*git status/);
   assert.match(plan.lines.at(-1)!, /backed up.*no undo/i);
-  assert.equal(plan.confirmLabel, "Remove from 2 editors and 2 project files");
+  assert.equal(plan.confirmLabel, "Remove from 2 apps and 2 projects");
   // Only in projects: still a plan, with no editor line.
   const only = removePlan(server("expo", []), destinations, "everywhere", undefined, projectFilesFor("expo", projectServers));
   assert.ok(only);
-  assert.match(only.lines[0], /^1 project \.mcp\.json file will lose it too/);
-  assert.equal(only.confirmLabel, "Remove from 1 project file");
+  assert.match(only.lines[0], /^1 project will lose it too/);
+  assert.equal(only.confirmLabel, "Remove from 1 project");
   // Nothing in projects: says so instead of listing nothing.
   const none = removePlan(server("linear", [claude.id]), destinations, "everywhere", undefined, []);
   assert.ok(none);
-  assert.equal(none.lines[1], "No project .mcp.json defines it, so only the editor configs change.");
-  assert.equal(none.confirmLabel, "Remove from 1 editor");
+  assert.equal(none.lines[1], "No project lists it, so only your AI apps change.");
+  assert.equal(none.confirmLabel, "Remove from 1 app");
 });
 
 test("remove plan for one or all editors warns when a project file would bring the server back", () => {
@@ -138,9 +138,9 @@ test("remove plan for one or all editors warns when a project file would bring t
   const all = removePlan(server("jam", [claude.id, codex.id]), destinations, "all", undefined, files);
   assert.ok(all);
   assert.deepEqual(all.projectFiles, []);
-  assert.match(all.lines[1], /^2 project \.mcp\.json files still define it \(data-glue, unfold\); Claude Code reads those back.*Remove everywhere/);
+  assert.match(all.lines[1], /^2 projects still list it \(data-glue, unfold\), and Claude Code picks it up again in those projects.*Remove everywhere/);
   const one = removePlan(server("jam", [claude.id, codex.id]), destinations, "one", claude.id, files);
   assert.ok(one);
-  assert.match(one.lines[1], /still define it/);
-  assert.equal(one.lines[2], "The other 1 editor keeps jam.");
+  assert.match(one.lines[1], /still list it/);
+  assert.equal(one.lines[2], "The other app keeps jam.");
 });
