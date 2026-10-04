@@ -99,6 +99,15 @@ export const TYPE = {
   figure: { fontSize: 26, lineHeight: 32, fontWeight: "700" },
 } as const;
 
+/**
+ * One spacing scale for every screen (the shared design standard §3, as in
+ * AI Router 0.15.0). Screens use these names, never raw numbers: `section`
+ * between cards and sections, `card` inside a card, `row` between the lines
+ * of a card, `sm`/`xs`/`hair` for tight pairs (an icon and its text).
+ */
+export const SPACE = { hair: 2, xs: 4, sm: 8, row: 12, md: 16, card: 20, section: 24 } as const;
+export const RADIUS = { card: 16, control: 10, pill: 999 } as const;
+
 // -------------------------------------------------------------------- tokens
 
 export type Tokens = ReturnType<typeof tokens>;
@@ -165,8 +174,8 @@ export function tokens(theme: PluginTheme, compact: boolean) {
       small: { ...TYPE.small, fontWeight: "600" as const, color: fg },
       mono: { ...TYPE.mono, color: fg, fontFamily: compact ? "monospace" : "Menlo" },
     },
-    space: { xs: 4, sm: 8, md: 12, lg: 16, xl: 24, indent: 18 },
-    radius: { sm: 8, md: 10, lg: 16, pill: 999 },
+    space: SPACE,
+    radius: { sm: 8, md: RADIUS.control, lg: RADIUS.card, pill: RADIUS.pill },
     control: { min: compact ? 44 : 36, button: 44, hit: { top: 6, bottom: 6, left: 6, right: 6 } },
     maxWidth: 980,
   };
@@ -225,9 +234,9 @@ export function Screen({
   /** A header rendered above the scroll area already carries the top padding. */
   paddingTop?: number;
 }) {
-  const pad = t.compact ? 16 : 24;
+  const pad = t.compact ? SPACE.md : SPACE.section;
   const body = (
-    <View style={{ maxWidth: t.maxWidth, width: "100%", alignSelf: "center", gap: t.space.lg }}>{children}</View>
+    <View style={{ maxWidth: t.maxWidth, width: "100%", alignSelf: "center", gap: t.space.section }}>{children}</View>
   );
   return (
     <TokensProvider value={t}>
@@ -290,7 +299,7 @@ export function Header({ title, status, caption, icon: name = "Plug" }: { title:
 export function Grid({ children, min = 240 }: { children: React.ReactNode; min?: number }) {
   const t = useTokens();
   return (
-    <View style={{ flexDirection: t.compact ? "column" : "row", flexWrap: t.compact ? "nowrap" : "wrap", alignItems: "stretch", gap: t.space.md }}>
+    <View style={{ flexDirection: t.compact ? "column" : "row", flexWrap: t.compact ? "nowrap" : "wrap", alignItems: "stretch", gap: t.space.row }}>
       {React.Children.map(children, (child) =>
         child ? (
           <View style={{ width: t.compact ? "100%" : undefined, flexGrow: 1, flexBasis: t.compact ? undefined : min, minWidth: t.compact ? undefined : min }}>
@@ -331,13 +340,13 @@ export function Toolbar({
 }) {
   const t = useTokens();
   return (
-    <View style={{ gap: t.space.md }}>
+    <View style={{ gap: t.space.row }}>
       <View
         style={{
           flexDirection: t.compact ? "column" : "row",
           alignItems: t.compact ? "stretch" : "flex-end",
           justifyContent: "space-between",
-          gap: t.space.md,
+          gap: t.space.row,
         }}
       >
         {title || subtitle ? (
@@ -357,7 +366,7 @@ export function Toolbar({
 export function Section({ title, trailing, children }: { title?: string; trailing?: React.ReactNode; children: React.ReactNode }) {
   const t = useTokens();
   return (
-    <View style={{ gap: t.space.md }}>
+    <View style={{ gap: t.space.row }}>
       {title ? (
         <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: t.space.sm }}>
           <Text accessibilityRole="header" style={[t.text.heading, { flexShrink: 1 }]}>{title}</Text>
@@ -394,25 +403,25 @@ export function Card({
   subtitle?: string;
 }) {
   const t = useTokens();
-  const pad = t.compact ? 16 : 18;
+  const pad = t.compact ? SPACE.md : SPACE.card;
   return (
     <View
       style={{
         backgroundColor: level === 1 ? t.color.surface1 : t.color.surface2,
-        borderRadius: t.radius.lg,
+        borderRadius: RADIUS.card,
         borderWidth: 1,
         borderColor: tone ? alpha(statusColor(t, tone), 0.4) : t.color.border,
         padding: padded ? pad : 0,
         // An unpadded card holds a list of Rows, which bring their own padding and dividers.
-        gap: padded ? 14 : 0,
+        gap: padded ? SPACE.row : 0,
         overflow: "hidden",
         ...(grow ? { flexGrow: 1 } : {}),
       }}
     >
       {title ? (
-        <View style={{ flexDirection: "row", alignItems: "center", gap: 12, ...(padded ? {} : { padding: pad, paddingBottom: 8 }) }}>
-          {name ? <IconBadge name={name} tone={tone && tone !== "neutral" ? tone : "accent"} size={34} /> : null}
-          <View style={{ flex: 1, gap: 2, minWidth: 0 }}>
+        <View style={{ flexDirection: "row", alignItems: "center", gap: SPACE.row, ...(padded ? {} : { padding: pad, paddingBottom: SPACE.sm }) }}>
+          {name ? <IconBadge name={name} tone={tone && tone !== "neutral" ? tone : "accent"} size={32} /> : null}
+          <View style={{ flex: 1, gap: SPACE.hair, minWidth: 0 }}>
             <Text accessibilityRole="header" style={t.text.heading}>{title}</Text>
             {subtitle ? <Text style={t.text.caption}>{subtitle}</Text> : null}
           </View>
@@ -432,15 +441,15 @@ export function HeroCard({ tone, icon: name, title, lead, children }: { tone: St
   const t = useTokens();
   const color = inkOf(t, tone);
   return (
-    <View style={{ backgroundColor: t.color.surface1, borderColor: alpha(color, 0.4), borderWidth: 1, borderRadius: 18, overflow: "hidden" }}>
-      <View style={{ flexDirection: "row", alignItems: "center", gap: 16, padding: t.compact ? 16 : 18, backgroundColor: alpha(color, 0.09) }}>
-        <IconBadge name={name} tone={tone === "neutral" || tone === "busy" ? "accent" : tone} size={t.compact ? 44 : 52} />
-        <View style={{ flex: 1, gap: 4, minWidth: 0 }}>
+    <View style={{ backgroundColor: t.color.surface1, borderColor: alpha(color, 0.4), borderWidth: 1, borderRadius: RADIUS.card, overflow: "hidden" }}>
+      <View style={{ flexDirection: "row", alignItems: "center", gap: SPACE.md, padding: t.compact ? SPACE.md : SPACE.card, backgroundColor: alpha(color, 0.09) }}>
+        <IconBadge name={name} tone={tone === "neutral" || tone === "busy" ? "accent" : tone} size={t.compact ? 44 : 48} />
+        <View style={{ flex: 1, gap: SPACE.xs, minWidth: 0 }}>
           <Text accessibilityRole="header" style={[t.text.display, tone === "error" ? { color } : null]}>{title}</Text>
           {lead ? typeof lead === "string" ? <Text style={t.text.body}>{lead}</Text> : lead : null}
         </View>
       </View>
-      {children ? <View style={{ padding: t.compact ? 16 : 18, gap: 12 }}>{children}</View> : null}
+      {children ? <View style={{ padding: t.compact ? SPACE.md : SPACE.card, gap: SPACE.row }}>{children}</View> : null}
     </View>
   );
 }
@@ -503,7 +512,7 @@ export function Row({
   const t = useTokens();
   const body = (
     <View style={{ gap: t.space.sm }}>
-      <View style={{ flexDirection: t.compact ? "column" : "row", alignItems: t.compact ? "stretch" : "center", gap: t.space.md }}>
+      <View style={{ flexDirection: t.compact ? "column" : "row", alignItems: t.compact ? "stretch" : "center", gap: t.space.row }}>
         {leading ? <View style={{ flexShrink: 0 }}>{leading}</View> : null}
         <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
           {typeof title === "string" ? (
@@ -541,8 +550,8 @@ export function Row({
   );
 
   const style = {
-    paddingVertical: t.space.md,
-    paddingHorizontal: t.compact ? t.space.md : t.space.lg,
+    paddingVertical: t.space.row,
+    paddingHorizontal: t.compact ? SPACE.row : SPACE.md,
     borderTopWidth: first ? 0 : 1,
     borderTopColor: t.color.borderSubtle,
     borderLeftWidth: tone ? 3 : 0,
@@ -1175,7 +1184,7 @@ export function Notice({
 export function EmptyState({ title, body, action }: { title: string; body: string; action?: React.ReactNode }) {
   const t = useTokens();
   return (
-    <View style={{ padding: t.space.xl, gap: t.space.sm, alignItems: "flex-start" }}>
+    <View style={{ padding: t.space.section, gap: t.space.sm, alignItems: "flex-start" }}>
       <Text style={t.text.heading}>{title}</Text>
       <Text style={[t.text.body, { maxWidth: 560 }]}>{body}</Text>
       {action ? <View style={{ paddingTop: t.space.sm }}>{action}</View> : null}
@@ -1186,7 +1195,7 @@ export function EmptyState({ title, body, action }: { title: string; body: strin
 export function Loading({ label }: { label?: string }) {
   const t = useTokens();
   return (
-    <View style={{ flexDirection: "row", alignItems: "center", gap: t.space.sm, padding: t.space.md }}>
+    <View style={{ flexDirection: "row", alignItems: "center", gap: t.space.sm, padding: t.space.row }}>
       <ActivityIndicator size="small" color={t.color.accent} />
       {label ? <Text style={t.text.caption}>{label}</Text> : null}
     </View>
@@ -1220,28 +1229,86 @@ export function StaleNote({ what, at, reason, onRetry }: { what: string; at: str
   );
 }
 
-/** A "Learn more" style toggle: a chevron and a label in the accent colour; the children show while it is open. */
-export function Disclosure({ title, children, open: initial = false }: { title: string; children: React.ReactNode; open?: boolean }) {
+/**
+ * A "Learn more" style toggle: a chevron and a label; the children show while
+ * it is open. `quiet` draws it small and muted, for extras such as "What you
+ * can do here" that should not compete with the page (the calm standard §3).
+ * `flush` drops the indent, for a whole card folded behind it.
+ */
+export function Disclosure({
+  title,
+  openTitle,
+  children,
+  open: initial = false,
+  quiet,
+  flush,
+}: {
+  title: string;
+  openTitle?: string;
+  children: React.ReactNode;
+  open?: boolean;
+  quiet?: boolean;
+  flush?: boolean;
+}) {
   const t = useTokens();
   const [open, setOpen] = useState(initial);
+  const shown = open && openTitle ? openTitle : title;
+  const color = quiet ? t.color.muted : t.color.accent;
   return (
-    <View style={{ gap: t.space.sm }}>
+    <View style={{ gap: quiet ? SPACE.sm : SPACE.row }}>
       <Pressable
         accessibilityRole="button"
-        accessibilityLabel={title}
+        accessibilityLabel={shown}
         accessibilityState={{ expanded: open }}
         onPress={() => setOpen((value) => !value)}
         hitSlop={t.control.hit}
-        style={{ flexDirection: "row", alignItems: "center", gap: 6, minHeight: 36, alignSelf: "flex-start" }}
+        style={{ flexDirection: "row", alignItems: "center", gap: SPACE.xs, minHeight: quiet ? 28 : 36, alignSelf: "flex-start" }}
       >
         {HostIcon ? (
-          <HostIcon name={open ? "ChevronDown" : "ChevronRight"} size={16} color={t.color.accent} />
+          <HostIcon name={open ? "ChevronDown" : "ChevronRight"} size={quiet ? 14 : 16} color={color} />
         ) : (
-          <Text style={{ ...TYPE.body, color: t.color.accent }}>{open ? "▾" : "▸"}</Text>
+          <Text style={{ ...(quiet ? TYPE.secondary : TYPE.body), color }}>{open ? "▾" : "▸"}</Text>
         )}
-        <Text style={{ ...TYPE.body, fontWeight: "600", color: t.color.accent, flexShrink: 1 }}>{title}</Text>
+        <Text style={{ ...(quiet ? TYPE.secondary : TYPE.body), fontWeight: "600", color, flexShrink: 1 }}>{shown}</Text>
       </Pressable>
-      {open ? <View style={{ gap: t.space.sm, paddingLeft: t.space.indent }}>{children}</View> : null}
+      {open ? <View style={{ gap: SPACE.sm, paddingLeft: flush || quiet ? 0 : SPACE.md }}>{children}</View> : null}
+    </View>
+  );
+}
+
+/** A heading inside a card, for one part of a longer explanation. */
+export function SectionTitle({ icon: name, children }: { icon?: string; children: React.ReactNode }) {
+  const t = useTokens();
+  return (
+    <View style={{ flexDirection: "row", alignItems: "center", gap: SPACE.sm }}>
+      {name && HostIcon ? <HostIcon name={name} size={18} color={t.color.accent} /> : null}
+      <Text accessibilityRole="header" style={t.text.heading}>{children}</Text>
+    </View>
+  );
+}
+
+/**
+ * One muted line with an icon and optional links, outside any card: for
+ * things worth knowing but not worth a box (a sister plugin, where a
+ * setting lives).
+ */
+export function QuietLine({ icon: name, children, links }: { icon?: string; children: React.ReactNode; links?: ReadonlyArray<{ label: string; onPress: () => void; accessibilityLabel?: string }> }) {
+  const t = useTokens();
+  return (
+    <View style={{ flexDirection: "row", alignItems: "flex-start", gap: SPACE.sm }}>
+      {name && HostIcon ? (
+        <View style={{ paddingTop: SPACE.hair }}>
+          <HostIcon name={name} size={16} color={t.color.muted} />
+        </View>
+      ) : null}
+      <View style={{ flex: 1, flexDirection: "row", flexWrap: "wrap", alignItems: "baseline", columnGap: SPACE.row, rowGap: SPACE.xs }}>
+        {typeof children === "string" ? <Text style={[t.text.caption, { flexShrink: 1 }]}>{children}</Text> : children}
+        {(links ?? []).map((link) => (
+          <Pressable key={link.label} accessibilityRole="link" accessibilityLabel={link.accessibilityLabel ?? link.label} hitSlop={t.control.hit} onPress={link.onPress}>
+            <Text style={{ ...TYPE.secondary, fontWeight: "600", color: t.color.accent }}>{link.label}</Text>
+          </Pressable>
+        ))}
+      </View>
     </View>
   );
 }
@@ -1365,7 +1432,7 @@ export function SplitView({
   const t = useTokens();
   if (t.compact) return <View style={{ flex: 1 }}>{showDetail ? detail : list}</View>;
   return (
-    <View style={{ flexDirection: "row", gap: t.space.lg, alignItems: "flex-start" }}>
+    <View style={{ flexDirection: "row", gap: SPACE.md, alignItems: "flex-start" }}>
       {/* ponytail: fixed cap — a long list must not scroll the detail away;
           go viewport-relative via useWindowDimensions if 640 ever feels wrong */}
       <ScrollView style={{ width: listWidth, flexShrink: 0, maxHeight: 640 }}>{list}</ScrollView>

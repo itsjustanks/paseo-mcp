@@ -168,7 +168,7 @@ export function WorkspaceContext({
   const scope = cost.local > 0 ? ` · ${cost.local} local` : "";
   const who = providerId ? "this agent" : load.label ? `a ${load.label.split(" · ")[0]} agent here` : "an agent here";
   return (
-    <View style={{ gap: t.space.md }}>
+    <View style={{ gap: t.space.row }}>
       <Card tone={cost.total > 0 ? tierStatus(cost.tier) : undefined}>
         <View style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: t.space.sm }}>
           <Text style={t.text.heading}>
@@ -198,8 +198,8 @@ export function WorkspaceContext({
           ]}
         />
         {!load.projectIncluded && load.projectNote ? <Text style={t.text.caption}>{load.projectNote}.</Text> : null}
-        {/* The warning below names the verdict itself; otherwise one line here. */}
-        {load.toolSearch && (cost.tier === "ok" || cost.deferred) && cost.total > 0 ? (
+        {/* The warning below says it when it shows; otherwise one line here. Never both (say it once). */}
+        {load.toolSearch && cost.tier === "ok" && cost.total > 0 ? (
           <Text style={t.text.caption}>{toolSearchLine(load.toolSearch, cost.tools)}</Text>
         ) : null}
         {data.processes ? (

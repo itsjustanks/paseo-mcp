@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { Pressable, ScrollView, Text, View, type LayoutChangeEvent } from "react-native";
 import { TAB_INTROS, TAB_ORDER, type TabId } from "../shared/guide";
-import { Bullets, Disclosure, HostIcon, IconBadge, TYPE, useTokens } from "./ui";
+import { Bullets, Disclosure, HostIcon, IconBadge, SPACE, TYPE, useTokens } from "./ui";
 
 /**
  * Five sections, one job each, in one row: the same underline tabs, intros
@@ -46,9 +46,9 @@ export function TabBar({ active, onSelect }: { active: SectionId; onSelect: (id:
           flexDirection: "row",
           alignItems: "center",
           justifyContent: "center",
-          gap: 6,
+          gap: SPACE.sm,
           minHeight: 44,
-          paddingHorizontal: t.compact ? 8 : 11,
+          paddingHorizontal: t.compact ? SPACE.sm : SPACE.row,
           marginBottom: -1,
           borderBottomWidth: 2,
           borderBottomColor: selected ? t.color.accent : "transparent",
@@ -83,36 +83,32 @@ export function TabBar({ active, onSelect }: { active: SectionId; onSelect: (id:
   );
 }
 
+/** The intro's icon, so the fold-out below lines up with the text beside it. */
+const INTRO_ICON = 40;
+
 /**
- * The top of each tab: its icon, a clear title, one or two plain sentences on
- * what it is for, and "What you can do here". On a phone that list folds away
- * behind "Learn more", so the tab's own content stays near the top.
+ * The top of each tab except Overview (its status card is its introduction):
+ * the tab's icon, a clear title and one or two plain sentences. "What you can
+ * do here" folds away behind a small, muted link on every width (the calm
+ * standard), so the tab's own content starts near the top.
  */
 export function TabIntro({ section }: { section: SectionId }) {
   const t = useTokens();
   const tab = TAB_INTROS[section];
-  const list = (
-    <View style={{ gap: 10, padding: 14, borderRadius: 14, backgroundColor: t.color.surface1, borderWidth: 1, borderColor: t.color.border }}>
-      {!t.compact ? <Text style={{ ...TYPE.secondary, fontWeight: "600", color: t.color.muted }}>What you can do here</Text> : null}
-      <Bullets items={tab.canDo} columns={!t.compact} />
-    </View>
-  );
   return (
-    <View style={{ gap: 14 }}>
-      <View style={{ flexDirection: "row", alignItems: "flex-start", gap: 14 }}>
-        <IconBadge name={tab.icon} size={t.compact ? 40 : 46} />
-        <View style={{ flex: 1, gap: 4, minWidth: 0 }}>
+    <View style={{ gap: SPACE.sm }}>
+      <View style={{ flexDirection: "row", alignItems: "flex-start", gap: SPACE.row }}>
+        <IconBadge name={tab.icon} size={INTRO_ICON} />
+        <View style={{ flex: 1, gap: SPACE.xs, minWidth: 0 }}>
           <Text accessibilityRole="header" style={t.text.display}>{tab.title}</Text>
           <Text style={t.text.lead}>{tab.summary}</Text>
         </View>
       </View>
-      {t.compact ? (
-        <Disclosure key={section} title="Learn more: what you can do here">
-          {list}
+      <View style={{ paddingLeft: t.compact || !HostIcon ? 0 : INTRO_ICON + SPACE.row }}>
+        <Disclosure key={section} quiet title="What you can do here" openTitle="Hide what you can do here">
+          <Bullets items={tab.canDo} columns={!t.compact} />
         </Disclosure>
-      ) : (
-        list
-      )}
+      </View>
     </View>
   );
 }

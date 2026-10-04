@@ -234,18 +234,18 @@ export function SignInCardBody({ server, onConnect }: { server: string; onConnec
       style={{
         flexDirection: "row",
         alignItems: "center",
-        gap: t.space.md,
+        gap: t.space.row,
         borderWidth: 1,
         borderColor: t.color.border,
         borderRadius: t.radius.md,
         backgroundColor: t.color.surface1,
         paddingVertical: t.space.sm,
-        paddingHorizontal: t.space.md,
+        paddingHorizontal: t.space.row,
         alignSelf: "flex-start",
         maxWidth: 560,
       }}
     >
-      <View style={{ flexShrink: 1, gap: 2 }}>
+      <View style={{ flexShrink: 1, gap: t.space.hair }}>
         <Text style={t.text.bodyStrong} numberOfLines={1}>{`${server} needs sign-in`}</Text>
         <Text style={t.text.caption}>A tool call to it in this chat was refused for lack of a sign-in.</Text>
       </View>

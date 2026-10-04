@@ -47,6 +47,16 @@ test("type: nothing below 13 px, and no raw size outside the TYPE scale", () => 
   }
 });
 
+test("spacing: screens use the SPACE scale, never a raw number (only a -1 hairline overlap and 0)", () => {
+  const dir = decodeURIComponent(new URL("../client/", import.meta.url).pathname);
+  for (const file of readdirSync(dir).filter((name) => /\.(tsx|ts)$/.test(name) && name !== "ui.tsx")) {
+    const text = readFileSync(`${dir}${file}`, "utf8");
+    for (const match of text.matchAll(/\b(gap|rowGap|columnGap|padding[A-Za-z]*|margin[A-Za-z]*)(?:: ?|=\{)(-?\d+)/g)) {
+      assert.ok(match[2] === "0" || match[2] === "-1", `${file}: ${match[1]} ${match[2]}; use SPACE`);
+    }
+  }
+});
+
 test("native screens only where the app has every part of them; a 0.9.1 app keeps the surface", () => {
   const fn = () => () => {};
   const paseo091 = { addSurface: fn, addSidebarItem: fn, openSurface: fn };

@@ -37,7 +37,7 @@ const KIND: Record<LibraryState["kind"], string> = {
 export function SecretField({ label, value, onChangeText, hint, placeholder }: { label: string; value: string; onChangeText: (value: string) => void; hint?: string; placeholder?: string }) {
   const t = useTokens();
   return (
-    <View style={{ gap: 4 }}>
+    <View style={{ gap: t.space.xs }}>
       <Text style={t.text.label}>{label}</Text>
       <TextInput
         value={value}
@@ -54,8 +54,8 @@ export function SecretField({ label, value, onChangeText, hint, placeholder }: {
           borderColor: t.color.border,
           borderRadius: t.radius.md,
           backgroundColor: t.color.surface0,
-          paddingVertical: 10,
-          paddingHorizontal: 12,
+          paddingVertical: t.space.sm + t.space.hair,
+          paddingHorizontal: t.space.row,
           color: t.color.fg,
           minHeight: t.control.min,
           fontSize: TYPE.body.fontSize,
@@ -172,7 +172,7 @@ export function LibrariesPanel({ states, onChanged, onRefresh, refreshing }: { s
   const missingDefaults = DEFAULT_LIBRARIES.filter((library) => !libraries.some((entry) => entry.id === library.id));
 
   return (
-    <View style={{ gap: t.space.md }}>
+    <View style={{ gap: t.space.row }}>
       <Text style={t.text.body}>
         Libraries are lists of MCP servers the gallery reads. Each server in one is a template: values you fill in (keys, tokens) are asked for when you add it, never stored in a library. When two list the same server name, the more trusted one wins: Team, then libraries you added, then the default public ones (order below only matters within each group). The recommended servers shipped with the plugin always show.
       </Text>

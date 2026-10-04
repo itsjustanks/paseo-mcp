@@ -284,11 +284,14 @@ English. On Paseo 0.11 the page is a full screen with the app's own sidebar row;
 open in the system browser. Older apps keep the surface and sidebar item they had, decided at runtime
 (`shared/host-features.ts`), so `requirements.paseo` stays `>=0.8.0`.
 
-**Overview** opens with a status card: the state in words ("Fix the server that isn't working", "All
-set: your servers are working"), the next step and its button, and the at-a-glance lines (health, AI
-apps, sign-in, tools, Paseo's own tools, projects). Then what needs attention, **Use your servers in
-every AI app**, and the guide: **What are MCP servers?**, **How it works** (four steps with arrows),
-**How to use it** (numbered steps) and **Words you'll see**.
+**Overview** is calm (0.18.0, AI Router 0.15.0's rules): a status card with the state in words
+("Fix the server that isn't working", "All set: your servers are working"), three rows (health, AI
+apps, sign-in), when health was last checked, and two buttons (the next step, then Browse servers or
+Add a server). Which servers need a look, and why, folds behind a quiet link in the card. Below it, one
+link, **New to MCP servers? How it works**, opens a single card with what MCP servers are, how it works
+(four steps), how to use it and the words you'll see; it is open until the first server is added. AI
+Router is one quiet line. Every other tab opens with its title and one or two sentences, with "What you
+can do here" behind a small link. Spacing comes from one scale (`SPACE` in `client/ui.tsx`).
 
 **Copy to all my AI apps** (0.15.0; it replaces **Sync accounts**) copies every user-level server into
 every AI app and account on this host that doesn't have it: Claude → Codex and Kimi, Codex → Claude, and

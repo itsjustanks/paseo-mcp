@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.18.0 — 2026-10-04
+
+The Overview is calm, like AI Router 0.15.0 under the shared design standard's new "calm" rules. It leads with the state and what to do, and everything else folds away. Every option stays.
+
+### Overview
+- The status card is the page:
+  - the state in words;
+  - three rows (Health, AI apps, Sign-in);
+  - when health was last checked;
+  - two buttons: the next step, then Browse servers or Add a server.
+- Which servers need a look, and why, folds behind a quiet link inside the card. It used to be a separate list.
+- Tools, Paseo's own tools and projects are no longer on Overview; they have their own tabs.
+- "What are MCP servers?", "How it works", "How to use it" and "Words you'll see" are now one card behind **New to MCP servers? How it works**. It's open until you add your first server, and folded after.
+- The "Use your servers in every AI app" card is gone. When servers are missing from some apps, the status card's next step is **Copy to all my AI apps**, and the Copy screen explains itself.
+- AI Router is one quiet line ("Also try AI Router: … View plugin · Copy install source · Hide"), not a card.
+- The lead line no longer repeats the title:
+  - "Fix the server that isn't working" is followed by "Open it to see what's wrong. Your other servers keep working."
+  - "All set: your servers are working" is followed by "Your assistants can use them in any chat."
+- The header carries the standing fact: "1 not working · 8 servers on paseo". Overview has no intro; its status card is the introduction.
+
+### Every tab
+- "What you can do here" folds behind a small, muted link on every width. It used to be a boxed list.
+- **Servers:** the gallery comes straight after search. Paseo's built-in tools and the totals fold quietly below it. The totals are now titled "Totals and last check" and no longer repeat the filter counts.
+- **Projects:** "sign in from its workspace" is said once, as a quiet line at the bottom. It used to be on every row too.
+- **Spacing:** one scale, `SPACE` in `client/ui.tsx` (section 24, card 20, md 16, row 12, sm 8, xs 4, hair 2), plus `RADIUS`. Screens use the names, never raw numbers. Cards have 20 px inside and sit 24 px apart.
+
+### Tests
+- `tests/design.test.ts` now also fails on any raw spacing number outside `client/ui.tsx`. 434 tests.
+
 ## 0.17.0 — 2026-10-04
 
 The MCP page now looks and reads like AI Router, under the shared design standard for our Paseo plugins: bigger, readable text, the same header and tabs, a plain intro on every tab, and an Overview that explains MCP servers. Every feature and option stays.

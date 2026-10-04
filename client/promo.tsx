@@ -6,7 +6,7 @@ import { Text, View } from "react-native";
 import { mcpSiblings } from "../shared/contracts";
 import { promoSettings } from "../shared/settings";
 import { AI_ROUTER } from "../shared/siblings";
-import { Button, Card, Tag, copyToClipboard, useTokens } from "./ui";
+import { QuietLine, copyToClipboard, useTokens } from "./ui";
 import { useOpenLink } from "./links";
 
 export const SIBLINGS_QUERY_KEY = ["paseo-mcp", "siblings"] as const;
@@ -52,15 +52,15 @@ export function AiRouterCard() {
       ? toast.show("AI Router install source copied.", { variant: "success" })
       : toast.show(`No clipboard here — the install source is ${AI_ROUTER.installSource}`, { variant: "warning" });
 
+  // One quiet line, never a card (the calm standard). Nothing about installing until the host has answered.
+  const links = [
+    { label: "View plugin", onPress: open },
+    ...(siblings.isPending || installed ? [] : [{ label: "Copy install source", onPress: copy }]),
+    { label: "Hide", onPress: hide, accessibilityLabel: `Hide the ${AI_ROUTER.name} suggestion` },
+  ];
   return (
-    <Card title={`Check out ${AI_ROUTER.name}`} icon="Route" subtitle="Another Paseo plugin that works well with this one">
-      <Text style={t.text.body}>{AI_ROUTER.pitch}</Text>
-      <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: t.space.sm }}>
-        <Button label="View plugin" icon="ExternalLink" onPress={open} />
-        {/* Nothing in this slot until the host has answered, so the button does not turn into a badge under the pointer. */}
-        {siblings.isPending ? null : installed ? <Tag label="Installed" tone="ok" /> : <Button label="Copy install source" icon="Copy" onPress={copy} />}
-        <Button label="Hide" variant="ghost" onPress={hide} />
-      </View>
-    </Card>
+    <QuietLine icon="Route" links={links}>
+      {`Also try ${AI_ROUTER.name}${installed ? " (installed)" : ""}: ${AI_ROUTER.short}`}
+    </QuietLine>
   );
 }

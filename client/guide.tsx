@@ -1,12 +1,14 @@
 import React, { useState } from "react";
 import { Pressable, Text, View, type LayoutChangeEvent } from "react-native";
 import { ADDED_TO_ONE_APP, FEWER_IS_FASTER, HOW_IT_WORKS, HOW_TO_USE, WHAT_IS, WORDS } from "../shared/guide";
-import { Card, HostIcon, IconBadge, Tag, TYPE, alpha, useTokens } from "./ui";
+import { Card, Disclosure, Divider, HostIcon, IconBadge, RADIUS, SPACE, SectionTitle, Tag, TYPE, alpha, useTokens } from "./ui";
 
 /**
- * The Overview's guide, the same four cards as AI Router's (the shared design
- * standard): what MCP servers are, how it works, how to use it, and the words
- * you'll see. The words live in shared/guide.ts.
+ * The Overview's guide, as AI Router 0.15.0 has it (the calm standard): one
+ * "New to MCP servers? How it works" fold-out holding a single card, its parts
+ * split by dividers: what MCP servers are, how it works, how to use it, and
+ * the words you'll see. Open until the first server is added, folded after.
+ * The words live in shared/guide.ts.
  */
 
 /** Below this width the "How it works" steps stack top to bottom instead of left to right. */
@@ -27,29 +29,39 @@ function useWidth(): [number | null, (event: LayoutChangeEvent) => void] {
 function TextLink({ label, onPress }: { label: string; onPress: () => void }) {
   const t = useTokens();
   return (
-    <Pressable accessibilityRole="link" accessibilityLabel={label} hitSlop={t.control.hit} onPress={onPress} style={{ paddingVertical: 6, alignSelf: "flex-start" }}>
+    <Pressable accessibilityRole="link" accessibilityLabel={label} hitSlop={t.control.hit} onPress={onPress} style={{ paddingVertical: SPACE.xs, alignSelf: "flex-start" }}>
       <Text style={{ ...TYPE.body, fontWeight: "600", color: t.color.accent }}>{label}</Text>
     </Pressable>
   );
 }
 
+/** One part of the guide: a heading and its text, inside the guide's single card. */
+function Part({ title, icon, children }: { title: string; icon: string; children: React.ReactNode }) {
+  return (
+    <View style={{ gap: SPACE.row }}>
+      <SectionTitle icon={icon}>{title}</SectionTitle>
+      {children}
+    </View>
+  );
+}
+
 /** "What are MCP servers?", with the AI apps found on this computer. */
-export function WhatIsCard({ apps }: { apps: readonly string[] }) {
+function WhatIs({ apps }: { apps: readonly string[] }) {
   const t = useTokens();
   return (
-    <Card title="What are MCP servers?" icon="Plug">
+    <Part title="What are MCP servers?" icon="Plug">
       {WHAT_IS.map((line) => (
         <Text key={line} style={t.text.body}>{line}</Text>
       ))}
       {apps.length ? (
-        <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 8 }}>
+        <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: SPACE.sm }}>
           <Text style={t.text.caption}>AI apps on this computer:</Text>
           {apps.map((name) => (
             <Tag key={name} label={name} tone="ok" />
           ))}
         </View>
       ) : null}
-    </Card>
+    </Part>
   );
 }
 
@@ -61,34 +73,34 @@ function Arrow({ down }: { down: boolean }) {
     <Text style={[t.text.lead, { color: t.color.muted }]}>{down ? "↓" : "→"}</Text>
   );
   return (
-    <View accessible={false} style={down ? { width: 48, alignItems: "center", paddingVertical: 2 } : { paddingTop: 16, width: 24, alignItems: "center" }}>
+    <View accessible={false} style={down ? { width: 48, alignItems: "center", paddingVertical: SPACE.hair } : { paddingTop: SPACE.md, width: SPACE.section, alignItems: "center" }}>
       {glyph}
     </View>
   );
 }
 
 /** Four steps with icons and arrows: across on a wide screen, down on a narrow one. */
-export function HowItWorksCard() {
+function HowItWorks() {
   const t = useTokens();
   const [width, onLayout] = useWidth();
   const stacked = width === null ? t.compact : width < FLOW_STACK_WIDTH;
   return (
-    <Card title="How it works" icon="Workflow">
+    <Part title="How it works" icon="Workflow">
       <View onLayout={onLayout} style={{ flexDirection: stacked ? "column" : "row", alignItems: stacked ? "stretch" : "flex-start" }}>
         {HOW_IT_WORKS.map((step, index) => (
           <React.Fragment key={step.icon}>
             {index > 0 ? <Arrow down={stacked} /> : null}
             {stacked ? (
-              <View style={{ flexDirection: "row", alignItems: "center", gap: 14 }}>
-                <IconBadge name={step.icon} size={48} />
-                <View style={{ flex: 1, gap: 2 }}>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: SPACE.row }}>
+                <IconBadge name={step.icon} size={44} />
+                <View style={{ flex: 1, gap: SPACE.hair }}>
                   <Text style={t.text.bodyStrong}>{`${index + 1}. ${step.title}`}</Text>
                   <Text style={t.text.body}>{step.text}</Text>
                 </View>
               </View>
             ) : (
-              <View style={{ flex: 1, alignItems: "center", gap: 8, paddingHorizontal: 4 }}>
-                <IconBadge name={step.icon} size={52} />
+              <View style={{ flex: 1, alignItems: "center", gap: SPACE.sm, paddingHorizontal: SPACE.xs }}>
+                <IconBadge name={step.icon} size={48} />
                 <Text style={[t.text.bodyStrong, { textAlign: "center" }]}>{`${index + 1}. ${step.title}`}</Text>
                 <Text style={{ ...TYPE.secondary, color: t.color.fg, textAlign: "center" }}>{step.text}</Text>
               </View>
@@ -96,9 +108,9 @@ export function HowItWorksCard() {
           </React.Fragment>
         ))}
       </View>
-      <View style={{ flexDirection: "row", alignItems: "flex-start", gap: 12, padding: 14, borderRadius: 12, backgroundColor: alpha(t.color.accent, 0.07) }}>
+      <View style={{ flexDirection: "row", alignItems: "flex-start", gap: SPACE.row, padding: SPACE.md, borderRadius: RADIUS.control, backgroundColor: alpha(t.color.accent, 0.07) }}>
         {HostIcon ? (
-          <View style={{ paddingTop: 3 }}>
+          <View style={{ paddingTop: SPACE.hair }}>
             <HostIcon name="Gauge" size={18} color={t.color.accent} />
           </View>
         ) : null}
@@ -107,70 +119,75 @@ export function HowItWorksCard() {
           {` ${FEWER_IS_FASTER.text}`}
         </Text>
       </View>
-    </Card>
+    </Part>
   );
 }
 
 function Numbered({ n, children }: { n: number; children: React.ReactNode }) {
   const t = useTokens();
   return (
-    <View style={{ flexDirection: "row", alignItems: "flex-start", gap: 12 }}>
+    <View style={{ flexDirection: "row", alignItems: "flex-start", gap: SPACE.row }}>
       <View style={{ width: 28, height: 28, borderRadius: 14, backgroundColor: t.color.accent, alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
         <Text style={{ ...TYPE.secondary, fontWeight: "700", color: t.color.accentFg }}>{n}</Text>
       </View>
-      <View style={{ flex: 1, gap: 2, paddingTop: 3 }}>{children}</View>
+      <View style={{ flex: 1, gap: SPACE.hair, paddingTop: SPACE.xs }}>{children}</View>
     </View>
   );
 }
 
 /** Numbered steps for a first server, then the way to put every server in every app. */
-export function HowToUseCard({ onAdd, onCopy }: { onAdd: () => void; onCopy: () => void }) {
+function HowToUse({ onAdd, onCopy }: { onAdd: () => void; onCopy: () => void }) {
   const t = useTokens();
   return (
-    <Card title="How to use it" icon="ListOrdered">
+    <Part title="How to use it" icon="ListOrdered">
       {HOW_TO_USE.map((line, index) => (
         <Numbered key={line} n={index + 1}>
           <Text style={t.text.body}>{line}</Text>
           {index === 0 ? <TextLink label="Open Servers" onPress={onAdd} /> : null}
         </Numbered>
       ))}
-      <View style={{ gap: 4, padding: 14, borderRadius: 12, borderWidth: 1, borderColor: t.color.border, backgroundColor: t.color.surface0 }}>
+      <View style={{ gap: SPACE.xs, padding: SPACE.md, borderRadius: RADIUS.control, borderWidth: 1, borderColor: t.color.border, backgroundColor: t.color.surface0 }}>
         <Text style={t.text.bodyStrong}>{ADDED_TO_ONE_APP.title}</Text>
         <Text style={t.text.body}>{ADDED_TO_ONE_APP.text}</Text>
         <TextLink label="Copy to all my AI apps" onPress={onCopy} />
       </View>
-    </Card>
+    </Part>
   );
 }
 
 /** One plain line for each word the panel uses, two across when there is room. */
-export function GlossaryCard() {
+function Glossary() {
   const t = useTokens();
   return (
-    <Card title="Words you'll see" icon="BookOpen">
-      <View style={{ flexDirection: "row", flexWrap: "wrap", columnGap: 24, rowGap: 16 }}>
+    <Part title="Words you'll see" icon="BookOpen">
+      <View style={{ flexDirection: "row", flexWrap: "wrap", columnGap: SPACE.section, rowGap: SPACE.md }}>
         {WORDS.map((word) => (
-          <View key={word.term} style={{ flexDirection: "row", alignItems: "flex-start", gap: 12, flexBasis: 300, flexGrow: 1, flexShrink: 1 }}>
-            <IconBadge name={word.icon} size={30} />
-            <View style={{ flex: 1, gap: 2 }}>
+          <View key={word.term} style={{ flexDirection: "row", alignItems: "flex-start", gap: SPACE.row, flexBasis: 300, flexGrow: 1, flexShrink: 1 }}>
+            <IconBadge name={word.icon} size={32} />
+            <View style={{ flex: 1, gap: SPACE.hair }}>
               <Text style={t.text.bodyStrong}>{word.term}</Text>
               <Text style={t.text.body}>{word.text}</Text>
             </View>
           </View>
         ))}
       </View>
-    </Card>
+    </Part>
   );
 }
 
-/** The Overview's guide, top to bottom: what it is, how it works, how to use it, and the words. */
-export function OverviewGuide({ apps, onAdd, onCopy }: { apps: readonly string[]; onAdd: () => void; onCopy: () => void }) {
+/** "New to MCP servers? How it works": one fold-out, one card. Open while there is nothing set up yet. */
+export function OverviewGuide({ apps, onAdd, onCopy, open }: { apps: readonly string[]; onAdd: () => void; onCopy: () => void; open: boolean }) {
   return (
-    <>
-      <WhatIsCard apps={apps} />
-      <HowItWorksCard />
-      <HowToUseCard onAdd={onAdd} onCopy={onCopy} />
-      <GlossaryCard />
-    </>
+    <Disclosure key={open ? "open" : "closed"} flush title="New to MCP servers? How it works" openTitle="Hide how MCP servers work" open={open}>
+      <Card>
+        <WhatIs apps={apps} />
+        <Divider />
+        <HowItWorks />
+        <Divider />
+        <HowToUse onAdd={onAdd} onCopy={onCopy} />
+        <Divider />
+        <Glossary />
+      </Card>
+    </Disclosure>
   );
 }

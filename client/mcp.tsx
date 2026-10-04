@@ -84,6 +84,7 @@ import {
   Loading,
   Notice,
   Pills,
+  QuietLine,
   Row,
   Screen,
   Section,
@@ -290,7 +291,7 @@ function FieldsEditor({
   const dirty = kind !== row.kind || url !== row.url || command !== row.command || kvLines !== row.kvLines;
   useEffect(() => onDirty(dirty), [dirty, onDirty]);
   return (
-    <View style={{ gap: t.space.md }}>
+    <View style={{ gap: t.space.row }}>
       <Segmented
         value={kind}
         onChange={setKind}
@@ -362,7 +363,7 @@ function JsonEditor({
   };
 
   return (
-    <View style={{ gap: t.space.md }}>
+    <View style={{ gap: t.space.row }}>
       <Field
         label="Definition"
         value={buffer}
@@ -449,7 +450,7 @@ function DestinationEditor({
   // definition on disk, so an unsaved buffer withdraws the offer.
   const [dirty, setDirty] = useState(false);
   return (
-    <View style={{ gap: t.space.md }}>
+    <View style={{ gap: t.space.row }}>
       <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: t.space.sm }}>
         <Segmented
           value={tab}
@@ -975,7 +976,7 @@ function ServerGalleryCard({ card, checking, onOpen }: { card: ServerCardModel; 
   return (
     <Card grow tone={attention && card.health ? healthStatus(card.health) : undefined}>
       <View style={{ flexDirection: "row", alignItems: "flex-start", gap: t.space.sm }}>
-        <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
+        <View style={{ flex: 1, minWidth: 0, gap: t.space.hair }}>
           <Text numberOfLines={1} style={t.text.heading}>{card.name}</Text>
           <Text numberOfLines={2} style={[t.text.body, { minHeight: 44 }]}>{card.description}</Text>
         </View>
@@ -1473,25 +1474,6 @@ function McpBody({ layout, host }: PluginSurfaceProps) {
 
   const toServers = (filter: Filter) => () => go("servers", { server: null, filter });
 
-  // "Copy to all my AI apps": every server into every app and account that
-  // lacks it, through the same write as "Add to missing" (client/copy-all.tsx,
-  // server/copy-all.ts). It replaces 0.14's "Sync accounts".
-  const copyCard = (
-    <Card title="Use your servers in every AI app" icon="Copy">
-      <Text style={t.text.body}>{COPY_ALL_EXPLAINER}</Text>
-      {ready ? (
-        <Text style={t.text.caption}>
-          {gapServers.length > 0
-            ? `${plural(gapServers.length, "server")} ${gapServers.length === 1 ? "is" : "are"} missing from at least one app or account.`
-            : "Every AI app and account here has every server."}
-        </Text>
-      ) : null}
-      <View style={{ flexDirection: "row", flexWrap: "wrap", gap: t.space.sm }}>
-        <Button label={COPY_ALL_LABEL} icon="Copy" variant="secondary" onPress={() => setCopyOpen(true)} />
-      </View>
-    </Card>
-  );
-
   // "a, b, c and 2 more": which servers a line is about, without a wall of names.
   const nameList = (list: McpServerRow[]) => {
     const head = list.slice(0, 3).map((entry) => entry.name).join(", ");
@@ -1499,9 +1481,10 @@ function McpBody({ layout, host }: PluginSurfaceProps) {
   };
   const connectedCount = servers.filter((entry) => signInOf(entry) === "connected").length;
 
-  // At a glance: one line per question, each with the link to where it is dealt with. Inside the hero.
+  // At a glance, inside the hero: three questions, each with the link to where it is dealt with (the calm standard:
+  // at most four rows). Tools, Paseo's own tools and projects have their own tabs.
   const glance = (
-    <View style={{ gap: 4 }}>
+    <View style={{ gap: t.space.xs }}>
       <StatusLine
         label="Health"
         {...(!health
@@ -1534,32 +1517,48 @@ function McpBody({ layout, host }: PluginSurfaceProps) {
               ? { value: "all signed in", status: "ok" as Status, hint: `${plural(connectedCount, "server")} you sign in to, across ${plural(accounts.length, "account")}` }
               : { value: "none needed", status: "neutral" as Status, hint: "No server here asks you to sign in" })}
       />
-      <StatusLine
-        label="Tools"
-        {...(toolTotals && toolTotals.servers === 0
-          ? { value: "nothing to list", status: "neutral" as Status }
-          : toolTotals
-          ? { value: plural(toolTotals.tools, "tool"), status: (toolTotals.tools > 0 ? "ok" : "neutral") as Status, hint: `listed by ${toolTotals.listed} of ${plural(toolTotals.servers, "server")}`, action: { label: "Servers", onPress: toServers("all") } }
-          : { value: toolsQuery.isFetching ? "listing" : "not listed yet", status: (toolsQuery.isFetching ? "busy" : "neutral") as Status })}
-      />
-      <PaseoToolsLine onOpen={toServers("all")} />
-      <StatusLine
-        label="Projects"
-        {...(authQuery.data
-          ? { value: projectGroups.length > 0 ? `${plural(projectGroups.length, "project has", "projects have")} their own servers` : "no project has its own servers", status: "neutral" as Status, action: { label: "Projects", onPress: () => go("projects") } }
-          : { value: "reading", status: "neutral" as Status })}
-      />
     </View>
   );
 
-  // The hero says the state in words, with the next step, the at-a-glance lines and the actions under it.
+  // The hero says the state in words, then three rows, one muted line and at most two buttons. The per-server
+  // detail folds behind a quiet link; teaching folds into one "New to MCP servers?" link; AI Router is one line.
   const hero = heroFor(headerPill.status, nextStep.target, overviewFacts);
+  const checkedLine = healthQuery.data ? healthCheckedLabel(healthQuery.data) : null;
+  const secondary =
+    servers.length > 0 && nextStep.label !== "Browse servers"
+      ? { label: "Browse servers", icon: "Server", onPress: toServers("all") }
+      : { label: "Add a server", icon: "Plus", onPress: () => { go("servers", { server: null }); setCatalogOpen(true); } };
   const overview = (
-    <View style={{ gap: t.space.lg }}>
-      <HeroCard tone={hero.tone} icon={hero.icon} title={headerPill.status === "ok" ? "All set: your servers are working" : nextStep.title} lead={nextStep.detail}>
+    <View style={{ gap: t.space.section }}>
+      <HeroCard tone={hero.tone} icon={hero.icon} title={nextStep.title} lead={nextStep.detail}>
         {matrixQuery.isError && !matrixQuery.data ? <ErrorText>{errorText(matrixQuery.error)}</ErrorText> : null}
         {glance}
-        <Divider />
+        {checkedLine ? <Text style={t.text.caption}>{`Health ${checkedLine}`}</Text> : null}
+        {attention.length > 0 ? (
+          <Disclosure quiet title={`See which servers need a look (${attention.length})`} openTitle="Hide which servers need a look">
+            <Card padded={false} level={2}>
+              {attention.map(([name, items], index) => (
+                <Row
+                  key={name}
+                  first={index === 0}
+                  tone={items.some((item) => item.tone === "error") ? "error" : "attention"}
+                  title={name}
+                  meta={
+                    <View style={{ gap: t.space.xs, paddingTop: t.space.hair }}>
+                      {items.map((item) => (
+                        <View key={item.label} style={{ gap: t.space.hair }}>
+                          <StatusPill status={item.tone} label={item.label} />
+                          <Text style={t.text.caption}>{item.detail}</Text>
+                        </View>
+                      ))}
+                    </View>
+                  }
+                  trailing={<Button label="Open" onPress={() => selectServer(name)} />}
+                />
+              ))}
+            </Card>
+          </Disclosure>
+        ) : null}
         <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: t.space.sm }}>
           <Button
             label={nextStep.label}
@@ -1568,40 +1567,10 @@ function McpBody({ layout, host }: PluginSurfaceProps) {
             loading={nextStep.target.section === "refresh" && matrixQuery.isFetching}
             onPress={() => goTo(nextStep.target)}
           />
-          {servers.length > 0 && nextStep.label !== "Browse servers" ? <Button label="Browse servers" icon="Server" onPress={toServers("all")} /> : null}
-          <Button label="Read the walkthrough" variant="ghost" onPress={() => go("guide")} />
-          {nextStep.target.section !== "refresh" ? (
-            <Button label="Refresh" variant="ghost" loading={matrixQuery.isFetching || healthQuery.isFetching} onPress={refreshAll} />
-          ) : null}
+          <Button label={secondary.label} icon={secondary.icon} onPress={secondary.onPress} />
         </View>
       </HeroCard>
-      {attention.length > 0 ? (
-        <Section title={`Needs attention · ${attention.length}`}>
-          <Card padded={false}>
-            {attention.map(([name, items], index) => (
-              <Row
-                key={name}
-                first={index === 0}
-                tone={items.some((item) => item.tone === "error") ? "error" : "attention"}
-                title={name}
-                meta={
-                  <View style={{ gap: t.space.xs, paddingTop: 2 }}>
-                    {items.map((item) => (
-                      <View key={item.label} style={{ gap: 2 }}>
-                        <StatusPill status={item.tone} label={item.label} />
-                        <Text style={t.text.caption}>{item.detail}</Text>
-                      </View>
-                    ))}
-                  </View>
-                }
-                trailing={<Button label="Open" onPress={() => selectServer(name)} />}
-              />
-            ))}
-          </Card>
-        </Section>
-      ) : null}
-      {copyCard}
-      <OverviewGuide apps={appNames(destinations)} onAdd={() => go("servers", { server: null })} onCopy={() => setCopyOpen(true)} />
+      <OverviewGuide apps={appNames(destinations)} open={ready && servers.length === 0} onAdd={() => go("servers", { server: null })} onCopy={() => setCopyOpen(true)} />
       <AiRouterCard />
     </View>
   );
@@ -1631,11 +1600,6 @@ function McpBody({ layout, host }: PluginSurfaceProps) {
       ]}
     />
   );
-  const summaryTitle = [
-    plural(servers.length, "server"),
-    health && issueServers.length > 0 ? `${issueServers.length} need${issueServers.length === 1 ? "s" : ""} attention` : "",
-    authQuery.data && signInServers.length > 0 ? `${signInServers.length} need sign-in` : "",
-  ].filter(Boolean).join(" · ");
 
   const removePanel = (entry: McpServerRow) => (
     <RemovePanel
@@ -1654,7 +1618,7 @@ function McpBody({ layout, host }: PluginSurfaceProps) {
   );
 
   const list = (
-    <View style={{ gap: t.space.md }}>
+    <View style={{ gap: t.space.row }}>
       {matrixQuery.isLoading ? <Loading label={`Reading your AI apps' settings on ${host.label}…`} /> : null}
       {healthQuery.error ? (
         <ErrorText>
@@ -1739,7 +1703,7 @@ function McpBody({ layout, host }: PluginSurfaceProps) {
   );
 
   const serverPane = server ? (
-    <View style={{ gap: t.space.lg }}>
+    <View style={{ gap: t.space.section }}>
       {back}
       <Card>
         <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: t.space.sm }}>
@@ -1929,7 +1893,7 @@ function McpBody({ layout, host }: PluginSurfaceProps) {
                 }
                 expanded={
                   open ? (
-                    <View style={{ gap: t.space.md }}>
+                    <View style={{ gap: t.space.row }}>
                       {destinationConnection(server, dest)}
                       <DestinationEditor
                         tab={editTab}
@@ -1978,7 +1942,7 @@ function McpBody({ layout, host }: PluginSurfaceProps) {
       }}
     />
   ) : (
-    <View style={{ gap: t.space.lg }}>
+    <View style={{ gap: t.space.section }}>
       <Toolbar
         actions={
           <>
@@ -1997,15 +1961,6 @@ function McpBody({ layout, host }: PluginSurfaceProps) {
           </>
         }
       />
-      {/* Two quiet rows, closed by default, so the gallery starts near the top. */}
-      <View>
-        <PaseoToolsDisclosure hostLabel={host.label} />
-        {ready ? (
-          <Disclosure title={summaryTitle}>
-            {summaryStrip}
-          </Disclosure>
-        ) : null}
-      </View>
       {filters}
       {filter === "gaps" && gallery.counts.gaps > 0 ? (
         <Notice tone="attention">
@@ -2018,11 +1973,20 @@ function McpBody({ layout, host }: PluginSurfaceProps) {
         </Notice>
       ) : null}
       {list}
+      {/* Extras last, folded and quiet (the calm standard): Paseo's own tools, and the totals the pills don't show. */}
+      <View style={{ gap: t.space.xs }}>
+        <PaseoToolsDisclosure hostLabel={host.label} quiet />
+        {ready ? (
+          <Disclosure quiet title="Totals and last check" openTitle="Hide totals">
+            {summaryStrip}
+          </Disclosure>
+        ) : null}
+      </View>
     </View>
   );
 
   const projectsSection = (
-    <View style={{ gap: t.space.lg }}>
+    <View style={{ gap: t.space.section }}>
       {authQuery.isLoading ? <Loading label="Reading projects…" /> : null}
       {authQuery.error ? <ErrorText>{authQuery.data ? `Could not refresh projects (${errorText(authQuery.error)}). Showing the earlier read.` : `Could not read projects: ${errorText(authQuery.error)}`}</ErrorText> : null}
       {authQuery.data && projectGroups.length === 0 ? (
@@ -2042,17 +2006,16 @@ function McpBody({ layout, host }: PluginSurfaceProps) {
               title={project}
               subtitle={names.join(", ")}
               meta={<Facts items={[{ value: plural(names.length, "server") }]} />}
-              trailing={<Tag label="sign in from its workspace" />}
             />
           ))}
         </Card>
       ) : null}
-      <Text style={t.text.caption}>To sign in to a project's servers, open that project's workspace and choose MCP connections (command palette → "Open workspace MCP connections").</Text>
+      <QuietLine icon="KeyRound">To sign in to a project's servers, open that project's workspace and choose MCP connections (command palette → "Open workspace MCP connections").</QuietLine>
     </View>
   );
 
   const addPane = (
-    <View style={{ gap: t.space.lg }}>
+    <View style={{ gap: t.space.section }}>
       <Card>
         <Text style={t.text.heading}>Add a server</Text>
         <Field label="Name" value={addName} onChangeText={setAddName} placeholder="my-server" />
@@ -2110,7 +2073,7 @@ function McpBody({ layout, host }: PluginSurfaceProps) {
   const pickedServers: ParsedServer[] = (parsed?.servers ?? []).filter((entry) => picked.includes(entry.name));
   const stillPlaceholders = pickedServers.filter((entry) => entry.hasPlaceholders.length > 0);
   const importPane = (
-    <View style={{ gap: t.space.lg }}>
+    <View style={{ gap: t.space.section }}>
       <Card>
         <Text style={t.text.heading}>Paste a server's setup text</Text>
         <Field
@@ -2236,7 +2199,7 @@ function McpBody({ layout, host }: PluginSurfaceProps) {
   );
 
   const transferSection = (
-    <View style={{ gap: t.space.lg }}>
+    <View style={{ gap: t.space.section }}>
       <Segmented
         value={mode}
         onChange={setMode}
@@ -2275,7 +2238,7 @@ function McpBody({ layout, host }: PluginSurfaceProps) {
   );
 
   const guideSection = (
-    <View style={{ gap: t.space.lg }}>
+    <View style={{ gap: t.space.section }}>
       <Grid min={260}>
         {GUIDE_STEPS.map((step, index) => (
           <Card key={step.title}>
@@ -2325,13 +2288,14 @@ function McpBody({ layout, host }: PluginSurfaceProps) {
     <View style={{ flex: 1, backgroundColor: t.color.surface0 }}>
       {/* Padded the same way as Screen below, so the header, the tab bar and the content share one left edge. */}
       <View style={{ paddingHorizontal: pad, paddingTop: pad }}>
-        <View style={{ width: "100%", maxWidth: t.maxWidth, alignSelf: "center", gap: t.space.md }}>
-          <Header title="MCP servers" status={headerPill} caption={`on ${host.label}`} />
+        <View style={{ width: "100%", maxWidth: t.maxWidth, alignSelf: "center", gap: t.space.row }}>
+          <Header title="MCP servers" status={headerPill} caption={ready ? `${plural(servers.length, "server")} on ${host.label}` : `on ${host.label}`} />
           <TabBar active={section} onSelect={(next) => { setCopyOpen(false); go(next, next === "servers" ? { server: null } : {}); }} />
         </View>
       </View>
-      <Screen t={t} paddingTop={t.space.lg}>
-        {copyOpen || (section === "servers" && server) ? null : <TabIntro section={section} />}
+      <Screen t={t} paddingTop={t.space.section}>
+        {/* Overview has no intro: its status card is its introduction (the calm standard). */}
+        {copyOpen || section === "overview" || (section === "servers" && server) ? null : <TabIntro section={section} />}
         {matrixStale ? (
           <StaleNote what="your AI apps' settings" at={readAt(matrixQuery.dataUpdatedAt)} reason={errorText(matrixQuery.error)} onRetry={refreshAll} />
         ) : matrixQuery.isError && section !== "overview" ? (
@@ -2637,7 +2601,7 @@ export function WorkspaceBody({
       </View>
     </Notice>
   ) : server && data ? (
-    <View style={{ gap: t.space.lg }}>
+    <View style={{ gap: t.space.section }}>
       <View style={{ flexDirection: "row" }}>
         <Button label="← Workspace MCP servers" variant="ghost" onPress={() => setSelected(null)} />
       </View>
@@ -2700,7 +2664,7 @@ export function WorkspaceBody({
       />
     </View>
   ) : data ? (
-    <View style={{ gap: t.space.lg }}>
+    <View style={{ gap: t.space.section }}>
       {workspaceStale ? (
         <StaleNote what="this workspace" at={readAt(workspaceQuery.dataUpdatedAt)} reason={errorText(workspaceQuery.error)} onRetry={refresh} />
       ) : null}
@@ -2753,7 +2717,7 @@ export function WorkspaceBody({
   const pad = t.compact ? 16 : 24;
   return (
     <View style={{ flex: 1, backgroundColor: t.color.surface0 }}>
-      <View style={{ padding: pad, paddingBottom: t.space.md, gap: t.space.md, width: "100%", maxWidth: t.maxWidth, alignSelf: "center" }}>
+      <View style={{ padding: pad, paddingBottom: t.space.row, gap: t.space.row, width: "100%", maxWidth: t.maxWidth, alignSelf: "center" }}>
         <Header title={workspace?.name ?? "MCP connections"} status={pill} caption={`${caption} · on ${host.label}`} icon={agentId ? "Bot" : "FolderCode"} />
         {intro}
         {signInFocus && agentId ? (
@@ -2772,7 +2736,7 @@ export function WorkspaceBody({
           <Button label="Refresh" variant="ghost" loading={workspaceQuery.isFetching || healthQuery.isFetching} onPress={refresh} />
         </View>
       </View>
-      <Screen t={t} paddingTop={4}>{body}</Screen>
+      <Screen t={t} paddingTop={t.space.xs}>{body}</Screen>
     </View>
   );
 }

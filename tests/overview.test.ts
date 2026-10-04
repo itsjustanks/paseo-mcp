@@ -8,7 +8,7 @@ const calm: OverviewFacts = { state: "ready", staleAt: null, hostLabel: "paseo",
 test("a calm host: the pill says all working and the next step is All set", () => {
   assert.deepEqual(overviewVerdict(calm), { status: "ok", label: "All working" });
   const step = overviewNextStep(calm);
-  assert.equal(step.title, "All set");
+  assert.equal(step.title, "All set: your servers are working");
   assert.deepEqual(step.target, { section: "servers", filter: "all" });
 });
 
@@ -17,7 +17,7 @@ test("the pill and the next step name the same problem, most urgent first", () =
   const busy: OverviewFacts = { ...calm, broken: 1, signIn: 2, gaps: 3, warnings: 1 };
   assert.deepEqual(overviewVerdict(busy), { status: "error", label: "1 not working" });
   assert.equal(overviewNextStep(busy).title, "Fix the server that isn't working");
-  assert.equal(overviewNextStep(busy).detail, "One server isn't working. Open it to see what's wrong and fix it.");
+  assert.equal(overviewNextStep(busy).detail, "Open it to see what's wrong. Your other servers keep working.");
   assert.deepEqual(overviewNextStep(busy).target, { section: "servers", filter: "issues" });
 
   const signIn = { ...busy, broken: 0 };

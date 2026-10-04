@@ -144,10 +144,10 @@ export function paseoToolsTitle(state: PaseoToolsStateReport | undefined, failed
 }
 
 /** The Servers tab's Paseo tools card, folded into one row until opened (0.15.0). */
-export function PaseoToolsDisclosure({ hostLabel }: { hostLabel: string }) {
+export function PaseoToolsDisclosure({ hostLabel, quiet }: { hostLabel: string; quiet?: boolean }) {
   const query = usePaseoTools();
   return (
-    <Disclosure title={paseoToolsTitle(query.data, Boolean(query.error))}>
+    <Disclosure quiet={quiet} title={paseoToolsTitle(query.data, Boolean(query.error))}>
       <PaseoToolsCard hostLabel={hostLabel} />
     </Disclosure>
   );

@@ -127,7 +127,7 @@ function ServerCard({ card, have, similar, onAdd, onAddByHand }: { card: Catalog
   const byHand = byHandOnly(card);
   return (
     <Card>
-      <View style={{ gap: 2 }}>
+      <View style={{ gap: t.space.hair }}>
         <View style={{ flexDirection: "row", alignItems: "center", gap: t.space.xs }}>
           <CardIcon url={card.entry.iconUrl} />
           <Text numberOfLines={1} style={[t.text.heading, { flexShrink: 1 }]}>{card.entry.name}</Text>
@@ -271,7 +271,7 @@ export function CatalogGallery({
     ) : null;
 
   return (
-    <View style={{ gap: t.space.lg }}>
+    <View style={{ gap: t.space.section }}>
       <Toolbar
         title="Add a server"
         subtitle="Pick one to add. Nothing is written until you review the change and press Add."
@@ -423,7 +423,7 @@ function InstallSheet({
   if (result) {
     const tone: Status = result.health ? (result.health.status === "ok" ? "ok" : result.health.status === "auth-required" ? "neutral" : "attention") : "neutral";
     return (
-      <View style={{ gap: t.space.lg }}>
+      <View style={{ gap: t.space.section }}>
         <Toolbar title={`Added ${name.trim()}`} subtitle={result.message} actions={<Button label="Back to catalogue" variant="ghost" onPress={onBack} />} />
         <Card>
           <Text style={t.text.heading}>Health check</Text>
@@ -471,7 +471,7 @@ function InstallSheet({
   }
 
   return (
-    <View style={{ gap: t.space.lg }}>
+    <View style={{ gap: t.space.section }}>
       <Toolbar title={`Add ${entry.name}`} subtitle={`${publisherLine(card)} · ${card.trustNote}`} actions={<Button label="Back to catalogue" variant="ghost" onPress={onBack} />} />
       {card.warning ? <Notice tone="attention">{card.warning}</Notice> : null}
       {byo && setup ? (
@@ -668,7 +668,7 @@ function ByoSetupSteps({
           return (
             <View key={step} style={{ flexDirection: "row", gap: t.space.sm, alignItems: "flex-start" }}>
               <Text style={[t.text.label, { minWidth: 18 }]}>{`${index + 1}.`}</Text>
-              <View style={{ flex: 1, gap: 2 }}>
+              <View style={{ flex: 1, gap: t.space.hair }}>
                 <Text style={t.text.body}>{words}</Text>
                 {links.map((link) => (
                   <Text key={link} accessibilityRole="link" numberOfLines={1} onPress={() => open(link)} style={[t.text.caption, { color: t.color.accent }]}>

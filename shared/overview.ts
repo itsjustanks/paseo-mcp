@@ -85,18 +85,18 @@ export function overviewNextStep(facts: OverviewFacts): OverviewStep {
     case "broken":
       return {
         title: facts.broken === 1 ? "Fix the server that isn't working" : `Fix ${facts.broken} servers that aren't working`,
-        detail: facts.broken === 1 ? "One server isn't working. Open it to see what's wrong and fix it." : `${facts.broken} servers aren't working. Open each one to see what's wrong and fix it.`,
+        detail: facts.broken === 1 ? "Open it to see what's wrong. Your other servers keep working." : "Open each one to see what's wrong. Your other servers keep working.",
         label: "Show them",
         target: { section: "servers", filter: "issues" },
       };
     case "signIn":
       return { title: `Sign in to ${plural(facts.signIn, "server")}`, detail: "Each AI app and account signs in once, in your browser. Open a server and choose Connect.", label: "Show servers that need sign-in", target: { section: "servers", filter: "sign-in" } };
     case "gaps":
-      return { title: `Copy ${plural(facts.gaps, "server")} to the apps missing them`, detail: "Some servers are in one AI app but not another. Copy them everywhere in one go; you'll see exactly what changes first.", label: "Copy to all my AI apps", target: { section: "copy" } };
+      return { title: `Copy ${plural(facts.gaps, "server")} to the apps missing them`, detail: "Add a server once, and this puts it in every AI app that doesn't have it yet. You see exactly what changes first.", label: "Copy to all my AI apps", target: { section: "copy" } };
     case "warnings":
       return { title: `Check ${plural(facts.warnings, "server")} with a warning`, detail: "A server answered, but not cleanly. Open it to see what's wrong.", label: "Show them", target: { section: "servers", filter: "issues" } };
     default:
-      return { title: "All set", detail: `${plural(facts.servers, "server")}, in every AI app, all working and signed in. Add another whenever you like.`, label: "Browse servers", target: { section: "servers", filter: "all" } };
+      return { title: "All set: your servers are working", detail: "Your assistants can use them in any chat. Add another whenever you like.", label: "Browse servers", target: { section: "servers", filter: "all" } };
   }
 }
 

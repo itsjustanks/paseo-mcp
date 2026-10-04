@@ -27,7 +27,7 @@ export function CopyAllPanel({ onClose, onCopied }: { onClose: () => void; onCop
 
   if (result) {
     return (
-      <View style={{ gap: t.space.lg }}>
+      <View style={{ gap: t.space.section }}>
         <Toolbar title="Copied" subtitle={copySummary(result.results)} actions={<Button label="Done" variant="primary" onPress={onClose} />} />
         <Card padded={false}>
           {result.results.map((entry, index) => (
@@ -37,7 +37,7 @@ export function CopyAllPanel({ onClose, onCopied }: { onClose: () => void; onCop
               tone={entry.skipped.length > 0 ? "attention" : undefined}
               title={entry.name}
               meta={
-                <View style={{ gap: t.space.xs, paddingTop: 2 }}>
+                <View style={{ gap: t.space.xs, paddingTop: t.space.hair }}>
                   {entry.written.length > 0 ? <StatusPill status="ok" label={`Copied to ${joinWords(entry.written)}`} /> : null}
                   {entry.skipped.map((skip) => (
                     <Text key={skip.label} style={[t.text.caption, { color: t.color.warning }]}>{`Not copied to ${skip.label}: ${skip.reason}.`}</Text>
@@ -53,7 +53,7 @@ export function CopyAllPanel({ onClose, onCopied }: { onClose: () => void; onCop
   }
 
   return (
-    <View style={{ gap: t.space.lg }}>
+    <View style={{ gap: t.space.section }}>
       <Toolbar title={COPY_ALL_LABEL} subtitle={COPY_ALL_EXPLAINER} actions={<Button label="Cancel" variant="ghost" onPress={onClose} />} />
       {planQuery.isLoading ? <Loading label="Working out what's missing where…" /> : null}
       {planQuery.error ? <ErrorText>{`Couldn't work out what to copy: ${plainError(planQuery.error)}`}</ErrorText> : null}
@@ -79,7 +79,7 @@ export function CopyAllPanel({ onClose, onCopied }: { onClose: () => void; onCop
                       checked={on}
                       onChange={(next) => setLeft((list) => (next ? list.filter((name) => name !== entry.name) : [...list, entry.name]))}
                     >
-                      <View style={{ gap: 2 }}>
+                      <View style={{ gap: t.space.hair }}>
                         <Text style={t.text.bodyStrong}>{entry.name}</Text>
                         <Text style={t.text.caption}>{`Adds it to ${joinWords(entry.targets.map((target) => target.label))}`}</Text>
                         <Facts
