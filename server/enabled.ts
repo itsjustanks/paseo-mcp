@@ -35,9 +35,9 @@ import {
 } from "./handlers";
 import { paseoToolsLoad } from "./paseo-tools";
 import { toolSearchVerdicts } from "./tool-search";
-import { withDeadline } from "./run";
 import { settingsPath } from "./settings";
 import { buildProfile, claudeLocalServers, readInjection } from "./workspace";
+import { findDaemonWorkspace } from "./daemon-cache";
 
 /**
  * The per-workspace switches behind the workspace and agent panels. Reading
@@ -53,11 +53,9 @@ import { buildProfile, claudeLocalServers, readInjection } from "./workspace";
 
 type WorkspaceEntry = { id: string; name: string; workspaceDirectory?: string; projectRootPath: string };
 
-async function findWorkspace(paseo: PluginHandlerContext["paseo"], workspaceId: string): Promise<WorkspaceEntry> {
-  const result = await withDeadline(paseo.workspaces.list(), "its workspace list");
-  const workspace = (result as { entries: WorkspaceEntry[] }).entries.find((entry) => entry.id === workspaceId);
-  if (!workspace) throw new Error("This Paseo workspace no longer exists.");
-  return workspace;
+/** The workspace, from the shared copy of the daemon's list (0.18.3); a write (`fresh`) asks the daemon. */
+async function findWorkspace(paseo: PluginHandlerContext["paseo"], workspaceId: string, fresh = false): Promise<WorkspaceEntry> {
+  return findDaemonWorkspace(paseo, workspaceId, { fresh });
 }
 
 /**
@@ -126,7 +124,7 @@ export async function handleMcpAgentServers(
   { paseo }: PluginHandlerContext,
   { probe = true, fresh = false }: { probe?: boolean; fresh?: boolean } = {},
 ) {
-  const workspace = await findWorkspace(paseo, workspaceId);
+  const workspace = await findWorkspace(paseo, workspaceId, fresh);
   const directory = projectKeyFor(workspace);
   const candidates = [...new Set([directory, workspace.projectRootPath].filter(Boolean))];
   const projectConfigPath = candidates.map((candidate) => join(candidate, ".mcp.json")).find(existsSync) ?? "";

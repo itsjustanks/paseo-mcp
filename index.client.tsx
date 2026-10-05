@@ -8,7 +8,7 @@ import { HealthSettingsScreen, InjectionSettingsScreen } from "./client/settings
 import { MCP_SCREEN_ID, McpSidebarItem, SidebarRow, type OpenScreen, type SidebarItemProps } from "./client/sidebar";
 import { McpChip } from "./client/tools";
 import { mcpAgentChat, mcpHealthCached, mcpPaseoTools, mcpToolsCached } from "./shared/contracts";
-import { createChipRegistry, type ChipAgent } from "./shared/chips";
+import { chipAgentFrom, createChipRegistry, type ChipAgent } from "./shared/chips";
 import { SIGN_IN_KIND, SIGN_IN_VERSION } from "./shared/chat";
 import { canObserveAgents, supportsButtonPills, supportsNativeScreens } from "./shared/host-features";
 
@@ -172,16 +172,13 @@ type ChipButtonsClient = {
     button: { title: string; icon: string; label?: string; behavior: { kind: "action"; onPress(): void } };
   }): { update(patch: { label?: string; icon?: string }): void; remove(): void };
 };
-type AgentLike = { id?: string; workspaceId?: string | null; provider?: string | null };
+type AgentLike = { id?: string; workspaceId?: string | null; provider?: string | null; status?: string; archivedAt?: string | null };
 type AgentListLike = { entries: Array<{ agent: AgentLike }> };
 type AgentUpdateLike = { kind: string; agentId?: string; agent?: AgentLike };
 type AgentObservation = {
   subscribe(observer: { snapshot(list: AgentListLike): void; update(message: { type: string; payload?: unknown }): void; error?(error: unknown): void }): () => void;
   release(): Promise<void>;
 };
-
-const chipAgent = (agent: AgentLike | undefined): ChipAgent | null =>
-  agent?.id && agent.workspaceId ? { id: agent.id, workspaceId: agent.workspaceId, provider: agent.provider ?? "" } : null;
 
 function registerMcpChips(client: PluginClientContext, openAgentPanel: (workspaceId: string, agentId: string) => void): () => void {
   const buttons = supportsButtonPills(client);
@@ -223,9 +220,11 @@ function registerMcpChips(client: PluginClientContext, openAgentPanel: (workspac
       registry.remove(update.agentId);
       return;
     }
-    if (update.kind !== "upsert") return;
-    const agent = chipAgent(update.agent);
+    if (update.kind !== "upsert" || !update.agent?.id) return;
+    // A closed or archived agent loses its chip (0.18.3).
+    const agent = chipAgentFrom(update.agent);
     if (agent) registry.upsert(agent);
+    else registry.remove(update.agent.id);
   };
   const stopFollowing = canObserveAgents(client.paseo) ? observeAgents(client, registry.replaceAll, onUpdate) : client.paseo.agents.subscribe((update) => onUpdate(update as unknown as AgentUpdateLike));
   registry.start();
@@ -247,7 +246,7 @@ function observeAgents(client: PluginClientContext, replaceAll: (agents: ChipAge
   let observation: AgentObservation | null = null;
   let retry: ReturnType<typeof setTimeout> | null = null;
   let delay = OBSERVE_RETRY_MIN_MS;
-  const fromList = (list: AgentListLike) => list.entries.map((entry) => chipAgent(entry.agent)).filter((agent): agent is ChipAgent => agent !== null);
+  const fromList = (list: AgentListLike) => list.entries.map((entry) => chipAgentFrom(entry.agent)).filter((agent): agent is ChipAgent => agent !== null);
 
   const reopen = () => {
     observation = null;

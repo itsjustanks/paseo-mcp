@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.18.3 — 2026-10-05
+
+### Added
+- **A "+" on the MCP sidebar row** (Paseo 0.11 and later), like the Skills one. It opens the MCP page straight on Add a server. Pressing it again while the page is open opens Add a server again. The row itself still opens the page as it was (`shared/screen-params.ts`, with a test).
+- **Meta Ads** can be added from a gallery that lists it (`https://mcp.facebook.com/ads`). Claude Code connects to it with your own Meta app.
+  - Meta's sign-in takes an **App ID and no client secret**. So the sheet asks for the App ID only, and shows no secret field. Claude Code is called without `--client-secret`, and nothing is put in its environment.
+  - A catalogue entry says this with `setup.secretless: true`, which is allowed only on bring-your-own-app entries. Meta joins Google, HubSpot and Zoom on the vendor list. Its steps and guide must link to Meta's own sites.
+
+### Fixed
+- **0.18.1's chips read too much on busy daemons.** Since Paseo 0.9 the plugin's agent observation lists every agent the daemon has; one host had 83, most of them closed. Each got a chip, and each chip read its context meter every minute. That was hundreds of slow workspace lookups, and "workspace no longer exists" errors for agents whose workspace was gone.
+  - Closed and archived agents, and agents with no workspace, get no chip.
+  - Only running agents read their meter. An idle agent's chip still shows the health and tool counts.
+  - A meter read that fails is not tried again for 10 minutes.
+- **The workspace list is read once and shared**, like the project list and provider settings (15 s, one call at a time). A workspace made since the last read is looked for again with a fresh read before it is called gone. Used by the chip meter, the Workspace panel, the enabled-servers read and the sign-in folder.
+
 ## 0.18.2 — 2026-10-05
 
 ### Changed

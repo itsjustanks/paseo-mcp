@@ -17,8 +17,8 @@ import {
 import { paseoToolsLoad } from "./paseo-tools";
 import { toolSearchVerdicts } from "./tool-search";
 import { observeWorkspaceProcesses } from "./processes";
-import { withDeadline } from "./run";
 import { readSettingsDocument } from "./settings";
+import { findDaemonWorkspace } from "./daemon-cache";
 
 /**
  * The workspace panel's one RPC. Everything here is read-only and shaped for
@@ -91,17 +91,8 @@ export async function handleMcpWorkspace(
   { workspaceId }: { workspaceId: string },
   { paseo }: PluginHandlerContext,
 ) {
-  const result = await withDeadline(paseo.workspaces.list(), "its workspace list");
-  const entries = (result as {
-    entries: Array<{
-      id: string;
-      name: string;
-      workspaceDirectory?: string;
-      projectRootPath: string;
-    }>;
-  }).entries;
-  const workspace = entries.find((entry) => entry.id === workspaceId);
-  if (!workspace) throw new Error("This Paseo workspace no longer exists.");
+  // The shared copy of the daemon's workspace list (0.18.3), looked for again before it is called gone.
+  const workspace = await findDaemonWorkspace(paseo, workspaceId);
 
   const directory = workspace.workspaceDirectory || workspace.projectRootPath;
   const candidates = [...new Set([directory, workspace.projectRootPath].filter(Boolean))];

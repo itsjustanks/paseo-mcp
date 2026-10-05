@@ -67,7 +67,8 @@ const GW = "https://developers.google.com/workspace/guides/configure-mcp-servers
 const scopes = "https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/gmail.compose";
 const entry = (name: string, url: string, setup: unknown, variables?: unknown) => ({
   server: { name, description: `${name}.`, version: "1.0.0", remotes: [{ type: "streamable-http", url, ...(variables ? { variables } : {}) }] },
-  _meta: { [META]: { displayName: name, category: "productivity", auth: "oauth", docsUrl: GW, verifiedAt: "2026-09-28", setup } },
+  // The docs link is the vendor's own, as the byo-oauth vendor check requires.
+  _meta: { [META]: { displayName: name, category: "productivity", auth: "oauth", docsUrl: url.includes("facebook.com") ? (setup as { guideUrl: string }).guideUrl : GW, verifiedAt: "2026-09-28", setup } },
 });
 const libraryFile = join(home, "gallery.json");
 writeFileSync(
@@ -76,11 +77,12 @@ writeFileSync(
     servers: [
       entry("com.box/mcp", "https://mcp.box.com", { kind: "admin", reason: "A Box admin has to turn it on.", guideUrl: "https://developer.box.com/guides/box-mcp/remote/" }),
       entry("com.google/gmail", "https://gmailmcp.googleapis.com/mcp/v1", { kind: "byo-oauth", reason: "Google only lets in your own sign-in app.", guideUrl: GW, steps: ["Create a client."], redirectHint: "Authorized redirect URIs", clients: ["claude"], scopes }),
+      entry("com.facebook/ads", "https://mcp.facebook.com/ads", { kind: "byo-oauth", reason: "Claude Code signs in with your own Meta app.", guideUrl: "https://developers.facebook.com/documentation/ads-commerce/ads-ai-connectors/ads-mcp-server/ads-mcp-server-get-started", steps: ["Create a developer app: https://developers.facebook.com/apps"], clients: ["claude"], secretless: true }),
       entry("com.google/gmail-lookalike", "https://gmail-mcp.evil.example/mcp/v1", { kind: "byo-oauth", reason: "Google only lets in your own sign-in app.", guideUrl: GW, steps: ["Create a client."], clients: ["claude"] }),
       entry("com.slack/mcp", "https://mcp.slack.com/mcp", { kind: "approved-clients", reason: "Slack only lets its approved apps connect.", guideUrl: "https://docs.slack.dev/ai/slack-mcp-server/" }),
       entry("com.zendesk/mcp", "https://{subdomain}.zendesk.com/api/mcp", { kind: "per-org", reason: "It needs your subdomain.", guideUrl: "https://www.zendesk.com/marketplace/apps/support/1191848/mcp-server/", urlTemplate: "https://{subdomain}.zendesk.com/api/mcp", label: "Your Zendesk subdomain" }, { subdomain: { description: "Subdomain", isRequired: true, isSecret: false } }),
     ],
-    metadata: { count: 5 },
+    metadata: { count: 6 },
   }),
 );
 
@@ -352,4 +354,19 @@ test("an install that skips the contract with hasSecret and no secret is refused
   assert.equal(result.ok, false);
   assert.match(result.message, /client secret/);
   assert.equal(runsSoFar(), runs);
+});
+
+test("Meta Ads: added through Claude Code with the App ID only: no --client-secret, nothing in its environment", async () => {
+  const runs = runsSoFar();
+  const input = byoInput("meta-ads", [claudeFile], "library:test-gallery:com.facebook/ads");
+  const plan = await handleMcpCatalogPlan({ ...input, oauthClient: { clientId: "1234567890123456", hasSecret: false } }, context);
+  assert.equal(plan.ok, true, plan.issues.join("; "));
+  const result = await handleMcpCatalogInstall({ ...input, oauthClient: { clientId: "1234567890123456", clientSecret: "" }, planHash: plan.planHash }, context);
+  assert.equal(result.ok, true, result.message);
+  assert.equal(runsSoFar(), runs + 1);
+  const argv = JSON.parse(readFileSync(argvLog, "utf8").trim().split("\n").at(-1)!) as string[];
+  assert.ok(!argv.includes("--client-secret"), argv.join(" "));
+  assert.equal(argv[argv.indexOf("meta-ads") - 1], "--");
+  assert.equal(readFileSync(envLog, "utf8").split("\n").at(-2), "", "no MCP_CLIENT_SECRET");
+  assert.deepEqual(claudeServers()["meta-ads"], { type: "http", url: "https://mcp.facebook.com/ads", oauth: { clientId: "1234567890123456", callbackPort: 33418 } });
 });

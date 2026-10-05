@@ -460,8 +460,8 @@ type Prepared = {
   destinations: Destination[];
   projectFile: string;
   redirectUri: string;
-  /** Set for a bring-your-own-app server: its client's secret goes to Claude Code, nowhere else. */
-  byo: { clientSecret: string } | null;
+  /** Set for a bring-your-own-app server: its client's secret goes to Claude Code, nowhere else. `secretless`: the vendor's sign-in has none (0.18.3). */
+  byo: { clientSecret: string; secretless: boolean } | null;
   /** Picked apps that can't take this server, each "label: why" (0.16.0). */
   skippedTargets: string[];
 };
@@ -604,12 +604,12 @@ async function prepareByo(input: InstallInput, card: CatalogCard, name: string, 
     names.forEach((entry) => taken.add(entry));
     heaviest = Math.max(heaviest, names.length);
     if (SERVER_NAME.test(name) && destReadOne(dest, name)) clashFiles.push(dest.label);
-    result.previews.push({ file: dest.configPath, label: dest.label, text: byoOauthPreview(name, plan.definition) });
+    result.previews.push({ file: dest.configPath, label: dest.label, text: byoOauthPreview(name, plan.definition, card.entry.setup?.secretless === true) });
   }
   if (clashFiles.length > 0) result.clash = { files: clashFiles, suggestion: nameClash(name, taken).suggestion };
   if (result.destinations.length > 0) result.budget = budgetImpact("user", heaviest + 1, describeTargets(result.destinations.map((dest) => dest.label)));
   const secret = (typed ?? "").trim();
-  result.byo = { clientSecret: secret };
+  result.byo = { clientSecret: secret, secretless: card.entry.setup?.secretless === true };
   result.planHash = planHash({ entry: card.entry, scope: input.scope, targets: input.targets ?? [], projectPath: input.projectPath ?? "", name, previews: result.previews });
   // Belt and braces: nothing shown may hold the secret, whatever it looks like.
   result.issues = [...new Set(result.issues.filter(Boolean))].map((line) => scrubSecret(line, secret));
@@ -695,7 +695,7 @@ export async function handleMcpCatalogInstall(input: InstallInput, context: Plug
   if (prepared.byo) {
     // Through Claude Code's own add, one account at a time (server/byo-oauth.ts).
     for (const dest of prepared.destinations) {
-      const outcome = await addWithClaudeClient(dest, name, prepared.definition, prepared.byo.clientSecret);
+      const outcome = await addWithClaudeClient(dest, name, prepared.definition, prepared.byo.clientSecret, { secretless: prepared.byo.secretless });
       if (outcome.ok) written.push(dest.label);
       else skipped.push(`${dest.label}: ${scrubSecret(outcome.message, prepared.byo.clientSecret)}`);
     }

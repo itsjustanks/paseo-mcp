@@ -302,3 +302,38 @@ test("the sheet tells an empty box from a real problem: only real problems are r
     assert.equal(isStillToFill(issue), false, issue);
   }
 });
+
+// ------------------------------------------------ 0.18.3: Meta Ads, an app ID and no secret
+
+const metaSetup = {
+  kind: "byo-oauth",
+  reason: "Claude Code signs in to Meta Ads with your own Meta app; only its App ID is needed, no secret.",
+  guideUrl: "https://developers.facebook.com/documentation/ads-commerce/ads-ai-connectors/ads-mcp-server/ads-mcp-server-get-started",
+  steps: ["Create a developer app: https://developers.facebook.com/apps", "Add the use case Create & manage ads with ads MCP server."],
+  redirectHint: "Valid OAuth Redirect URIs",
+  clients: ["claude"],
+  secretless: true,
+};
+const metaRemote = { url: "https://mcp.facebook.com/ads", transport: "http" as const };
+
+test("Meta Ads: Meta is a known vendor at mcp.facebook.com, and secretless is only for byo-oauth", () => {
+  assert.equal(parseSetup(metaSetup, metaRemote).problem, "");
+  assert.equal(byoVendor(metaRemote.url)?.vendor, "Meta");
+  assert.match(parseSetup({ ...metaSetup, steps: ["Paste it at https://facebook.com.evil.example/x"] }, metaRemote).problem, /Meta's own sites/);
+  assert.match(parseSetup({ ...zendeskSetup, secretless: true }, zendeskRemote).problem, /secretless is only for byo-oauth/);
+});
+
+test("Meta Ads: the plan needs the App ID only; no secret is asked for or kept", () => {
+  const meta = item("com.facebook/ads", metaRemote.url, metaSetup);
+  meta._meta[GALLERY_META].docsUrl = metaSetup.guideUrl; // Meta's own docs, as the vendor check requires
+  const { cards } = cardsOf([meta]);
+  const card = cards[0]!;
+  assert.equal(card.installable, true);
+  const target = [{ id: "/h/.claude.json", label: "Claude", provider: "claude", format: "json-mcp", configPath: "/h/.claude.json" }];
+  const plan = planByoOauth(card.entry, target, { clientId: "1234567890123456", hasSecret: false });
+  assert.deepEqual(plan.issues, []);
+  assert.deepEqual(plan.definition, { type: "http", url: metaRemote.url, oauth: { clientId: "1234567890123456", callbackPort: CLAUDE_CALLBACK_PORT } });
+  assert.ok(plan.notes.some((note) => /no client secret/i.test(note)));
+  assert.ok(!plan.notes.some((note) => /secure store/.test(note)), "nothing about storing a secret");
+  assert.ok(planByoOauth(card.entry, target, { clientId: "", hasSecret: false }).issues.includes("Paste the App ID."));
+});

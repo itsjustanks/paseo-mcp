@@ -146,13 +146,18 @@ function queued<T>(key: string, task: () => Promise<T>): Promise<T> {
 }
 
 /** Add one server with its client to one Claude account. The secret is only ever in the child's environment. */
-export function addWithClaudeClient(dest: Destination, name: string, definition: Record<string, unknown>, clientSecret: string): Promise<ByoWrite> {
-  return queued(resolve(dest.configPath), () => addNow(dest, name, definition, clientSecret));
+export function addWithClaudeClient(dest: Destination, name: string, definition: Record<string, unknown>, clientSecret: string, options: { secretless?: boolean } = {}): Promise<ByoWrite> {
+  return queued(resolve(dest.configPath), () => addNow(dest, name, definition, clientSecret, options.secretless === true));
 }
 
-async function addNow(dest: Destination, name: string, definition: Record<string, unknown>, clientSecret: string): Promise<ByoWrite> {
+/**
+ * `secretless` (0.18.3, Meta Ads): the vendor's sign-in takes no client
+ * secret, so Claude Code is run without `--client-secret` and nothing goes in
+ * its environment or secure store; the client ID is in the entry, as always.
+ */
+async function addNow(dest: Destination, name: string, definition: Record<string, unknown>, clientSecret: string, secretless: boolean): Promise<ByoWrite> {
   const secret = clientSecret.trim();
-  if (!secret) return { ok: false, message: "No client secret was given, so nothing was written." };
+  if (!secret && !secretless) return { ok: false, message: "No client secret was given, so nothing was written." };
   const plain = (text: string) => scrubSecret(text, secret).replace(/\u001b\[[0-9;]*[A-Za-z]/g, "").trim().split("\n").slice(-2).join(" ").slice(0, 300);
   const binary = cliPath("claude");
   if (!binary) return { ok: false, message: "Claude Code isn't on this computer's PATH, and only Claude Code can store the client secret. Install it, or add the server in a terminal with claude mcp add-json." };
@@ -163,7 +168,10 @@ async function addNow(dest: Destination, name: string, definition: Record<string
   } catch (error) {
     return { ok: false, message: `could not back up ${dest.configPath} first, so nothing was written (${error instanceof Error ? error.message : String(error)})` };
   }
-  const result = await run(binary, ["mcp", "add-json", "--scope", "user", "--client-secret", "--", name, JSON.stringify(definition)], { ...claudeEnvironment(dest), MCP_CLIENT_SECRET: secret });
+  const args = ["mcp", "add-json", "--scope", "user", ...(secretless ? [] : ["--client-secret"]), "--", name, JSON.stringify(definition)];
+  const env = claudeEnvironment(dest);
+  delete env.MCP_CLIENT_SECRET;
+  const result = await run(binary, args, secretless ? env : { ...env, MCP_CLIENT_SECRET: secret });
   forgetFile(dest.configPath);
   const failure = result.error
     ? `claude could not be started: ${plain(result.error)}.`

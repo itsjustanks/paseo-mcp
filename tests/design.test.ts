@@ -79,3 +79,14 @@ test("links open through the app's own opener where it has one (0.10+), else as 
   await opener?.("https://example.com");
   assert.deepEqual(opened, ["https://example.com"]);
 });
+
+test("the sidebar '+' opens the MCP page on Add a server, and a second press opens it again", async () => {
+  const { addServerParams, addServerRequest } = await import("../shared/screen-params");
+  const first = addServerParams(1000);
+  const second = addServerParams(2000);
+  assert.equal(addServerRequest(first), "1000");
+  assert.notEqual(addServerRequest(first), addServerRequest(second), "each press is new");
+  assert.equal(addServerRequest({}), null, "the plain sidebar row opens the page as it was");
+  assert.equal(addServerRequest(undefined), null);
+  assert.equal(addServerRequest({ add: "something-else" }), null);
+});

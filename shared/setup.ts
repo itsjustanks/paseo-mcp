@@ -49,7 +49,7 @@ export { CatalogSetupSchema, ORG_PLACEHOLDERS, SETUP_CLIENTS, SETUP_CLIENT_LABEL
  * release. The Google pattern is one label ending in `mcp` (gmailmcp,
  * calendarmcp…); storage.googleapis.com and bucket hosts don't match.
  */
-export const BYO_OAUTH_VENDORS: ReadonlyArray<{ vendor: string; server: RegExp; links: readonly string[] }> = [
+export const BYO_OAUTH_VENDORS: ReadonlyArray<{ vendor: string; server: RegExp; links: readonly string[]; idName?: string }> = [
   {
     vendor: "Google",
     server: /^[a-z0-9-]+mcp\.googleapis\.com$/,
@@ -57,6 +57,8 @@ export const BYO_OAUTH_VENDORS: ReadonlyArray<{ vendor: string; server: RegExp; 
   },
   { vendor: "HubSpot", server: /^mcp\.hubspot\.com$/, links: ["developers.hubspot.com", "knowledge.hubspot.com", "app.hubspot.com", "www.hubspot.com"] },
   { vendor: "Zoom", server: /^mcp\.zoom\.us$/, links: ["developers.zoom.us", "marketplace.zoom.us", "support.zoom.com", "www.zoom.com"] },
+  // 0.18.3: Meta Ads (mcp.facebook.com/ads). Meta calls the client ID the App ID, and its sign-in takes no secret.
+  { vendor: "Meta", server: /^mcp\.facebook\.com$/, links: ["developers.facebook.com", "www.facebook.com", "business.facebook.com"], idName: "App ID" },
 ];
 
 export type ByoVendor = (typeof BYO_OAUTH_VENDORS)[number];
@@ -109,6 +111,7 @@ export function cleanSetup(setup: CatalogSetup): CatalogSetup {
     ...(setup.scopes !== undefined ? { scopes: setup.scopes.trim().split(/\s+/).filter(Boolean).join(" ") } : {}),
     ...(setup.urlTemplate !== undefined ? { urlTemplate: setup.urlTemplate.trim() } : {}),
     ...(setup.label !== undefined ? { label: line(setup.label, 80) } : {}),
+    ...(setup.secretless !== undefined ? { secretless: setup.secretless } : {}),
   };
 }
 
@@ -133,6 +136,7 @@ export function setupProblems(setup: CatalogSetup, entry: Pick<CatalogEntry, "ur
   only("clients", ["byo-oauth", "approved-clients"]);
   only("urlTemplate", ["per-org"]);
   only("label", ["per-org"]);
+  only("secretless", ["byo-oauth"]);
   if (setup.scopes !== undefined && !setup.scopes.split(" ").every((word) => SCOPE_WORD.test(word))) issues.push("setup scopes must be scope names separated by spaces");
   if (setup.kind === "byo-oauth") {
     if (entry.transport !== "http" || !entry.url) issues.push("a byo-oauth setup needs a web address");
@@ -306,14 +310,22 @@ export function claudeRedirectUri(port: number = CLAUDE_CALLBACK_PORT): string {
  */
 export type OAuthClientInput = { clientId: string; clientSecret?: string; hasSecret?: boolean };
 
+/** How a byo-oauth setup's client is asked for: the vendor's name for its ID, and whether it has a secret at all. */
+export type ClientShape = { idName: string; secretless: boolean };
+
+export function clientShape(entry: Pick<CatalogEntry, "url" | "setup">): ClientShape {
+  return { idName: byoVendor(entry.url ?? "")?.idName ?? "client ID", secretless: entry.setup?.secretless === true };
+}
+
 const CLIENT_ID = /^[A-Za-z0-9._~@:+/=-]{1,512}$/;
 
 /** What is wrong with a typed client ID and secret, never quoting either. */
-export function oauthClientProblems(client: OAuthClientInput): string[] {
+export function oauthClientProblems(client: OAuthClientInput, shape: ClientShape = { idName: "client ID", secretless: false }): string[] {
   const issues: string[] = [];
   const id = client.clientId.trim();
-  if (!id) issues.push("Paste the client ID.");
-  else if (!CLIENT_ID.test(id)) issues.push("The client ID holds a space or a character a client ID never has.");
+  if (!id) issues.push(`Paste the ${shape.idName}.`);
+  else if (!CLIENT_ID.test(id)) issues.push(`The ${shape.idName} holds a space or a character it never has.`);
+  if (shape.secretless) return issues;
   if (client.clientSecret === undefined) {
     if (!client.hasSecret) issues.push("Paste the client secret.");
     return issues;
@@ -382,8 +394,9 @@ export function byoOauthDefinition(entry: Pick<CatalogEntry, "url" | "setup">, c
 }
 
 /** The preview of one Claude config: the entry as written, and a line for the secret, which is not in the file. */
-export function byoOauthPreview(name: string, definition: Record<string, unknown>): string {
-  return `${JSON.stringify({ mcpServers: { [name]: definition } }, null, 2)}\n// Client secret: not in this file. Claude Code keeps it in its secure store.\n`;
+export function byoOauthPreview(name: string, definition: Record<string, unknown>, secretless = false): string {
+  const json = `${JSON.stringify({ mcpServers: { [name]: definition } }, null, 2)}\n`;
+  return secretless ? json : `${json}// Client secret: not in this file. Claude Code keeps it in its secure store.\n`;
 }
 
 /** Text with every copy of the secret replaced by •••, for anything shown or logged. */
@@ -417,7 +430,8 @@ export function planByoOauth(entry: Pick<CatalogEntry, "url" | "setup" | "name">
   const redirectUri = claudeRedirectUri();
   const issues: string[] = [];
   if (setup?.kind !== "byo-oauth") issues.push("This server isn't set up with your own sign-in app.");
-  issues.push(...oauthClientProblems(client));
+  const shape = clientShape(entry);
+  issues.push(...oauthClientProblems(client, shape));
   const supported: SetupTarget[] = [];
   const skipped: ByoOauthPlan["skipped"] = [];
   for (const target of targets) {
@@ -430,10 +444,13 @@ export function planByoOauth(entry: Pick<CatalogEntry, "url" | "setup" | "name">
   const definition = byoOauthDefinition(entry, client.clientId);
   const notes = [
     `Register exactly ${redirectUri} as the redirect address; Claude Code listens there when you sign in.`,
-    "The client secret is not written into any file: Claude Code keeps it in its secure store (the macOS Keychain, or ~/.claude/.credentials.json elsewhere). To change it later, remove the server and add it again.",
+    shape.secretless
+      ? `No client secret: ${byoVendor(entry.url ?? "")?.vendor ?? "this vendor"}'s sign-in doesn't use one, so only the ${shape.idName} is written.`
+      : "The client secret is not written into any file: Claude Code keeps it in its secure store (the macOS Keychain, or ~/.claude/.credentials.json elsewhere). To change it later, remove the server and add it again.",
     ...skipped.map((entry) => `Skipped ${entry.label}: ${entry.reason}`),
     "After adding, sign in with Connect.",
   ];
+
   return { issues: [...new Set(issues)], supported, skipped, definition, previews: [], redirectUri, notes };
 }
 

@@ -34,6 +34,7 @@ import {
   type McpDef,
 } from "./handlers";
 import type { Dialect, JsonIssue, LoginSession } from "../shared/mcpjson";
+import { findDaemonWorkspace } from "./daemon-cache";
 
 const HOME = homedir();
 
@@ -1164,12 +1165,7 @@ async function workspaceLoginDirectory(
   paseo: PluginHandlerContext["paseo"],
 ): Promise<string | undefined> {
   if (!workspaceId) return undefined;
-  const result = await withDeadline(paseo.workspaces.list(), "its workspace list");
-  const entries = (result as {
-    entries: Array<{ id: string; workspaceDirectory?: string; projectRootPath: string }>;
-  }).entries;
-  const workspace = entries.find((entry) => entry.id === workspaceId);
-  if (!workspace) throw new Error("This Paseo workspace no longer exists.");
+  const workspace = await findDaemonWorkspace(paseo, workspaceId);
   const directory = workspace.workspaceDirectory || workspace.projectRootPath;
   const candidates = [...new Set([directory, workspace.projectRootPath].filter(Boolean))];
   const configPath = candidates.map((candidate) => join(candidate, ".mcp.json")).find(existsSync);

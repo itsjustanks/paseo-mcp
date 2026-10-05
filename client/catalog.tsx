@@ -24,7 +24,7 @@ import {
   type OwnedServer,
 } from "../shared/catalog";
 import type { Destination, McpHealthStatus } from "../shared/contracts";
-import { SETUP_CLIENT_LABELS, byoVendor, claudeRedirectUri, isStillToFill, oauthClientProblems, setupTargetSupport, stepLinks, type CatalogSetup } from "../shared/setup";
+import { SETUP_CLIENT_LABELS, byoVendor, claudeRedirectUri, clientShape, isStillToFill, oauthClientProblems, setupTargetSupport, stepLinks, type CatalogSetup, type ClientShape } from "../shared/setup";
 import { healthPlainWord } from "../shared/servers";
 import { plainError } from "../shared/errors";
 import {
@@ -388,9 +388,12 @@ function InstallSheet({
   const [values, setValues] = useState<Record<string, string>>({});
   const [clientId, setClientId] = useState("");
   const [clientSecret, setClientSecret] = useState("");
+  // A vendor whose sign-in takes no secret (Meta) never gets a secret field, so none is sent.
+  const shape = clientShape(entry);
+  const typedSecret = shape.secretless ? "" : clientSecret.trim();
   // The preview only learns whether a secret was typed; the secret itself crosses once, on install.
-  const request = { key: card.key, scope, targets, projectPath, name: name.trim(), values, ...(byo ? { oauthClient: { clientId: clientId.trim(), hasSecret: Boolean(clientSecret.trim()) } } : {}) };
-  const secretIssues = byo && clientSecret.trim() ? oauthClientProblems({ clientId: "-", clientSecret }).filter((issue) => /secret/i.test(issue)) : [];
+  const request = { key: card.key, scope, targets, projectPath, name: name.trim(), values, ...(byo ? { oauthClient: { clientId: clientId.trim(), hasSecret: Boolean(typedSecret) } } : {}) };
+  const secretIssues = byo && typedSecret ? oauthClientProblems({ clientId: "-", clientSecret: typedSecret }).filter((issue) => /secret/i.test(issue)) : [];
   const debounced = useDebounced(request, 350);
 
   const planQuery = useQuery({
@@ -404,7 +407,7 @@ function InstallSheet({
     mutationFn: () =>
       callInstall({
         ...request,
-        oauthClient: byo ? { clientId: clientId.trim(), clientSecret: clientSecret.trim() } : undefined,
+        oauthClient: byo ? { clientId: clientId.trim(), clientSecret: typedSecret } : undefined,
         planHash: planQuery.data?.planHash ?? "",
       }),
     onSuccess: (result) => {
@@ -479,6 +482,7 @@ function InstallSheet({
           setup={setup}
           serverUrl={entry.url ?? ""}
           redirectUri={plan?.redirectUri || claudeRedirectUri()}
+          shape={shape}
           clientId={clientId}
           clientSecret={clientSecret}
           secretIssues={secretIssues}
@@ -630,12 +634,14 @@ function InstallSheet({
  * The guided part of a bring-your-own-app sheet (0.16.0): the vendor's steps
  * with their links, the exact redirect address to register, the scopes to
  * add, then the client ID and the secret (masked; it goes to Claude Code's
- * secure store and is never shown again).
+ * secure store and is never shown again). A vendor with no secret (Meta,
+ * 0.18.3) shows its own name for the ID ("App ID") and no secret field.
  */
 function ByoSetupSteps({
   setup,
   serverUrl,
   redirectUri,
+  shape,
   clientId,
   clientSecret,
   secretIssues,
@@ -645,6 +651,7 @@ function ByoSetupSteps({
   setup: CatalogSetup;
   serverUrl: string;
   redirectUri: string;
+  shape: ClientShape;
   clientId: string;
   clientSecret: string;
   secretIssues: string[];
@@ -655,6 +662,7 @@ function ByoSetupSteps({
   const open = useOpenLink();
   const apps = (setup.clients ?? []).map((id) => SETUP_CLIENT_LABELS[id]).join(" and ");
   const vendor = byoVendor(serverUrl)?.vendor ?? "";
+  const idLabel = shape.idName.charAt(0).toUpperCase() + shape.idName.slice(1);
   const host = (() => {
     try {
       return new URL(serverUrl).hostname;
@@ -696,8 +704,12 @@ function ByoSetupSteps({
         </View>
       ) : null}
       <Card>
-        <Field label="Client ID" value={clientId} onChangeText={onClientId} placeholder="Paste the client ID" />
-        <SecretField label="Client secret" value={clientSecret} onChangeText={onClientSecret} hint="Kept by Claude Code in its secure store, never in a config file, and never shown again." />
+        <Field label={idLabel} value={clientId} onChangeText={onClientId} placeholder={`Paste the ${shape.idName}`} />
+        {shape.secretless ? (
+          <Text style={t.text.caption}>{`No secret needed: ${vendor || "this vendor"}'s sign-in uses the ${shape.idName} alone.`}</Text>
+        ) : (
+          <SecretField label="Client secret" value={clientSecret} onChangeText={onClientSecret} hint="Kept by Claude Code in its secure store, never in a config file, and never shown again." />
+        )}
         {secretIssues.map((issue) => (
           <ErrorText key={issue}>{issue}</ErrorText>
         ))}

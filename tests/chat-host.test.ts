@@ -27,6 +27,7 @@ const { handleMcpAgentChat, handleMcpTurnOffUnused, chatSettled, resetChat, TURN
 const { configureAddedProbe, addedProbesSettled } = await import("../server/agent-record");
 const { configureLive } = await import("../server/paseo-live");
 const { resetPaseoToolsCache } = await import("../server/paseo-tools");
+const { resetDaemonReads } = await import("../server/daemon-cache");
 const { CHAT_SCAN_LIMIT } = await import("../shared/chat");
 
 const call = (name: string) => ({ item: { type: "tool_call", callId: name, name, status: "completed", error: null, detail: { type: "unknown", input: null, output: null } } });
@@ -73,6 +74,8 @@ beforeEach(() => {
   rmSync(join(home, ".paseo", "agents"), { recursive: true, force: true });
   resetChat();
   resetPaseoToolsCache();
+  // The workspace list is cached since 0.18.3; a case that fails it must start without a copy.
+  resetDaemonReads();
   configureAddedProbe(null);
   configureLive(null);
 });

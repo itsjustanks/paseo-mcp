@@ -119,6 +119,8 @@ export const CatalogSetupSchema = z.object({
   urlTemplate: z.string().max(2048).optional(),
   /** per-org: what to call the value ("Your Zendesk subdomain"). */
   label: z.string().max(80).optional(),
+  /** byo-oauth: the vendor's sign-in takes no client secret (a public client, PKCE), so none is asked for (0.18.3, Meta Ads). */
+  secretless: z.boolean().optional(),
 });
 export type CatalogSetup = z.output<typeof CatalogSetupSchema>;
 

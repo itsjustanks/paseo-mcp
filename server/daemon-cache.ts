@@ -150,6 +150,38 @@ export const providerSettings = daemonRead<Record<string, unknown>>({
   },
 });
 
+export type DaemonWorkspace = { id: string; name: string; workspaceDirectory?: string; projectRootPath: string };
+
+/**
+ * Every workspace the daemon knows (0.18.3). The composer chip's context meter
+ * and the workspace panels read this many times a minute; on a busy daemon
+ * each uncached list took about a second ("fetch_workspaces_request", 232
+ * slow calls in 3 minutes on one host), so it is shared like the two above.
+ */
+export const workspaceList = daemonRead<DaemonWorkspace[]>({
+  load: async (paseo) => {
+    const result = await withDeadline(paseo.workspaces.list(), "its workspace list");
+    return [...((result as { entries?: DaemonWorkspace[] }).entries ?? [])];
+  },
+});
+
+/**
+ * One workspace by id, from the shared copy; a workspace created since that
+ * copy was read is looked for again with a fresh read before it is called
+ * gone. `fresh` (a write) always asks the daemon.
+ */
+export async function findDaemonWorkspace(paseo: Paseo, workspaceId: string, options: { fresh?: boolean } = {}): Promise<DaemonWorkspace> {
+  const cached = await workspaceList.read(paseo, options);
+  const hit = cached.find((entry) => entry.id === workspaceId);
+  if (hit) return hit;
+  if (!options.fresh) {
+    const fresh = await workspaceList.read(paseo, { fresh: true });
+    const again = fresh.find((entry) => entry.id === workspaceId);
+    if (again) return again;
+  }
+  throw new Error("This Paseo workspace no longer exists.");
+}
+
 /** A write changed what the daemon would answer: the next read of the project list or provider settings waits for a new answer. */
 export function invalidateDaemonReads(what: "projects" | "config" | "all" = "all"): void {
   if (what !== "config") projectList.invalidate();
@@ -166,6 +198,7 @@ export function refreshDaemonReads(what: "projects" | "config" | "all" = "all"):
 export function resetDaemonReads(): void {
   projectList.reset();
   providerSettings.reset();
+  workspaceList.reset();
 }
 
 /** For tests and the bench: how many project-list and provider-settings calls reached the daemon. */

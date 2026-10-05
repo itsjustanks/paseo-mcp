@@ -18,7 +18,22 @@ import { chipLabel, type AgentMeter, type McpHealthReport, type McpToolsReport, 
 import { paseoToolCount } from "./paseo-tools";
 import { backoffMs } from "./schedule";
 
-export type ChipAgent = { id: string; workspaceId: string; provider: string };
+/** `active`: running or starting, so its context meter is worth reading. */
+export type ChipAgent = { id: string; workspaceId: string; provider: string; active: boolean };
+
+/** A meter read that failed (a workspace that's gone, say) is not asked again for this long (0.18.3). */
+export const METER_RETRY_MS = 10 * 60_000;
+
+/**
+ * The agent a chip is for, from what the app reports, or null for none: a
+ * closed or archived agent, or one with no workspace. Since 0.9 the plugin's
+ * own observation lists every agent the daemon has (83 on one host, closed
+ * ones and ones whose workspace is gone among them), so this filter matters.
+ */
+export function chipAgentFrom(raw: { id?: string; workspaceId?: string | null; provider?: string | null; status?: string; archivedAt?: string | null } | undefined): ChipAgent | null {
+  if (!raw?.id || !raw.workspaceId || raw.status === "closed" || raw.archivedAt) return null;
+  return { id: raw.id, workspaceId: raw.workspaceId, provider: raw.provider ?? "", active: raw.status === "running" || raw.status === "initializing" };
+}
 export type ChipFace = { label: string; icon: string };
 export type ChipHandle = { update(face: ChipFace): void; remove(): void };
 
@@ -38,6 +53,8 @@ export type ChipDeps = {
   /** One read a minute while there is an agent; slower after failures, up to `maxPollMs`. */
   pollMs: number;
   maxPollMs: number;
+  /** The clock, for tests. */
+  now?: () => number;
 };
 
 /** A chip before its first label arrives. */
@@ -60,6 +77,24 @@ export function createChipRegistry(deps: ChipDeps) {
   let failures = 0;
   let timer: unknown = null;
   let stopped = false;
+  const now = deps.now ?? (() => Date.now());
+  // Agents whose meter read failed, and when to try again.
+  const meterQuietUntil = new Map<string, number>();
+
+  /** This agent's meter, when it is running and its last read didn't just fail; else null (the label goes without it). */
+  const readMeter = async (agent: ChipAgent): Promise<AgentMeter | null> => {
+    const labels = deps.labels;
+    if (!labels || !agent.active || !agent.provider) return null;
+    if ((meterQuietUntil.get(agent.id) ?? 0) > now()) return null;
+    try {
+      const meter = await labels.meter(agent);
+      meterQuietUntil.delete(agent.id);
+      return meter;
+    } catch {
+      meterQuietUntil.set(agent.id, now() + METER_RETRY_MS);
+      return null;
+    }
+  };
 
   const reconcile = (): ChipAgent[] => {
     const added: ChipAgent[] = [];
@@ -94,7 +129,7 @@ export function createChipRegistry(deps: ChipDeps) {
     const [tools, paseo] = await Promise.all([quietly(labels.tools), quietly(labels.paseo)]);
     await Promise.all(
       targets.map(async (agent) => {
-        const meter = agent.provider ? await quietly(() => labels.meter(agent)) : null;
+        const meter = await readMeter(agent);
         const chip = chips.get(agent.id);
         if (!chip || stopped) return;
         const { label, tone } = chipLabel(report, tools, paseoToolCount(paseo ?? undefined, agent.provider), meter);
@@ -149,6 +184,7 @@ export function createChipRegistry(deps: ChipDeps) {
     },
     remove(agentId: string) {
       agents.delete(agentId);
+      meterQuietUntil.delete(agentId);
       reconcile();
     },
     /** A full list from the app (a snapshot after connecting or reconnecting): it replaces what was known. */

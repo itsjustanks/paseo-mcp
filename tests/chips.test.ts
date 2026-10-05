@@ -7,14 +7,16 @@
  */
 import assert from "node:assert/strict";
 import test from "node:test";
-import { CHIP_FIRST_FACE, chipFace, createChipRegistry, type ChipAgent, type ChipDeps, type ChipFace } from "../shared/chips";
+import { CHIP_FIRST_FACE, METER_RETRY_MS, chipAgentFrom, chipFace, createChipRegistry, type ChipAgent, type ChipDeps, type ChipFace } from "../shared/chips";
 import { canObserveAgents, supportsButtonPills } from "../shared/host-features";
 import type { McpHealthReport } from "../shared/contracts";
 
 const report = (statuses: string[]): McpHealthReport =>
   ({ checkedAt: "2026-10-05T00:00:00.000Z", results: statuses.map((status, index) => ({ name: `s${index}`, status, note: "" })) }) as unknown as McpHealthReport;
 
-function harness(options: { labels?: boolean; wanted?: boolean; health?: McpHealthReport | null; failHealth?: boolean } = {}) {
+function harness(options: { labels?: boolean; wanted?: boolean; health?: McpHealthReport | null; failHealth?: boolean; failMeter?: boolean } = {}) {
+  let clock = 1_000_000;
+  let failMeter = options.failMeter ?? false;
   const faces = new Map<string, ChipFace[]>();
   const removed: string[] = [];
   const timers: Array<{ run: () => void; ms: number; cancelled: boolean }> = [];
@@ -38,6 +40,7 @@ function harness(options: { labels?: boolean; wanted?: boolean; health?: McpHeal
             paseo: async () => null,
             meter: async () => {
               meterCalls += 1;
+              if (failMeter) throw new Error("This Paseo workspace no longer exists.");
               return { servers: 7, tokens: 24_000, deferred: false } as never;
             },
           },
@@ -51,6 +54,7 @@ function harness(options: { labels?: boolean; wanted?: boolean; health?: McpHeal
     },
     pollMs: 60_000,
     maxPollMs: 15 * 60_000,
+    now: () => clock,
   };
   const registry = createChipRegistry(deps);
   const settle = () => new Promise((resolve) => setImmediate(resolve));
@@ -73,11 +77,13 @@ function harness(options: { labels?: boolean; wanted?: boolean; health?: McpHeal
     },
     setWanted: (next: boolean) => (wanted = next),
     setFailHealth: (next: boolean) => (failHealth = next),
+    setFailMeter: (next: boolean) => (failMeter = next),
+    advance: (ms: number) => (clock += ms),
     meterCalls: () => meterCalls,
   };
 }
 
-const agent = (id: string, provider = "claude"): ChipAgent => ({ id, workspaceId: "ws-1", provider });
+const agent = (id: string, provider = "claude", active = true): ChipAgent => ({ id, workspaceId: "ws-1", provider, active });
 
 test("feature checks: buttons from 0.8.0 stable (addHeaderButton); agent observations from 0.9 (observeEvents)", () => {
   assert.equal(supportsButtonPills({ addComposerPill() {}, addHeaderButton() {} }), true);
@@ -102,7 +108,7 @@ test("buttons: a chip appears with a first face, then its label from health, too
 test("a calm host reads the meter's cost; an agent with no provider gets no meter read", async () => {
   const h = harness({ health: report(["ok", "ok"]) });
   h.registry.upsert(agent("a1"));
-  h.registry.upsert({ id: "a2", workspaceId: "ws-1", provider: "" });
+  h.registry.upsert({ id: "a2", workspaceId: "ws-1", provider: "", active: true });
   await h.settle();
   assert.deepEqual(h.faces.get("a1")!.at(-1), { label: "7 MCP · ~24k tokens", icon: "Plug" });
   assert.equal(h.meterCalls(), 1, "only the agent with a provider");
@@ -168,4 +174,46 @@ test("stop removes every chip and the timer", async () => {
   assert.ok(h.timers.every((entry) => entry.cancelled));
   h.registry.upsert(agent("a2"));
   assert.deepEqual(h.registry.shown(), [], "nothing after stop");
+});
+
+// ---------------------------------------------- 0.18.3: only live agents, and few reads
+
+test("which agents get a chip: not closed or archived ones, nor one without a workspace; only running ones are metered", () => {
+  assert.deepEqual(chipAgentFrom({ id: "a", workspaceId: "w", provider: "claude", status: "running" }), { id: "a", workspaceId: "w", provider: "claude", active: true });
+  assert.deepEqual(chipAgentFrom({ id: "a", workspaceId: "w", provider: "codex", status: "idle" }), { id: "a", workspaceId: "w", provider: "codex", active: false });
+  assert.equal(chipAgentFrom({ id: "a", workspaceId: "w", provider: "claude", status: "closed" }), null);
+  assert.equal(chipAgentFrom({ id: "a", workspaceId: "w", provider: "claude", status: "idle", archivedAt: "2026-10-04T00:00:00Z" }), null);
+  assert.equal(chipAgentFrom({ id: "a", workspaceId: "", provider: "claude", status: "running" }), null);
+  assert.equal(chipAgentFrom(undefined), null);
+});
+
+test("an idle agent's chip is labelled without its meter: one read per running agent, not per agent", async () => {
+  const h = harness({ health: report(["ok"]) });
+  h.registry.replaceAll([agent("run"), agent("idle-1", "claude", false), agent("idle-2", "codex", false)]);
+  await h.settle();
+  assert.deepEqual(h.registry.shown().sort(), ["idle-1", "idle-2", "run"]);
+  assert.equal(h.meterCalls(), 1, "only the running agent");
+  assert.deepEqual(h.faces.get("idle-1")!.at(-1), { label: "1 MCP · healthy", icon: "Plug" });
+});
+
+test("a meter that fails (a workspace that's gone) isn't asked again for 10 minutes", async () => {
+  const h = harness({ failMeter: true });
+  h.registry.upsert(agent("a1"));
+  await h.settle();
+  assert.equal(h.meterCalls(), 1);
+  await h.tick();
+  await h.tick();
+  assert.equal(h.meterCalls(), 1, "not every minute");
+  h.advance(METER_RETRY_MS + 1);
+  h.setFailMeter(false);
+  await h.tick();
+  assert.equal(h.meterCalls(), 2, "asked again after the wait");
+});
+
+test("an agent that closes loses its chip", async () => {
+  const h = harness();
+  h.registry.replaceAll([agent("a1"), agent("a2")]);
+  await h.settle();
+  h.registry.remove("a2");
+  assert.deepEqual(h.registry.shown(), ["a1"]);
 });

@@ -245,3 +245,25 @@ test("a slow daemon (8 s): auth and catalog wait once, then answer without waiti
   assert.ok(daemonReadCalls().config >= 3);
   resetDaemonReads();
 });
+
+// ------------------------------------------- 0.18.3: the workspace list, shared
+
+test("workspaces: many lookups share one list; a new workspace is looked for again; a gone one is said once; a write asks fresh", async () => {
+  const { findDaemonWorkspace, workspaceList } = await import("../server/daemon-cache");
+  workspaceList.reset();
+  let calls = 0;
+  let entries = [{ id: "w1", name: "one", projectRootPath: "/p/one" }];
+  const paseo = { workspaces: { list: async () => { calls += 1; return { entries }; } } } as never;
+  for (let i = 0; i < 20; i += 1) assert.equal((await findDaemonWorkspace(paseo, "w1")).name, "one");
+  assert.equal(calls, 1, "twenty lookups, one daemon call");
+  // Created after the copy was read: one fresh read finds it.
+  entries = [...entries, { id: "w2", name: "two", projectRootPath: "/p/two" }];
+  assert.equal((await findDaemonWorkspace(paseo, "w2")).name, "two");
+  assert.equal(calls, 2);
+  // Gone: one fresh read, then the plain message.
+  await assert.rejects(findDaemonWorkspace(paseo, "gone"), /no longer exists/);
+  assert.equal(calls, 3);
+  // A write never answers from the copy.
+  await findDaemonWorkspace(paseo, "w1", { fresh: true });
+  assert.equal(calls, 4);
+});
