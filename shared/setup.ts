@@ -436,3 +436,14 @@ export function planByoOauth(entry: Pick<CatalogEntry, "url" | "setup" | "name">
   ];
   return { issues: [...new Set(issues)], supported, skipped, definition, previews: [], redirectUri, notes };
 }
+
+/**
+ * A plan's issue that only says a box is still empty ("Paste the client ID.",
+ * "Pick at least one app.", "Your Zendesk subdomain is required"), as against
+ * a real problem with what was typed. The sheet shows the first kind as a
+ * quiet "To finish" line, not in red, so nothing reads as an error before the
+ * user has typed anything (0.18.2).
+ */
+export function isStillToFill(issue: string): boolean {
+  return /^(Paste the |Pick at least one |Pick one of the )/.test(issue) || / is required$/.test(issue);
+}

@@ -19,6 +19,7 @@ import {
   parseSetup,
   planByoOauth,
   setupTargetSupport,
+  isStillToFill,
   stepLinks,
 } from "../shared/setup";
 
@@ -290,5 +291,14 @@ test("byo-oauth: hidden characters can't split a link past the check; any-case l
     const team = parseLibrary(JSON.stringify([{ id: "gmail", name: "Gmail", publisher: "Google", description: "Mail.", category: "productivity", transport: "http", url: gmailRemote.url, auth: "oauth", docs: GUIDE, setup: { ...gmailSetup, steps: [`Sign in: https://console.cloud.google.com${joiner}.evil.example/x`] } }]));
     assert.equal(team.items.length, 0, JSON.stringify(joiner));
     assert.match(team.refused[0]?.reason ?? "", /Google's own sites/);
+  }
+});
+
+test("the sheet tells an empty box from a real problem: only real problems are red", () => {
+  for (const issue of ["Paste the client ID.", "Paste the client secret.", "Pick at least one app.", "Pick one of the registered projects.", "Your Zendesk subdomain is required"]) {
+    assert.equal(isStillToFill(issue), true, issue);
+  }
+  for (const issue of ["The client ID holds a space or a character a client ID never has.", "The client secret must be one line with no spaces.", "That would point the server at another site.", "None of the apps you picked can take a sign-in app you registered. Claude Code can."]) {
+    assert.equal(isStillToFill(issue), false, issue);
   }
 });

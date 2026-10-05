@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.18.2 — 2026-10-05
+
+### Changed
+- **Add sheets don't show red before you've typed anything.** "Paste the client ID.", "Paste the client secret.", "Pick at least one app." and "… is required" are now one quiet "To finish:" line under The change. Only a real problem, such as a client ID with a space or an address that would leave the vendor's site, is shown in red. Add stays disabled until everything is filled in, as before. (`isStillToFill` in `shared/setup.ts`, with a test.)
+- "Pick at least one editor." now reads "Pick at least one app.", the word the rest of the plugin uses.
+
+### Repository
+- CI: the typecheck and the full test suite now run on every pull request and every push to main (`.github/workflows/ci.yml`, with actions pinned by commit).
+- PR #1 (the composer chip, from @hteo1337) is closed with thanks: its fix shipped in 0.18.1.
+
 ## 0.18.1 — 2026-10-05
 
 ### Fixed

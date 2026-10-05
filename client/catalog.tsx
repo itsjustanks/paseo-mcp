@@ -24,7 +24,7 @@ import {
   type OwnedServer,
 } from "../shared/catalog";
 import type { Destination, McpHealthStatus } from "../shared/contracts";
-import { SETUP_CLIENT_LABELS, byoVendor, claudeRedirectUri, oauthClientProblems, setupTargetSupport, stepLinks, type CatalogSetup } from "../shared/setup";
+import { SETUP_CLIENT_LABELS, byoVendor, claudeRedirectUri, isStillToFill, oauthClientProblems, setupTargetSupport, stepLinks, type CatalogSetup } from "../shared/setup";
 import { healthPlainWord } from "../shared/servers";
 import { plainError } from "../shared/errors";
 import {
@@ -580,7 +580,11 @@ function InstallSheet({
             </View>
           </Notice>
         ) : null}
-        {plan?.issues.map((issue) => (
+        {/* Empty boxes are a quiet "To finish" line; only a real problem is red (0.18.2). */}
+        {plan && plan.issues.some(isStillToFill) ? (
+          <Text style={t.text.caption}>{`To finish: ${plan.issues.filter(isStillToFill).join(" ")}`}</Text>
+        ) : null}
+        {plan?.issues.filter((issue) => !isStillToFill(issue)).map((issue) => (
           <ErrorText key={issue}>{issue}</ErrorText>
         ))}
         {plan?.commandLine ? (

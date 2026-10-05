@@ -518,7 +518,7 @@ async function prepare(input: InstallInput, paseo: PluginHandlerContext["paseo"]
       }
       return support.ok;
     });
-    if (picked.length === 0) result.issues.push("Pick at least one editor.");
+    if (picked.length === 0) result.issues.push("Pick at least one app.");
     else if (chosen.length === 0) result.issues.push("None of the apps you picked can use this server.");
     result.destinations = chosen;
     const taken = new Set<string>();

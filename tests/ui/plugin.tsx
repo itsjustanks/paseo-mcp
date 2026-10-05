@@ -238,7 +238,7 @@ const catalogPlan = (input: any) => {
     ...(card.warning ? [card.warning] : []),
     ...(input.scope === "project" ? [".mcp.json is usually in git: the change shows in git status, and everyone who pulls it gets this server.", ...(plan.envToSet.length ? [`The key is not written into the file. It says \${${plan.envToSet[0]!.name}} instead, which Claude Code fills in from its environment when it loads the file. Set ${plan.envToSet.map((e) => e.name).join(", ")} where Claude Code starts: for Paseo agents, the daemon's environment or the provider's env in Paseo's settings.`] : []), "Claude Code asks once before it uses a new project server; approve it at launch or in the workspace's MCP connections tab."] : []),
   ];
-  const issues = [...plan.issues, ...(input.scope === "user" && input.targets.length === 0 ? ["Pick at least one editor."] : [])];
+  const issues = [...plan.issues, ...(input.scope === "user" && input.targets.length === 0 ? ["Pick at least one app."] : [])];
   return { card, plan, redirectUri: "", ok: issues.length === 0 && !clash, issues, clash, previews, envToSet: plan.envToSet, notes, budget: input.scope === "user" ? budgetImpact("user", 7, "Claude · demo@example.com (primary) and 2 more") : budgetImpact("project", 9, "data-glue's .mcp.json") };
 };
 
