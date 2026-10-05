@@ -9,6 +9,7 @@ import { Text, View } from "react-native";
 import { McpSurface, McpWorkspacePanel } from "../../client/mcp";
 import { registerSurfaceOpener } from "../../client/navigate";
 import { HealthSettingsScreen, InjectionSettingsScreen } from "../../client/settings";
+import { McpSidebarItem, type ScreenLocation } from "../../client/sidebar";
 // Panels open the surface through the entry's opener; here it just records the request.
 registerSurfaceOpener((id) => { (window as any).__opened = [...((window as any).__opened ?? []), id]; console.info("[open-surface]", id); });
 const queryClient = new QueryClient();
@@ -25,6 +26,17 @@ const colors = light ? {
   surface0: "#11151b", surface1: "#1a2029", surface2: "#252d38", border: "#394352", foreground: "#eef1f6",
   foregroundMuted: "#a2adbc", accent: "#a5b4fc", accentForeground: "#14192c", statusSuccess: "#6ee7a0", statusWarning: "#facc6b", statusDanger: "#fda4af",
 };
+/** ?sidebar: the app's sidebar row beside the MCP screen; the row and its "+" open the screen the way Paseo 0.11 does. */
+function SidebarPreview(props: any) {
+  const [screen, setScreen] = useState<ScreenLocation | null>(null);
+  (window as any).__screen = screen;
+  return <View style={{ flexDirection: "row", minHeight: "100vh" as any, backgroundColor: props.theme.colors.surface0 }}>
+    <View style={{ width: 240, padding: 8, borderRightWidth: 1, borderRightColor: props.theme.colors.border, backgroundColor: props.theme.colors.surface1 }}>
+      <McpSidebarItem currentScreen={screen} openScreen={({ screenId, params }) => setScreen({ screenId, params: params ?? {} })} theme={props.theme} />
+    </View>
+    <View style={{ flex: 1 }}>{screen ? <McpSurface {...props} params={screen.params} /> : null}</View>
+  </View>;
+}
 function Preview() {
   const [compact, setCompact] = useState(innerWidth < 640);
   useEffect(() => { const resize = () => setCompact(innerWidth < 640); addEventListener("resize", resize); return () => removeEventListener("resize", resize); }, []);
@@ -43,6 +55,7 @@ function Preview() {
         <Text style={{ color: colors.foregroundMuted, fontSize: 12, fontFamily: "Menlo" }}>✕ mcp__linear__list_issues · failed</Text>
         <SignInCard {...props} agentId="agent-1" timestamp={new Date()} item={{ type: "plugin", kind: "mcp-sign-in", version: 1, data: { server: params.get("server") ?? "linear", provider: "claude" } }} />
       </View>
+      : params.has("sidebar") ? <SidebarPreview {...props} />
       : params.has("agent") ? <McpAgentPanel {...props} context="agent" workspaceId="ws-1" agentId="agent-1" />
       : params.has("health-settings") ? <HealthSettingsScreen {...props} />
       : params.has("settings") ? <InjectionSettingsScreen {...props} />

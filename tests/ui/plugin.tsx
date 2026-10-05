@@ -1,6 +1,6 @@
 /** Browser stand-in for @getpaseo/plugin: every MCP contract answered from fixtures. */
 import React, { useCallback } from "react";
-import { Text, View } from "react-native";
+import { Pressable, Text, View } from "react-native";
 import { buildPaseoToolsPatch, paseoToolProviders, readDaemonToolsConfig, resolvePaseoTools } from "../../shared/paseo-tools";
 import { toolSearch } from "../../shared/tool-search";
 import { meterFor } from "../../shared/meter";
@@ -431,6 +431,17 @@ export const SettingsInput = ({ label, hint }: any) => row(label, hint);
 export const SettingsAction = ({ label, actionLabel, onPress }: any) => row(label, undefined, <Text onPress={onPress}>{actionLabel}</Text>);
 // ?no-icons: an app that hands plugins no Icon component, so the tab bar's label fallback shows.
 export const Icon = params.has("no-icons") ? undefined : ({ name, size = 16, color }: { name: string; size?: number; color?: string }) => <Text style={{ fontSize: size - 4, color, fontWeight: "700" }} accessibilityLabel={name}>{name.replace(/[a-z]/g, "").slice(0, 2)}</Text>;
+// ?sidebar: a stand-in for Paseo 0.11's SidebarRow (icon, label, active, trailing), to show the MCP row and its "+".
+export function SidebarRow({ icon, label, onPress, active, trailing }: { icon?: string; label?: string; onPress(): void; active?: boolean; trailing?: React.ReactNode }) {
+  const I = Icon;
+  return <View style={{ flexDirection: "row", alignItems: "center", gap: 8, height: 32, paddingHorizontal: 8, borderRadius: 8, backgroundColor: active ? "rgba(127,127,127,0.16)" : "transparent" }}>
+    <Pressable onPress={onPress} style={{ flex: 1, flexDirection: "row", alignItems: "center", gap: 8 }}>
+      {I && icon ? <I name={icon} size={16} color="#888" /> : null}
+      <Text style={{ fontSize: 14, color: "#888" }}>{label}</Text>
+    </Pressable>
+    {trailing}
+  </View>;
+}
 export const Modal = Object.assign(({ children, open, title }: any) => open ? <View role="dialog" aria-label={title} style={{ position: "absolute", inset: 0, zIndex: 100, backgroundColor: "rgba(0,0,0,0.7)", alignItems: "center", justifyContent: "center" }}><View style={{ maxWidth: 520, padding: 20, backgroundColor: "#1a2029" }}><Text style={{ color: "#eef1f6", fontSize: 18 }}>{title}</Text>{children}</View></View> : null, { Content: ({ children }: any) => <View>{children}</View> });
 export function useToast() {
   return {
