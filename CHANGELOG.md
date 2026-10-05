@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.18.1 — 2026-10-05
+
+### Fixed
+- **The MCP chip on each chat's composer showed nowhere on current Paseo.**
+  - Paseo 0.8.0 stable and later take a composer chip as a button (`{ title, icon, label, behavior }`, returning `{ update, remove }`). The old shape, from the 0.8.0-beta.1 SDK this plugin builds against, threw as soon as it was added, and that also stopped the chip's refresh loop.
+  - The chip is now added as a button. The plugin works out its label ("12 MCP · ~38k tokens", "12 MCP · 2 issues") from the same reads as before, pushes it to each chip once a minute, and swaps the icon for the warning sign when something needs attention.
+  - An app that still takes the old component shape keeps it.
+  - Reported, with a first fix, by @hteo1337 in #1. Thank you.
+- **New chats got no chip on Paseo 0.9 and later.** Since 0.9, `agents.subscribe()` only hears an agent observation the plugin opened itself.
+  - The plugin now opens one (`agents.list({ subscribe: {} })`), replaces its list on each snapshot, applies updates in between, and reopens it with backoff if the app drops it.
+  - A 0.8 app keeps the old listener, because opening an observation there would replace the app's own. This is the approach of @gpambrozio's paseo-skills.
+- Both are decided at runtime (`supportsButtonPills`, `canObserveAgents` in `shared/host-features.ts`). The registry is `shared/chips.ts`, with every input passed in, and `tests/chips.test.ts` covers it. 442 tests.
+
 ## 0.18.0 — 2026-10-04
 
 The Overview is calm, like AI Router 0.15.0 under the shared design standard's new "calm" rules. It leads with the state and what to do, and everything else folds away. Every option stays.

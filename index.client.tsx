@@ -7,10 +7,10 @@ import { registerSurfaceOpener } from "./client/navigate";
 import { HealthSettingsScreen, InjectionSettingsScreen } from "./client/settings";
 import { MCP_SCREEN_ID, McpSidebarItem, SidebarRow, type OpenScreen, type SidebarItemProps } from "./client/sidebar";
 import { McpChip } from "./client/tools";
-import { mcpHealthCached } from "./shared/contracts";
+import { mcpAgentChat, mcpHealthCached, mcpPaseoTools, mcpToolsCached } from "./shared/contracts";
+import { createChipRegistry, type ChipAgent } from "./shared/chips";
 import { SIGN_IN_KIND, SIGN_IN_VERSION } from "./shared/chat";
-import { supportsNativeScreens } from "./shared/host-features";
-import { backoffMs } from "./shared/schedule";
+import { canObserveAgents, supportsButtonPills, supportsNativeScreens } from "./shared/host-features";
 
 /**
  * What Paseo 0.11 adds to the client context: full screens and native sidebar
@@ -148,103 +148,147 @@ export default function contribute(client: PluginClientContext) {
 // ------------------------------------------------------------------ chip
 
 /**
- * One always-on chip per live agent while the setting is on. It replaces the
- * 0.4 break-only pill: the same slot now reads "12 MCP · ~38k tokens" on a calm
- * host and shifts to "12 MCP · 2 issues" when something breaks, so there is one
- * chip to look at, not two. The chip body (client/tools.tsx) reads the cached
- * health and tool reports; this registry only decides whether a chip exists.
- * Pressing it opens that agent's MCP panel (0.7.0; it used to open the surface).
+ * One always-on chip per live agent while the setting is on: "12 MCP · ~38k
+ * tokens" on a calm host, "12 MCP · 2 issues" when something breaks. Pressing
+ * it opens that agent's MCP panel. The registry (shared/chips.ts) decides
+ * which chips exist and what they say; this wires it to the app.
+ *
+ * 0.18.1: Paseo 0.8.0 stable and later take a chip as a button and the old
+ * component shape threw, so the chip never showed on 0.9 or 0.11 apps
+ * (itsjustanks/paseo-mcp#1, @hteo1337). And since 0.9, `agents.subscribe()`
+ * only hears an observation the plugin opened itself, so new agents got no
+ * chip either. Both are chosen at runtime; a 0.8.0-beta.1 app keeps the old
+ * component and the old listener.
  */
 const CHIP_SETTINGS_POLL_MS = 60_000;
+const OBSERVE_RETRY_MIN_MS = 2_000;
+const OBSERVE_RETRY_MAX_MS = 60_000;
+
+type ChipButtonsClient = {
+  addComposerPill(contribution: {
+    id: string;
+    workspaceId: string;
+    agentId: string;
+    button: { title: string; icon: string; label?: string; behavior: { kind: "action"; onPress(): void } };
+  }): { update(patch: { label?: string; icon?: string }): void; remove(): void };
+};
+type AgentLike = { id?: string; workspaceId?: string | null; provider?: string | null };
+type AgentListLike = { entries: Array<{ agent: AgentLike }> };
+type AgentUpdateLike = { kind: string; agentId?: string; agent?: AgentLike };
+type AgentObservation = {
+  subscribe(observer: { snapshot(list: AgentListLike): void; update(message: { type: string; payload?: unknown }): void; error?(error: unknown): void }): () => void;
+  release(): Promise<void>;
+};
+
+const chipAgent = (agent: AgentLike | undefined): ChipAgent | null =>
+  agent?.id && agent.workspaceId ? { id: agent.id, workspaceId: agent.workspaceId, provider: agent.provider ?? "" } : null;
 
 function registerMcpChips(client: PluginClientContext, openAgentPanel: (workspaceId: string, agentId: string) => void): () => void {
-  const agents = new Map<string, string>(); // agentId -> workspaceId
-  const pills = new Map<string, () => void>();
-  // Assume on until the host says otherwise: the setting defaults to on, and a
-  // chip that appears a minute late reads worse than one that blinks off.
-  let wanted = true;
-  let stopped = false;
-
-  const reconcile = () => {
-    if (stopped) return;
-    for (const [agentId, workspaceId] of agents) {
-      if (wanted && !pills.has(agentId)) {
-        pills.set(
-          agentId,
-          client.addComposerPill({
-            id: "mcp-chip",
-            title: "MCP for this agent",
-            workspaceId,
-            agentId,
-            Component: McpChip,
-            onPress() {
-              // The panel, not the surface: the chip belongs to one agent, and
-              // the agent's MCP panel shows what that agent loads with its
-              // per-workspace switches and sign-in. "Manage all servers" inside
-              // it is the door to the full surface.
-              openAgentPanel(workspaceId, agentId);
-            },
-          }),
-        );
-      } else if (!wanted && pills.has(agentId)) {
-        pills.get(agentId)?.();
-        pills.delete(agentId);
+  const buttons = supportsButtonPills(client);
+  const registry = createChipRegistry({
+    addChip(agent, face) {
+      const onPress = () => openAgentPanel(agent.workspaceId, agent.id);
+      if (buttons) {
+        const registration = (client as unknown as ChipButtonsClient).addComposerPill({
+          id: "mcp-chip",
+          workspaceId: agent.workspaceId,
+          agentId: agent.id,
+          button: { title: "MCP for this agent", icon: face.icon, label: face.label, behavior: { kind: "action", onPress } },
+        });
+        return { update: (next) => registration.update({ label: next.label, icon: next.icon }), remove: () => registration.remove() };
       }
-    }
-    for (const agentId of [...pills.keys()]) {
-      if (agents.has(agentId)) continue;
-      pills.get(agentId)?.();
-      pills.delete(agentId);
-    }
-  };
+      // The 0.8.0-beta.1 shape: the component reads the reports and draws its own label.
+      const remove = client.addComposerPill({ id: "mcp-chip", title: "MCP for this agent", workspaceId: agent.workspaceId, agentId: agent.id, Component: McpChip, onPress });
+      return { update: () => undefined, remove };
+    },
+    async readHealth() {
+      const cached = await client.rpc(mcpHealthCached, {});
+      return { wanted: cached.showComposerPill, report: cached.report };
+    },
+    labels: buttons
+      ? {
+          tools: async () => (await client.rpc(mcpToolsCached, {})).report,
+          paseo: () => client.rpc(mcpPaseoTools, {}),
+          meter: async (agent) => (await client.rpc(mcpAgentChat, { workspaceId: agent.workspaceId, providerId: agent.provider, agentId: agent.id, chat: false })).meter,
+        }
+      : null,
+    schedule: (run, ms) => setTimeout(run, ms),
+    cancel: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+    pollMs: CHIP_SETTINGS_POLL_MS,
+    maxPollMs: 15 * 60_000,
+  });
 
-  // The setting is read once a minute while there is an agent to put a chip
-  // on, and less often while the host does not answer (1, 2, 4 … 15 minutes).
-  let failures = 0;
-  let timer: ReturnType<typeof setTimeout> | null = null;
-  const schedule = () => {
-    if (stopped) return;
-    timer = setTimeout(() => void poll(), backoffMs(failures, CHIP_SETTINGS_POLL_MS, 15 * 60_000));
-  };
-  const poll = async () => {
-    timer = null;
-    if (agents.size > 0) {
-      try {
-        const cached = await client.rpc(mcpHealthCached, {});
-        wanted = cached.showComposerPill;
-        failures = 0;
-      } catch {
-        // Host unreachable: keep whatever the last poll decided.
-        failures += 1;
-      }
-      reconcile();
-    }
-    schedule();
-  };
-
-  const unsubscribe = client.paseo.agents.subscribe((update) => {
-    if (update.kind === "remove") {
-      agents.delete(update.agentId);
-      reconcile();
+  const onUpdate = (update: AgentUpdateLike) => {
+    if (update.kind === "remove" && update.agentId) {
+      registry.remove(update.agentId);
       return;
     }
-    if (update.kind !== "upsert" || !update.agent.workspaceId) return;
-    const first = agents.size === 0;
-    agents.set(update.agent.id, update.agent.workspaceId);
-    reconcile();
-    // The first agent to appear gets the setting read now, not at the next beat.
-    if (first && timer !== null) {
-      clearTimeout(timer);
-      void poll();
-    }
-  });
-  void poll();
+    if (update.kind !== "upsert") return;
+    const agent = chipAgent(update.agent);
+    if (agent) registry.upsert(agent);
+  };
+  const stopFollowing = canObserveAgents(client.paseo) ? observeAgents(client, registry.replaceAll, onUpdate) : client.paseo.agents.subscribe((update) => onUpdate(update as unknown as AgentUpdateLike));
+  registry.start();
 
   return () => {
-    stopped = true;
-    if (timer) clearTimeout(timer);
-    unsubscribe();
-    for (const remove of pills.values()) remove();
-    pills.clear();
+    stopFollowing();
+    registry.stop();
+  };
+}
+
+/**
+ * Paseo 0.9 and later: keep an agent observation open for the plugin's
+ * lifetime. The snapshot replaces what is known (first, and after every
+ * reconnect), updates apply in between, and an observation the app drops is
+ * reopened with backoff. The approach of @gpambrozio/paseo-skills' followAgents.
+ */
+function observeAgents(client: PluginClientContext, replaceAll: (agents: ChipAgent[]) => void, onUpdate: (update: AgentUpdateLike) => void): () => void {
+  const lifetime = new AbortController();
+  let observation: AgentObservation | null = null;
+  let retry: ReturnType<typeof setTimeout> | null = null;
+  let delay = OBSERVE_RETRY_MIN_MS;
+  const fromList = (list: AgentListLike) => list.entries.map((entry) => chipAgent(entry.agent)).filter((agent): agent is ChipAgent => agent !== null);
+
+  const reopen = () => {
+    observation = null;
+    if (lifetime.signal.aborted || retry !== null) return;
+    retry = setTimeout(() => {
+      retry = null;
+      open();
+    }, delay);
+    delay = Math.min(delay * 2, OBSERVE_RETRY_MAX_MS);
+  };
+  const open = () => {
+    (client.paseo.agents as unknown as { list(options: { subscribe: object; signal: AbortSignal }): Promise<AgentListLike & { subscription?: AgentObservation }> })
+      .list({ subscribe: {}, signal: lifetime.signal })
+      .then((result) => {
+        if (lifetime.signal.aborted) {
+          void result.subscription?.release().catch(() => undefined);
+          return;
+        }
+        replaceAll(fromList(result));
+        const subscription = result.subscription;
+        if (!subscription) throw new Error("the app returned no agent observation");
+        observation = subscription;
+        subscription.subscribe({
+          snapshot(list) {
+            delay = OBSERVE_RETRY_MIN_MS;
+            replaceAll(fromList(list));
+          },
+          update(message) {
+            if (message.type === "agent_update") onUpdate(message.payload as AgentUpdateLike);
+          },
+          error: reopen,
+        });
+      })
+      .catch(reopen);
+  };
+  open();
+  return () => {
+    lifetime.abort();
+    if (retry !== null) clearTimeout(retry);
+    retry = null;
+    void observation?.release().catch(() => undefined);
+    observation = null;
   };
 }
