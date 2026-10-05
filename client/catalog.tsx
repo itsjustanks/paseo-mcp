@@ -460,7 +460,7 @@ function InstallSheet({
             <Text style={t.text.body}>
               {scope === "user"
                 ? "This server asks you to sign in with your account. Open it to connect each app."
-                : "This server asks you to sign in with your account. Connect it from the project workspace's MCP connections tab."}
+                : "This server asks you to sign in with your account. Connect it from the project workspace, in its Workspace connectors (MCP) tab."}
             </Text>
             {scope === "user" ? (
               <View style={{ flexDirection: "row" }}>

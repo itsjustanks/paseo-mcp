@@ -11,6 +11,7 @@ import { mcpAgentChat, mcpHealthCached, mcpPaseoTools, mcpToolsCached } from "./
 import { chipAgentFrom, createChipRegistry, type ChipAgent } from "./shared/chips";
 import { SIGN_IN_KIND, SIGN_IN_VERSION } from "./shared/chat";
 import { canObserveAgents, supportsButtonPills, supportsNativeScreens } from "./shared/host-features";
+import { MCP_NAME, MCP_NAME_LOWER } from "./shared/guide";
 
 /**
  * What Paseo 0.11 adds to the client context: full screens and native sidebar
@@ -32,17 +33,17 @@ export default function contribute(client: PluginClientContext) {
     else capabilities.openSurface(MCP_SCREEN_ID);
   };
   if (native) {
-    screens.addScreen!({ id: MCP_SCREEN_ID, title: "MCP servers", Component: McpSurface });
-    screens.addSidebarHeaderItem!({ id: MCP_SCREEN_ID, title: "MCP", Component: McpSidebarItem });
+    screens.addScreen!({ id: MCP_SCREEN_ID, title: MCP_NAME, Component: McpSurface });
+    screens.addSidebarHeaderItem!({ id: MCP_SCREEN_ID, title: MCP_NAME, Component: McpSidebarItem });
     registerSurfaceOpener(() => screens.openScreen!({ screenId: MCP_SCREEN_ID }));
   } else {
     registerSurfaceOpener((id) => client.openSurface(id));
     client.addSurface(MCP_SCREEN_ID, McpSurface);
-    client.addSidebarItem({ id: MCP_SCREEN_ID, title: "MCP", icon: "Plug", surface: MCP_SCREEN_ID });
+    client.addSidebarItem({ id: MCP_SCREEN_ID, title: MCP_NAME, icon: "Plug", surface: MCP_SCREEN_ID });
   }
   client.addWorkspacePanel({
     id: "mcp-connections",
-    title: "MCP connections",
+    title: `Workspace ${MCP_NAME_LOWER}`,
     icon: "Plug",
     context: "workspace",
     locations: ["workspace", "explorer"],
@@ -50,7 +51,7 @@ export default function contribute(client: PluginClientContext) {
   });
   client.addWorkspacePanel({
     id: "mcp-agent",
-    title: "MCP",
+    title: MCP_NAME,
     icon: "Plug",
     context: "agent",
     locations: ["workspace", "explorer"],
@@ -58,7 +59,7 @@ export default function contribute(client: PluginClientContext) {
   });
   client.addCommandCenterItem({
     id: "open-workspace-mcp",
-    title: "Open workspace MCP connections",
+    title: `Open workspace ${MCP_NAME_LOWER}`,
     icon: "Plug",
     keywords: ["mcp", "project", "oauth", "connections"],
     context: "workspace",
@@ -80,7 +81,7 @@ export default function contribute(client: PluginClientContext) {
   });
   client.addCommandCenterItem({
     id: "configure-health",
-    title: "Configure MCP health checks",
+    title: "Configure connector health checks",
     icon: "HeartPulse",
     keywords: ["mcp", "health", "background", "pill", "settings"],
     context: "global",
@@ -100,7 +101,7 @@ export default function contribute(client: PluginClientContext) {
   });
   client.addCommandCenterItem({
     id: "open-agent-mcp",
-    title: "MCP for this agent",
+    title: `${MCP_NAME} for this agent`,
     icon: "Plug",
     keywords: ["mcp", "agent", "inject", "servers"],
     context: "agent",
@@ -110,7 +111,7 @@ export default function contribute(client: PluginClientContext) {
   });
   client.addCommandCenterItem({
     id: "open-mcp",
-    title: "Open MCP management",
+    title: `Open ${MCP_NAME}`,
     icon: "Plug",
     keywords: ["mcp", "servers", "oauth", "add", "sync"],
     context: "global",
@@ -190,12 +191,12 @@ function registerMcpChips(client: PluginClientContext, openAgentPanel: (workspac
           id: "mcp-chip",
           workspaceId: agent.workspaceId,
           agentId: agent.id,
-          button: { title: "MCP for this agent", icon: face.icon, label: face.label, behavior: { kind: "action", onPress } },
+          button: { title: `${MCP_NAME} for this agent`, icon: face.icon, label: face.label, behavior: { kind: "action", onPress } },
         });
         return { update: (next) => registration.update({ label: next.label, icon: next.icon }), remove: () => registration.remove() };
       }
       // The 0.8.0-beta.1 shape: the component reads the reports and draws its own label.
-      const remove = client.addComposerPill({ id: "mcp-chip", title: "MCP for this agent", workspaceId: agent.workspaceId, agentId: agent.id, Component: McpChip, onPress });
+      const remove = client.addComposerPill({ id: "mcp-chip", title: `${MCP_NAME} for this agent`, workspaceId: agent.workspaceId, agentId: agent.id, Component: McpChip, onPress });
       return { update: () => undefined, remove };
     },
     async readHealth() {

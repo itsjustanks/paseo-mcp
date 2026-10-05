@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { Pressable, ScrollView, Text, View, type LayoutChangeEvent } from "react-native";
-import { TAB_INTROS, TAB_ORDER, type TabId } from "../shared/guide";
+import { MCP_NAME, TAB_INTROS, TAB_ORDER, type TabId } from "../shared/guide";
 import { Bullets, Disclosure, HostIcon, IconBadge, SPACE, TYPE, useTokens } from "./ui";
 
 /**
@@ -70,14 +70,14 @@ export function TabBar({ active, onSelect }: { active: SectionId; onSelect: (id:
     // The rule sits on a wrapper: a horizontal ScrollView does not draw its own bottom border on the web.
     return (
       <View onLayout={onLayout} style={{ borderBottomWidth: 1, borderBottomColor: t.color.border }}>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} accessibilityRole="tablist" accessibilityLabel="MCP sections" style={{ flexGrow: 0 }}>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} accessibilityRole="tablist" accessibilityLabel={`${MCP_NAME} sections`} style={{ flexGrow: 0 }}>
           {items}
         </ScrollView>
       </View>
     );
   }
   return (
-    <View accessibilityRole="tablist" accessibilityLabel="MCP sections" onLayout={onLayout} style={bar}>
+    <View accessibilityRole="tablist" accessibilityLabel={`${MCP_NAME} sections`} onLayout={onLayout} style={bar}>
       {items}
     </View>
   );

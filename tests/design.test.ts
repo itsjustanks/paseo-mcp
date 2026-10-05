@@ -90,3 +90,16 @@ test("the sidebar '+' opens the MCP page on Add a server, and a second press ope
   assert.equal(addServerRequest(undefined), null);
   assert.equal(addServerRequest({ add: "something-else" }), null);
 });
+
+test("the app calls the plugin Connectors (MCP): the sidebar row, the page and its panels all use the one name (0.18.4)", async () => {
+  const { MCP_NAME, MCP_NAME_LOWER } = await import("../shared/guide");
+  assert.equal(MCP_NAME, "Connectors (MCP)");
+  assert.equal(MCP_NAME_LOWER, "connectors (MCP)");
+  const root = decodeURIComponent(new URL("../", import.meta.url).pathname);
+  const entry = readFileSync(`${root}index.client.tsx`, "utf8");
+  assert.doesNotMatch(entry, /title: "MCP( servers| connections)?"/, "a title still says MCP on its own");
+  assert.match(readFileSync(`${root}client/sidebar.tsx`, "utf8"), /label=\{MCP_NAME\}/);
+  for (const file of ["client/mcp.tsx", "client/catalog.tsx", "client/budget.tsx", "server/catalog.ts"]) {
+    assert.doesNotMatch(readFileSync(`${root}${file}`, "utf8"), /MCP connections|Open MCP management|title="MCP servers"/, file);
+  }
+});

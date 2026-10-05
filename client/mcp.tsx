@@ -36,6 +36,7 @@ import { CURATED_CATALOG } from "../shared/catalog-curated";
 import { SERVER_FILTERS, healthPlainNote, healthPlainWord, projectFilesFor, providerName, removePlan, serverGallery, signInState, type RemovePlan, type RemoveScope, type ServerCardModel, type ServerFilter } from "../shared/servers";
 import { COPY_ALL_EXPLAINER, COPY_ALL_LABEL } from "../shared/copy-all";
 import { overviewNextStep, overviewVerdict, type OverviewTarget } from "../shared/overview";
+import { MCP_NAME, MCP_NAME_LOWER } from "../shared/guide";
 import { addServerRequest } from "../shared/screen-params";
 import { summarizeTools } from "../shared/tools";
 import {
@@ -2020,7 +2021,7 @@ function McpBody({ layout, host, addRequest }: PluginSurfaceProps & { addRequest
           ))}
         </Card>
       ) : null}
-      <QuietLine icon="KeyRound">To sign in to a project's servers, open that project's workspace and choose MCP connections (command palette → "Open workspace MCP connections").</QuietLine>
+      <QuietLine icon="KeyRound">To sign in to a project's servers, open that project's workspace and choose Workspace connectors (MCP) (command palette → "Open workspace connectors (MCP)").</QuietLine>
     </View>
   );
 
@@ -2299,7 +2300,7 @@ function McpBody({ layout, host, addRequest }: PluginSurfaceProps & { addRequest
       {/* Padded the same way as Screen below, so the header, the tab bar and the content share one left edge. */}
       <View style={{ paddingHorizontal: pad, paddingTop: pad }}>
         <View style={{ width: "100%", maxWidth: t.maxWidth, alignSelf: "center", gap: t.space.row }}>
-          <Header title="MCP servers" status={headerPill} caption={ready ? `${plural(servers.length, "server")} on ${host.label}` : `on ${host.label}`} />
+          <Header title={MCP_NAME} status={headerPill} caption={ready ? `${plural(servers.length, "server")} on ${host.label}` : `on ${host.label}`} />
           <TabBar active={section} onSelect={(next) => { setCopyOpen(false); go(next, next === "servers" ? { server: null } : {}); }} />
         </View>
       </View>
@@ -2728,7 +2729,7 @@ export function WorkspaceBody({
   return (
     <View style={{ flex: 1, backgroundColor: t.color.surface0 }}>
       <View style={{ padding: pad, paddingBottom: t.space.row, gap: t.space.row, width: "100%", maxWidth: t.maxWidth, alignSelf: "center" }}>
-        <Header title={workspace?.name ?? "MCP connections"} status={pill} caption={`${caption} · on ${host.label}`} icon={agentId ? "Bot" : "FolderCode"} />
+        <Header title={workspace?.name ?? `Workspace ${MCP_NAME_LOWER}`} status={pill} caption={`${caption} · on ${host.label}`} icon={agentId ? "Bot" : "FolderCode"} />
         {intro}
         {signInFocus && agentId ? (
           <SignInFocus

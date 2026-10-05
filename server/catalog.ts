@@ -564,7 +564,7 @@ async function prepare(input: InstallInput, paseo: PluginHandlerContext["paseo"]
         );
         result.notes.push("Codex does not read .mcp.json; Add project servers to agents passes the file on as written (no ${…} expansion) and skips servers with credentials unless told otherwise.");
       }
-      result.notes.push("Claude Code asks once before it uses a new project server; approve it at launch or in the workspace's MCP connections tab.");
+      result.notes.push("Claude Code asks once before it uses a new project server; approve it at launch or in the Workspace connectors (MCP) tab.");
     }
   }
   if (typeof plan.masked.command === "string") result.commandLine = commandLine(plan.masked.command, Array.isArray(plan.masked.args) ? (plan.masked.args as string[]) : []);

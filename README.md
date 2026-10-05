@@ -2,6 +2,8 @@
 
 Manage MCP servers, project connections, credentials, and OAuth from Paseo.
 
+In the app it is called **Connectors (MCP)**: the sidebar row, its page, and the workspace and agent panels.
+
 ## Install
 
 Requires Paseo 0.8 or newer (0.1.0 is the last release for Paseo 0.7):
@@ -23,7 +25,7 @@ paseo plugin update paseo-mcp
 - Adds, edits, renames, imports, and exports definitions with masked secrets; removes a server from one editor, all editors, or everywhere including project `.mcp.json` files.
 - Turns servers on or off per workspace from the workspace and agent panels, where the editor has such a switch.
 - Starts Claude or Codex OAuth in the computer's default browser and shows the fallback URL.
-- Shows each Paseo workspace's project-level `.mcp.json` servers in an **MCP connections** tab, available in both the workspace view and the Projects/Explorer view.
+- Shows each Paseo workspace's project-level `.mcp.json` servers in a **Workspace connectors (MCP)** tab, available in both the workspace view and the Projects/Explorer view.
 - Tells each workspace what an agent started there loads (project, local and user-level servers), what it costs in child processes and memory, and warns when the count is heavy enough to exhaust the agent's context.
 - Checks every server's health in the background and flags problems per agent, per project, and per user config.
 - Lists the tools each server exposes, the way Claude Code's `/mcp` view does, and keeps an always-on chip on every agent's composer with the server count and what their tool definitions cost that agent (`14 MCP · ~38k tokens`), or its status when something is wrong.
@@ -345,7 +347,7 @@ The result is reported per target, so a partial failure is visible.
 
 ## Per-workspace switches
 
-The **MCP connections** workspace panel and each agent's **MCP** panel list the servers an agent there
+The **Workspace connectors (MCP)** panel and each agent's **Connectors (MCP)** panel list the servers an agent there
 loads, each tagged with its origin (user-level, this project's `.mcp.json`, local) and with a switch
 where the editor has one. A switch takes effect when a new agent session starts; a running agent keeps
 the servers it started with. State is read from the config on every refresh, so a `/mcp disable` done in
@@ -537,7 +539,7 @@ is what the editor actually runs.
 
 ## Workspace context
 
-The **MCP connections** tab and each agent's **MCP** tab lead with what an agent started in that
+The **Workspace connectors (MCP)** tab and each agent's **Connectors (MCP)** tab lead with what an agent started in that
 workspace actually loads, counted from the same files the CLI reads:
 
 - the workspace's `.mcp.json` (read natively by Claude Code, or added by **Add project servers to agents** for the chosen

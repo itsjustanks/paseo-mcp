@@ -4,6 +4,7 @@ import { Pressable, Text } from "react-native";
 import * as HostUi from "@getpaseo/plugin/client/ui";
 import { ADD_SERVER_PARAM, addServerParams } from "../shared/screen-params";
 import { HostIcon, SPACE, TYPE } from "./ui";
+import { MCP_NAME } from "../shared/guide";
 
 /**
  * Paseo 0.11 and later draw a plugin's sidebar entry natively: the plugin
@@ -41,7 +42,7 @@ export function McpSidebarItem({ currentScreen, openScreen, theme }: SidebarItem
   return (
     <SidebarRow
       icon="Plug"
-      label="MCP"
+      label={MCP_NAME}
       active={currentScreen?.screenId === MCP_SCREEN_ID}
       onPress={() => openScreen({ screenId: MCP_SCREEN_ID })}
       trailing={<AddServerButton color={color} onPress={() => openScreen({ screenId: MCP_SCREEN_ID, params: addServerParams() })} />}

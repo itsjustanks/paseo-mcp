@@ -16,6 +16,7 @@ import {
   type WorkspaceLoad,
 } from "../shared/budget";
 import type { mcpWorkspace } from "../shared/contracts";
+import { MCP_NAME } from "../shared/guide";
 import { PASEO_TOOLS_LABEL } from "../shared/paseo-tools";
 import { toolSearchLine, toolSearchOnLine } from "../shared/tool-search";
 import { formatMemory } from "../shared/processes";
@@ -97,7 +98,7 @@ function ContextBudget({ load, providerId }: { load: WorkspaceLoad; providerId?:
         ) : null}
         {canOpenMcp() ? (
           <View style={{ flexDirection: "row" }}>
-            <Button label="Open MCP management" onPress={() => openMcp()} />
+            <Button label={`Open ${MCP_NAME}`} onPress={() => openMcp()} />
           </View>
         ) : null}
       </View>

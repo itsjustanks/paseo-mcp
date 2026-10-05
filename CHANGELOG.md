@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.18.4 — 2026-10-05
+
+### Changed
+- **The plugin is called "Connectors (MCP)" in the app.**
+  - The sidebar row, the page title and its header now say **Connectors (MCP)**.
+  - The workspace panel is **Workspace connectors (MCP)**, and each agent's panel is **Connectors (MCP)**.
+  - The command-centre entries and the notes that point to these tabs use the same names.
+  - The composer chip keeps its short "7 MCP · ~24k tokens" label.
+  - The plugin id, the screen id and the settings are unchanged, so nothing moves.
+- The name lives in one place (`MCP_NAME` in `shared/guide.ts`), with a test that no title says "MCP" on its own.
+
+### Repository
+- The UI preview's `?sidebar` mode shows the sidebar row and its "+" beside the page.
+
 ## 0.18.3 — 2026-10-05
 
 ### Added

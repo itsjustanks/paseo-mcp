@@ -5,6 +5,11 @@
  * the words you'll see. Pure text, so the tests can hold it to plain English.
  */
 
+/** What the plugin is called in the app: the sidebar row, the page and its panels (0.18.4). */
+export const MCP_NAME = "Connectors (MCP)";
+/** The same name inside a sentence or a longer title ("Open workspace connectors (MCP)"). */
+export const MCP_NAME_LOWER = "connectors (MCP)";
+
 export type TabIntro = {
   /** The tab bar's short label. */
   label: string;
