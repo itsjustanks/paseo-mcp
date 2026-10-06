@@ -37,7 +37,7 @@ import { SERVER_FILTERS, healthPlainNote, healthPlainWord, projectFilesFor, prov
 import { COPY_ALL_EXPLAINER, COPY_ALL_LABEL } from "../shared/copy-all";
 import { overviewNextStep, overviewVerdict, type OverviewTarget } from "../shared/overview";
 import { HELP_QUESTIONS, MCP_NAME, MCP_NAME_LOWER, PROJECTS_LINE, WHAT_CONNECTORS_ARE, type HelpTarget } from "../shared/guide";
-import { addServerRequest } from "../shared/screen-params";
+import { addServerRequest, checkNowRequest } from "../shared/screen-params";
 import { summarizeTools } from "../shared/tools";
 import {
   ParsedServerSchema,
@@ -1030,17 +1030,17 @@ function heroFor(status: Status, target: OverviewTarget, facts: { state: string;
   return { tone: "attention", icon: facts.signIn > 0 && target.section === "servers" && target.filter === "sign-in" ? "KeyRound" : "TriangleAlert", action: "Search" };
 }
 
-/** `params` (Paseo 0.11 screens): `add=server` opens on Add a connector, from the sidebar row's "+". */
+/** `params` (Paseo 0.11 screens): `add=server` opens on Add a connector, from the sidebar row's "+"; `check=now` checks every connector again (0.19.1). */
 export function McpSurface({ theme, layout, host, params }: PluginSurfaceProps & { params?: Record<string, string> }) {
   const t = useUi(theme, layout.compact);
   return (
     <TokensProvider value={t}>
-      <McpBody key={host.id} theme={theme} layout={layout} host={host} addRequest={addServerRequest(params)} />
+      <McpBody key={host.id} theme={theme} layout={layout} host={host} addRequest={addServerRequest(params)} checkRequest={checkNowRequest(params)} />
     </TokensProvider>
   );
 }
 
-function McpBody({ layout, host, addRequest }: PluginSurfaceProps & { addRequest: string | null }) {
+function McpBody({ layout, host, addRequest, checkRequest }: PluginSurfaceProps & { addRequest: string | null; checkRequest: string | null }) {
   const t = useTokens();
   const toast = useToast();
   const queryClient = useQueryClient();
@@ -1210,6 +1210,10 @@ function McpBody({ layout, host, addRequest }: PluginSurfaceProps & { addRequest
     refreshDefinitions();
     refreshLogins();
   };
+  // "Check connectors" (0.19.1): each press carries a new `at`, so it checks again even while the page is open.
+  useEffect(() => {
+    if (checkRequest !== null) refreshAll();
+  }, [checkRequest]);
   const fail = (error: unknown) => toast.error(firstLine(errorText(error), "Something went wrong. Please retry."));
   const report = (result: { ok: boolean; message: string }) => {
     if (result.ok) {

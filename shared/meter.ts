@@ -144,11 +144,6 @@ export function shortTokens(tokens: number): string {
   return String(n);
 }
 
-/** The chip's tail: "~38k tokens", or "deferred" while tool search is on. */
-export function meterChipTail(meter: Pick<Meter, "tokens" | "deferred">): string {
-  return meter.deferred ? "deferred" : `~${shortTokens(meter.tokens)} tokens`;
-}
-
 export function basisWord(basis: CostBasis): string {
   switch (basis) {
     case "measured":

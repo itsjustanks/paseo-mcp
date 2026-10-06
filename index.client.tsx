@@ -7,11 +7,13 @@ import { registerSurfaceOpener } from "./client/navigate";
 import { HealthSettingsScreen, InjectionSettingsScreen } from "./client/settings";
 import { MCP_SCREEN_ID, McpSidebarItem, SidebarRow, type OpenScreen, type SidebarItemProps } from "./client/sidebar";
 import { McpChip } from "./client/tools";
-import { mcpAgentChat, mcpHealthCached, mcpPaseoTools, mcpToolsCached } from "./shared/contracts";
+import { publishAttention } from "./client/attention-store";
+import { mcpHealth, mcpHealthCached } from "./shared/contracts";
 import { chipAgentFrom, createChipRegistry, type ChipAgent } from "./shared/chips";
 import { SIGN_IN_KIND, SIGN_IN_VERSION } from "./shared/chat";
 import { canObserveAgents, supportsButtonPills, supportsNativeScreens } from "./shared/host-features";
 import { MCP_NAME, MCP_NAME_LOWER } from "./shared/guide";
+import { addServerParams, checkNowParams } from "./shared/screen-params";
 
 /**
  * What Paseo 0.11 adds to the client context: full screens and native sidebar
@@ -28,9 +30,14 @@ export default function contribute(client: PluginClientContext) {
   const screens = client as PluginClientContext & ScreensClient;
   const native = supportsNativeScreens(client, SidebarRow);
   // Opens the MCP page, whichever way this app shows it. Panels have no opener of their own; they borrow this one.
-  const openMain = (capabilities: { openSurface(id: string): void; openScreen?: OpenScreen }) => {
-    if (native && typeof capabilities.openScreen === "function") capabilities.openScreen({ screenId: MCP_SCREEN_ID });
-    else capabilities.openSurface(MCP_SCREEN_ID);
+  // With params (Paseo 0.11 screens) it lands on Add or checks now; an older app just opens the page.
+  const openMain = (capabilities: { openSurface(id: string): void; openScreen?: OpenScreen }, params?: Record<string, string>): boolean => {
+    if (native && typeof capabilities.openScreen === "function") {
+      capabilities.openScreen(params ? { screenId: MCP_SCREEN_ID, params } : { screenId: MCP_SCREEN_ID });
+      return true;
+    }
+    capabilities.openSurface(MCP_SCREEN_ID);
+    return false;
   };
   if (native) {
     screens.addScreen!({ id: MCP_SCREEN_ID, title: MCP_NAME, Component: McpSurface });
@@ -119,6 +126,28 @@ export default function contribute(client: PluginClientContext) {
       openMain(context as typeof context & { openScreen?: OpenScreen });
     },
   });
+  // 0.19.1: the common actions as commands, in place of an always-on chip.
+  client.addCommandCenterItem({
+    id: "add-connector",
+    title: "Add a connector",
+    icon: "Plus",
+    keywords: ["mcp", "connectors", "add", "new", "install", "gallery", "server"],
+    context: "global",
+    onSelect(context) {
+      openMain(context as typeof context & { openScreen?: OpenScreen }, addServerParams());
+    },
+  });
+  client.addCommandCenterItem({
+    id: "check-connectors",
+    title: "Check connectors",
+    icon: "RefreshCw",
+    keywords: ["mcp", "connectors", "check", "health", "status", "refresh", "sign-in", "failing"],
+    context: "global",
+    onSelect(context) {
+      // The screen checks again when it is opened this way; an older app's page gets the check from here.
+      if (!openMain(context as typeof context & { openScreen?: OpenScreen }, checkNowParams())) void client.rpc(mcpHealth, {}).catch(() => undefined);
+    },
+  });
   // The chip, `/mcp` and the in-chat sign-in card all open the agent's MCP
   // panel the same way.
   const openAgentPanel = (workspaceId: string, agentId: string) => client.openPanel("mcp-agent", { workspaceId, agentId });
@@ -126,6 +155,15 @@ export default function contribute(client: PluginClientContext) {
   // provider's, so this one is what `/mcp` runs in an agent's composer.
   client.addSlashCommand({
     name: "mcp",
+    description: "Open this agent's connectors: what it loads, what it costs, sign-in",
+    argumentHint: "",
+    context: "agent",
+    onSubmit({ workspace, agent }) {
+      openAgentPanel(workspace.id, agent.id);
+    },
+  });
+  client.addSlashCommand({
+    name: "connectors",
     description: "Open this agent's connectors: what it loads, what it costs, sign-in",
     argumentHint: "",
     context: "agent",
@@ -149,10 +187,12 @@ export default function contribute(client: PluginClientContext) {
 // ------------------------------------------------------------------ chip
 
 /**
- * One always-on chip per live agent while the setting is on: "12 MCP · ~38k
- * tokens" on a calm host, "12 MCP · 2 issues" when something breaks. Pressing
- * it opens that agent's MCP panel. The registry (shared/chips.ts) decides
- * which chips exist and what they say; this wires it to the app.
+ * 0.19.1: a chip only on a chat that needs attention ("1 connector failing",
+ * "2 connectors need sign-in"); a calm chat has none. Pressing it opens that
+ * agent's Connectors panel, where the counts and token cost are. The registry
+ * (shared/chips.ts) decides which chips exist and what they say from one
+ * health read a minute; this wires it to the app, and its verdict also drives
+ * the sidebar row's dot.
  *
  * 0.18.1: Paseo 0.8.0 stable and later take a chip as a button and the old
  * component shape threw, so the chip never showed on 0.9 or 0.11 apps
@@ -173,7 +213,7 @@ type ChipButtonsClient = {
     button: { title: string; icon: string; label?: string; behavior: { kind: "action"; onPress(): void } };
   }): { update(patch: { label?: string; icon?: string }): void; remove(): void };
 };
-type AgentLike = { id?: string; workspaceId?: string | null; provider?: string | null; status?: string; archivedAt?: string | null };
+type AgentLike = { id?: string; workspaceId?: string | null; provider?: string | null; status?: string; archivedAt?: string | null; cwd?: string | null };
 type AgentListLike = { entries: Array<{ agent: AgentLike }> };
 type AgentUpdateLike = { kind: string; agentId?: string; agent?: AgentLike };
 type AgentObservation = {
@@ -195,21 +235,15 @@ function registerMcpChips(client: PluginClientContext, openAgentPanel: (workspac
         });
         return { update: (next) => registration.update({ label: next.label, icon: next.icon }), remove: () => registration.remove() };
       }
-      // The 0.8.0-beta.1 shape: the component reads the reports and draws its own label.
+      // The 0.8.0-beta.1 shape: the component draws the face the registry publishes.
       const remove = client.addComposerPill({ id: "mcp-chip", title: `${MCP_NAME} for this agent`, workspaceId: agent.workspaceId, agentId: agent.id, Component: McpChip, onPress });
       return { update: () => undefined, remove };
     },
     async readHealth() {
       const cached = await client.rpc(mcpHealthCached, {});
-      return { wanted: cached.showComposerPill, report: cached.report };
+      return { wanted: cached.showComposerPill, report: cached.report, signIn: cached.signIn };
     },
-    labels: buttons
-      ? {
-          tools: async () => (await client.rpc(mcpToolsCached, {})).report,
-          paseo: () => client.rpc(mcpPaseoTools, {}),
-          meter: async (agent) => (await client.rpc(mcpAgentChat, { workspaceId: agent.workspaceId, providerId: agent.provider, agentId: agent.id, chat: false })).meter,
-        }
-      : null,
+    publish: publishAttention,
     schedule: (run, ms) => setTimeout(run, ms),
     cancel: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
     pollMs: CHIP_SETTINGS_POLL_MS,

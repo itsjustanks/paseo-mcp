@@ -1,15 +1,14 @@
 /** Cached MCP tool lists, shared by the composer chip and the surface. */
 import type { PluginComposerPillProps } from "@getpaseo/plugin/client";
-import { useAgent, useRpc } from "@getpaseo/plugin/client";
+import { useRpc } from "@getpaseo/plugin/client";
 import { Icon } from "@getpaseo/plugin/client/react-native";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import React, { useCallback } from "react";
 import { Text, View } from "react-native";
-import { chipLabel, mcpTools, mcpToolsCached, type McpServerTools, type McpTool, type McpToolsReport } from "../shared/contracts";
+import { mcpTools, mcpToolsCached, type McpServerTools, type McpTool, type McpToolsReport } from "../shared/contracts";
 import { clockTime, failureStreak } from "../shared/schedule";
-import { cachedReadInterval, useHealth, type CachedRead } from "./health";
-import { useAgentChat } from "./chat";
-import { paseoToolsFor, usePaseoTools } from "./paseo-tools";
+import { useChipFace } from "./attention-store";
+import { cachedReadInterval, type CachedRead } from "./health";
 import { Card, Disclosure, Facts, Row, useTokens, type Status } from "./ui";
 
 export const TOOLS_QUERY_KEY = ["paseo-mcp", "tools"] as const;
@@ -80,28 +79,20 @@ export function toolsWord(entry: McpServerTools): string {
 // ------------------------------------------------------------------- chip
 
 /**
- * Always-on composer chip body: the server count and the one thing worth
- * knowing about them (an issue count, a sign-in count, or, since 0.14.0, what
- * this agent's tool definitions cost: "~38k tokens", or "deferred").
- * Pressing it opens the agent's MCP panel. Colour is never the only channel:
- * the icon changes with the tone too.
+ * The composer chip on an app that still takes a component (the 0.8.0-beta.1
+ * shape). Since 0.19.1 it exists only while this chat needs attention, and
+ * draws the face the chip registry decided (client/attention-store.ts), so it
+ * reads nothing itself. Colour is never the only channel: the icon says it too.
  */
-export function McpChip({ theme, agentId, workspaceId }: PluginComposerPillProps) {
-  const health = useHealth();
-  const tools = useTools();
-  // Paseo's built-in server counts when this agent's provider gets it.
-  const provider = useAgent(agentId, (agent) => agent.provider);
-  const paseo = usePaseoTools();
-  // 0.14.0: this agent's context meter, read beside the reports and never
-  // waited on; until it arrives (or on an older host) the label is as before.
-  const meter = useAgentChat(workspaceId, agentId, provider, false);
-  const { label, tone } = chipLabel(health.data, tools.data, paseoToolsFor(paseo.data, provider), meter.data?.meter ?? null);
-  const color = tone === "attention" ? theme.colors.statusWarning : theme.colors.foregroundMuted;
+export function McpChip({ theme, agentId }: PluginComposerPillProps) {
+  const face = useChipFace(agentId);
+  if (!face) return null;
+  const color = face.icon === "TriangleAlert" ? theme.colors.statusWarning : theme.colors.foregroundMuted;
   return (
     <>
-      <Icon name={tone === "attention" ? "TriangleAlert" : "Plug"} size={14} color={color} />
+      <Icon name={face.icon} size={14} color={color} />
       <Text numberOfLines={1} style={{ color, flexShrink: 1 }}>
-        {label}
+        {face.label}
       </Text>
     </>
   );

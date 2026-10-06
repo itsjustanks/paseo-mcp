@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.19.1 — 2026-10-06
+
+Fewer composer chips, at the user's request: our plugins added "too many… like composer chips".
+
+### Changed
+- **The Connectors chip shows only when a chat needs you.** It used to sit on every agent ("7 connectors · ~24k tokens"). Now it appears only while a connector that chat loads is failing or needs sign-in: "1 connector failing", "2 connectors need sign-in", or both ("1 connector failing, 1 needs sign-in"). A calm chat has no chip. Pressing it still opens that agent's Connectors panel.
+  - A connector counts for a chat when its provider's config has it, or when it's in the `.mcp.json` of the project the agent works in. An OAuth connector's 401 on its own is not a problem (it's how a working one answers a check), as before.
+  - Sign-in comes from the AI apps' own records: Claude Code's needs-sign-in list and Codex's saved sign-in states. Nothing asks Codex or the daemon for it.
+- **The counts and the token cost live in the agent panel** (open it with the chip, `/mcp`, `/connectors` or the command centre), which already showed them.
+- **Lighter on the host.** The chip makes one health read a minute, whatever the number of agents. It no longer reads tool lists, Paseo's tool counts or a context meter per running agent. On an app that still takes a chip as a component, the component draws what the plugin decided and reads nothing itself.
+- The "Composer chip" setting's wording says what it does now. Its key and default are unchanged.
+
+### Added
+- **A status dot on the Connectors sidebar row** (Paseo 0.11): red when a connector isn't working, amber when one needs sign-in, nothing when all is well. It comes from the chip's own read, so it costs nothing extra.
+- **Commands:** "Add a connector" opens the gallery, and "Check connectors" opens the page and checks every connector again (on an app without screens they open the page, and the check runs from the command). "Open Connectors" stays.
+- **`/connectors`** in an agent's composer opens its Connectors panel, like `/mcp`.
+
+### Fixed
+- A test that let a Claude Code retry run with a 300 ms timeout failed about 1 run in 8, on `main` too.
+
+### Removed
+- The always-on chip's label code (`chipLabel`, `meterChipTail`) and its tests.
+
 ## 0.19.0 — 2026-10-06
 
 The page is plainer and calmer, at the user's request: "It needs better panels and accordions… too technical… it just needs to work for dummies."

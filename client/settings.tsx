@@ -134,7 +134,7 @@ const INTERVAL_OPTIONS = HEALTH_INTERVAL_CHOICES.map((minutes) => ({
 
 export function describeHealth(values: HealthSettings): string {
   if (!values.backgroundChecks) return "Background checks are off; connectors are checked only when you press Refresh";
-  return `Checking every ${values.intervalMinutes} minutes${values.showComposerPill ? ", with a Connectors chip on every agent's composer" : ""}`;
+  return `Checking every ${values.intervalMinutes} minutes${values.showComposerPill ? ", with a Connectors chip on a chat when one of its connectors needs you" : ""}`;
 }
 
 function HealthControls({ settings, theme }: { settings: HealthReady; theme: PluginSurfaceProps["theme"] }) {
@@ -171,7 +171,7 @@ function HealthControls({ settings, theme }: { settings: HealthReady; theme: Plu
           />
           <SettingsSwitch
             label="Composer chip"
-            hint="Always show a Connectors chip on each agent's composer: the connector count, then issues, sign-ins or what the tool definitions cost; press it to open that agent's Connectors panel"
+            hint="Show a Connectors chip on a chat only when one of its connectors is failing or needs sign-in; press it to open that agent's Connectors panel, which also shows what its connectors cost"
             value={values.showComposerPill}
             disabled={settings.saving}
             onValueChange={(showComposerPill) => save({ showComposerPill })}

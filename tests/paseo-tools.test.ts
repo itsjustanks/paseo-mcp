@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { costProfile, loadFor, loadsForWorkspace, toolBudgetTier, type PaseoToolsLike, type ProfileScope, type WorkspaceProfile } from "../shared/budget";
-import { chipLabel } from "../shared/contracts";
 import {
   PASEO_BUILTIN_PROVIDERS,
   PASEO_TOOL_CATALOG,
@@ -369,12 +368,3 @@ test("with injection Paseo tools are one more server with their real tool count"
   assert.equal(loadsForWorkspace({ ...profile, scopes: [codex, claude] }, null, { tools: { claude: 61 } })[0]!.providerId, "codex");
 });
 
-test("the chip counts Paseo tools only when this agent gets them", () => {
-  const health = { results: [{ name: "a", status: "ok" as const, note: "", scopes: [] }], checkedAt: "" };
-  const tools = { servers: [{ name: "a", transport: "http" as const, kind: "listed" as const, note: "", tools: [{ name: "t", title: "", description: "", takesArguments: false, arguments: [], required: [] }], serverInfo: null, protocolVersion: "" }], checkedAt: "" };
-  assert.equal(chipLabel(health, tools).label, "1 connector · 1 tools");
-  assert.equal(chipLabel(health, tools, 0).label, "1 connector · 1 tools");
-  assert.equal(chipLabel(health, tools, 61).label, "2 connectors · 62 tools");
-  assert.equal(chipLabel(null, null, 61).label, "1 connector");
-  assert.equal(chipLabel(null, null).label, "Connectors");
-});

@@ -1,6 +1,5 @@
 import { defineRpc } from "@getpaseo/plugin";
 import { z } from "zod";
-import { shortTokens } from "./meter";
 // ---- universal MCP management -------------------------------------------------
 
 export const DestinationSchema = z.object({
@@ -421,6 +420,10 @@ export const McpHealthScopeSchema = z.object({
   level: z.enum(["user", "project"]),
   label: z.string(), // destination label, or project name
   configPath: z.string(),
+  // 0.19.1, user level only: the Paseo provider id whose agents read this
+  // config ("" for a slot no provider is wired to), so the composer chip can
+  // tell which chats a failing connector belongs to. Absent from older reports.
+  providerId: z.string().optional(),
 });
 export type McpHealthScope = z.infer<typeof McpHealthScopeSchema>;
 
@@ -475,6 +478,10 @@ export const mcpHealthCached = defineRpc({
     showComposerPill: z.boolean(),
     nextCheckAt: z.string().nullable(),
     checking: z.boolean().optional(),
+    // 0.19.1: connectors an account still has to sign in to, with the Paseo
+    // provider ids whose agents use that account (shared/attention.ts). Read
+    // from the editors' own files, never by asking an editor. Absent from older hosts.
+    signIn: z.array(z.object({ name: z.string(), providerIds: z.array(z.string()) })).optional(),
   }),
 });
 
@@ -556,45 +563,6 @@ export const mcpToolsCached = defineRpc({
     checking: z.boolean().optional(),
   }),
 });
-
-/**
- * The always-on composer chip's text: the enabled connector count, then the one
- * thing worth knowing about them. A problem wins over a sign-in count, and a
- * sign-in count wins over the tool total, so the chip reads as a status line
- * and not a badge that never changes.
- */
-const connectorCount = (count: number): string => `${count} ${count === 1 ? "connector" : "connectors"}`;
-
-export function chipLabel(
-  health: McpHealthReport | null | undefined,
-  tools: McpToolsReport | null | undefined,
-  // 0.10.0: tools the agent gets from Paseo's built-in server (0: none). It
-  // counts as one more server and adds its tools; 0 leaves the label as it was.
-  paseoTools = 0,
-  // 0.14.0: this agent's context meter (shared/meter.ts). When known, the count
-  // is the servers this agent loads and the tail is the estimated cost of their
-  // definitions ("~38k tokens"), or "deferred" while tool search is on. Issues
-  // and sign-ins still win, as before.
-  meter?: { servers: number; tokens: number; deferred: boolean } | null,
-): { label: string; tone: "calm" | "attention" } {
-  const builtIn = paseoTools > 0 ? 1 : 0;
-  const results = health?.results ?? [];
-  const tail = meter ? (meter.deferred ? "deferred" : `~${shortTokens(meter.tokens)} tokens`) : "";
-  if (results.length === 0) {
-    if (meter) return { label: `${connectorCount(meter.servers)} · ${tail}`, tone: "calm" };
-    const count = (tools?.servers.length ?? 0) + builtIn;
-    return { label: count ? connectorCount(count) : "Connectors", tone: "calm" };
-  }
-  const issues = results.filter((entry) => healthNeedsAttention(entry.status)).length;
-  const signIn = results.filter((entry) => healthIsSignIn(entry.status)).length;
-  const head = connectorCount(meter ? meter.servers : results.length + builtIn);
-  if (issues > 0) return { label: `${head} · ${issues} ${issues === 1 ? "issue" : "issues"}`, tone: "attention" };
-  if (signIn > 0) return { label: `${head} · ${signIn} need sign-in`, tone: "calm" };
-  if (meter) return { label: `${head} · ${tail}`, tone: "calm" };
-  const toolCount = (tools?.servers ?? []).reduce((sum, entry) => sum + entry.tools.length, 0) + paseoTools;
-  if (toolCount > 0) return { label: `${head} · ${toolCount} tools`, tone: "calm" };
-  return { label: `${head} · healthy`, tone: "calm" };
-}
 
 /**
  * Statuses a user has to act on. `ok` and `unknown` are not problems, and

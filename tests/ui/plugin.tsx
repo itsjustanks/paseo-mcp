@@ -37,7 +37,7 @@ const servers = [
   { name: "automations", transport: "http", detail: "https://mcp.zapier.com/api/mcp/s/Zm9vYmFy/mcp", authStyle: "oauth-or-none", inlineCredentialsIn: [], presentIn: [claude, codex, work, kimi] },
   { name: "ikit-notion", transport: "http", detail: "https://notion-proxy.investorkit.example/mcp", authStyle: "inline-credentials", inlineCredentialsIn: [claude], presentIn: [claude, work] },
 ];
-const userScope = { level: "user", label: "Claude · demo@example.com (primary)", configPath: `${HOME}/.claude.json` };
+const userScope = { level: "user", label: "Claude · demo@example.com (primary)", configPath: `${HOME}/.claude.json`, providerId: "claude" };
 const projectScope = { level: "project", label: "data-glue", configPath: `${HOME}/projects/data-glue/.mcp.json` };
 const health = [
   { name: "heroui-pro", status: "ok", note: "", scopes: [userScope] },
@@ -250,7 +250,7 @@ async function call(contract: any, input: any) {
   switch (name) {
     case "matrix": return { destinations, servers: empty ? [] : servers };
     case "health": return { results: empty ? [] : health, checkedAt };
-    case "health-cached": return { report: cold() ? null : { results: empty ? [] : health, checkedAt, stale: restored }, backgroundChecks: true, intervalMinutes: 10, showComposerPill: true, nextCheckAt: checkedAt, checking: cold() };
+    case "health-cached": return { report: cold() ? null : { results: empty ? [] : health, checkedAt, stale: restored }, backgroundChecks: true, intervalMinutes: 10, showComposerPill: true, nextCheckAt: checkedAt, checking: cold(), signIn: params.has("healthy") ? [] : [{ name: "jam", providerIds: ["claude", "codex"] }, { name: "posthog", providerIds: ["claude"] }] };
     case "tools": return { servers: empty ? [] : tools, checkedAt };
     case "tools-cached": return { report: cold() ? null : { servers: empty ? [] : restoredTools(), checkedAt, stale: restored }, inFlight: cold(), checking: cold() };
     case "auth": return { accounts, projectServers: empty ? [] : projectServers };
@@ -407,6 +407,8 @@ async function call(contract: any, input: any) {
     default: throw new Error(`Fixture has no answer for ${name}`);
   }
 }
+/** For the preview page: the same fake host, outside a component (the chip registry reads through it). */
+export const callPreviewRpc = (contract: any, input: unknown) => call(contract, input);
 export function useRpc(contract: any) { return useCallback((input: unknown) => call(contract, input), [contract]); }
 export function useWorkspace<T>(_id: string, select: (workspace: { name: string; directory: string }) => T): T { return select({ name: "data-glue", directory: `${HOME}/projects/data-glue` }); }
 export function useAgent<T>(id: string, select: (agent: { id: string; workspaceId: string; provider: string; model: string | null }) => T): T { return select({ id, workspaceId: "ws-1", provider: params.get("provider") ?? "codex", model: params.get("provider") === "claude" ? "claude-opus-5-5" : "gpt-5-codex" }); }

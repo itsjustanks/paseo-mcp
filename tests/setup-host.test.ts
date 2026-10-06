@@ -300,8 +300,10 @@ test("a Claude Code that hangs is killed, and the half-added server is taken out
     assert.equal(result.ok, false);
     assert.match(result.message, /taken out again/);
     assert.ok(!("gmail-hang" in claudeServers()), "no server left without its secret");
-    // A retry is not refused as a clash.
+    // A retry is not refused as a clash. It runs with the normal timeouts: under
+    // load the fake Claude Code can take longer than 300 ms just to start (0.19.1).
     delete process.env.FAKE_CLAUDE_MODE;
+    setByoTimeouts(null);
     const again = await byoInstall("gmail-hang", [claudeFile]);
     assert.equal(again.result.ok, true, again.result.message);
   } finally {

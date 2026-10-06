@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { chipLabel, type McpHealthReport, type McpToolsReport } from "../shared/contracts";
+import { type McpHealthReport, type McpToolsReport } from "../shared/contracts";
 import {
   TOOLS_LIST_REQUEST,
   cleanText,
@@ -239,13 +239,3 @@ test("summarizeTools counts each outcome kind", () => {
   assert.deepEqual(totals, { servers: 5, listed: 2, tools: 3, signIn: 1, stdio: 1, unavailable: 1 });
 });
 
-test("chipLabel leads with the problem, then sign-in, then the tool total", () => {
-  const tools = toolsReport([{ tools: [tool("a"), tool("b")] }, { tools: [tool("c")] }]);
-  assert.deepEqual(chipLabel(healthReport(["ok", "down", "warn"]), tools), { label: "3 connectors · 2 issues", tone: "attention" });
-  assert.deepEqual(chipLabel(healthReport(["ok", "binary-missing", "auth-required"]), tools), { label: "3 connectors · 1 issue", tone: "attention" });
-  assert.deepEqual(chipLabel(healthReport(["ok", "auth-required", "auth-required"]), tools), { label: "3 connectors · 2 need sign-in", tone: "calm" });
-  assert.deepEqual(chipLabel(healthReport(["ok", "ok"]), tools), { label: "2 connectors · 3 tools", tone: "calm" });
-  assert.deepEqual(chipLabel(healthReport(["ok", "ok"]), null), { label: "2 connectors · healthy", tone: "calm" });
-  assert.deepEqual(chipLabel(null, null), { label: "Connectors", tone: "calm" });
-  assert.deepEqual(chipLabel(null, tools), { label: "2 connectors", tone: "calm" });
-});

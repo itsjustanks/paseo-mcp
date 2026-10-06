@@ -1,49 +1,48 @@
 /**
- * The MCP composer chip (0.18.1): on apps that take chips as buttons (Paseo
- * 0.8.0 stable and later) the registry adds a button and pushes its label; on
- * the 0.8.0-beta.1 shape the old component draws its own label; the setting
- * hides and shows chips; agents that go away lose theirs; reads that fail
- * slow the loop down without stopping it.
+ * The Connectors composer chip. 0.18.1: on apps that take chips as buttons
+ * (Paseo 0.8.0 stable and later) the registry adds a button and pushes its
+ * label; on the 0.8.0-beta.1 shape the old component draws the face it is
+ * given. 0.19.1: attention only. A chat gets a chip only while a connector it
+ * loads is failing or needs sign-in; a calm chat has none; and the registry
+ * makes one read a minute, whatever the number of agents.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
-import { CHIP_FIRST_FACE, METER_RETRY_MS, chipAgentFrom, chipFace, createChipRegistry, type ChipAgent, type ChipDeps, type ChipFace } from "../shared/chips";
-import { canObserveAgents, supportsButtonPills } from "../shared/host-features";
+import type { SignInNeed } from "../shared/attention";
+import { chipAgentFrom, createChipRegistry, type AttentionState, type ChipAgent, type ChipDeps, type ChipFace } from "../shared/chips";
 import type { McpHealthReport } from "../shared/contracts";
+import { canObserveAgents, supportsButtonPills } from "../shared/host-features";
 
-const report = (statuses: string[]): McpHealthReport =>
-  ({ checkedAt: "2026-10-05T00:00:00.000Z", results: statuses.map((status, index) => ({ name: `s${index}`, status, note: "" })) }) as unknown as McpHealthReport;
+const HOME = "/home/demo";
+const claudeScope = { level: "user", label: "Claude · demo (primary)", configPath: `${HOME}/.claude.json`, providerId: "claude" };
+const codexScope = { level: "user", label: "Codex · demo (primary)", configPath: `${HOME}/.codex/config.toml`, providerId: "codex" };
+const projectScope = { level: "project", label: "data-glue", configPath: `${HOME}/projects/data-glue/.mcp.json` };
 
-function harness(options: { labels?: boolean; wanted?: boolean; health?: McpHealthReport | null; failHealth?: boolean; failMeter?: boolean } = {}) {
-  let clock = 1_000_000;
-  let failMeter = options.failMeter ?? false;
+type Entry = { name: string; status: string; scopes?: object[] };
+const report = (entries: Entry[]): McpHealthReport =>
+  ({ checkedAt: "2026-10-06T00:00:00.000Z", results: entries.map((entry) => ({ note: "", scopes: [claudeScope], ...entry })) }) as unknown as McpHealthReport;
+
+function harness(options: { wanted?: boolean; health?: McpHealthReport | null; signIn?: SignInNeed[]; failHealth?: boolean } = {}) {
   const faces = new Map<string, ChipFace[]>();
   const removed: string[] = [];
   const timers: Array<{ run: () => void; ms: number; cancelled: boolean }> = [];
+  const published: AttentionState[] = [];
   let wanted = options.wanted ?? true;
+  let health = options.health ?? null;
+  let signIn = options.signIn ?? [];
   let failHealth = options.failHealth ?? false;
-  let meterCalls = 0;
+  let reads = 0;
   const deps: ChipDeps = {
     addChip(agent, face) {
       faces.set(agent.id, [face]);
       return { update: (next) => faces.get(agent.id)!.push(next), remove: () => removed.push(agent.id) };
     },
     readHealth: async () => {
+      reads += 1;
       if (failHealth) throw new Error("host unreachable");
-      return { wanted, report: options.health ?? null };
+      return { wanted, report: health, signIn };
     },
-    labels:
-      options.labels === false
-        ? null
-        : {
-            tools: async () => ({ checkedAt: "x", servers: [] }) as never,
-            paseo: async () => null,
-            meter: async () => {
-              meterCalls += 1;
-              if (failMeter) throw new Error("This Paseo workspace no longer exists.");
-              return { servers: 7, tokens: 24_000, deferred: false } as never;
-            },
-          },
+    publish: (state) => published.push(state),
     schedule(run, ms) {
       const entry = { run, ms, cancelled: false };
       timers.push(entry);
@@ -54,36 +53,37 @@ function harness(options: { labels?: boolean; wanted?: boolean; health?: McpHeal
     },
     pollMs: 60_000,
     maxPollMs: 15 * 60_000,
-    now: () => clock,
   };
   const registry = createChipRegistry(deps);
-  const settle = () => new Promise((resolve) => setImmediate(resolve));
+  const settle = async () => {
+    for (let i = 0; i < 5; i += 1) await new Promise((resolve) => setImmediate(resolve));
+  };
   const tick = async () => {
     const next = timers.filter((entry) => !entry.cancelled).pop();
     if (next) {
       next.cancelled = true;
       next.run();
     }
-    for (let i = 0; i < 5; i += 1) await settle();
+    await settle();
   };
   return {
     registry,
     faces,
     removed,
     timers,
+    published,
     tick,
-    settle: async () => {
-      for (let i = 0; i < 5; i += 1) await settle();
-    },
+    settle,
+    reads: () => reads,
     setWanted: (next: boolean) => (wanted = next),
+    setHealth: (next: McpHealthReport | null) => (health = next),
+    setSignIn: (next: SignInNeed[]) => (signIn = next),
     setFailHealth: (next: boolean) => (failHealth = next),
-    setFailMeter: (next: boolean) => (failMeter = next),
-    advance: (ms: number) => (clock += ms),
-    meterCalls: () => meterCalls,
   };
 }
 
-const agent = (id: string, provider = "claude", active = true): ChipAgent => ({ id, workspaceId: "ws-1", provider, active });
+const agent = (id: string, provider = "claude", cwd = `${HOME}/projects/other`): ChipAgent => ({ id, workspaceId: "ws-1", provider, cwd });
+const last = (h: ReturnType<typeof harness>, id: string) => h.faces.get(id)?.at(-1);
 
 test("feature checks: buttons from 0.8.0 stable (addHeaderButton); agent observations from 0.9 (observeEvents)", () => {
   assert.equal(supportsButtonPills({ addComposerPill() {}, addHeaderButton() {} }), true);
@@ -93,38 +93,114 @@ test("feature checks: buttons from 0.8.0 stable (addHeaderButton); agent observa
   assert.equal(canObserveAgents({ agents: {} }), false, "a 0.8 app: never send subscribe");
 });
 
-test("buttons: a chip appears with a first face, then its label from health, tools and the agent's meter", async () => {
-  const h = harness({ health: report(["ok", "down", "ok"]) });
+// ---------------------------------------------------------------- 0.19.1 states
+
+test("a calm chat gets no chip: every connector answers and none needs sign-in", async () => {
+  const h = harness({ health: report([{ name: "linear", status: "ok" }, { name: "notion", status: "unknown" }]) });
   h.registry.upsert(agent("a1"));
   await h.settle();
-  const faces = h.faces.get("a1")!;
-  assert.deepEqual(faces[0], CHIP_FIRST_FACE);
-  // 3 servers checked, 1 needs attention; the meter says this agent loads 7.
-  assert.deepEqual(faces.at(-1), chipFace("7 connectors · 1 issue", "attention"));
-  assert.equal(faces.at(-1)!.icon, "TriangleAlert", "the icon carries the tone");
-  assert.equal(h.meterCalls(), 1);
+  assert.deepEqual(h.registry.shown(), []);
+  assert.equal(h.faces.size, 0, "no chip was ever added");
+  assert.equal(h.published.at(-1)!.host, null, "and no sidebar dot");
 });
 
-test("a calm host reads the meter's cost; an agent with no provider gets no meter read", async () => {
-  const h = harness({ health: report(["ok", "ok"]) });
+test("an OAuth connector's 401 alone is not a problem: no chip", async () => {
+  const h = harness({ health: report([{ name: "jam", status: "auth-required" }]) });
   h.registry.upsert(agent("a1"));
-  h.registry.upsert({ id: "a2", workspaceId: "ws-1", provider: "", active: true });
   await h.settle();
-  assert.deepEqual(h.faces.get("a1")!.at(-1), { label: "7 connectors · ~24k tokens", icon: "Plug" });
-  assert.equal(h.meterCalls(), 1, "only the agent with a provider");
-  assert.deepEqual(h.faces.get("a2")!.at(-1), { label: "2 connectors · healthy", icon: "Plug" });
+  assert.deepEqual(h.registry.shown(), []);
 });
 
-test("the old component shape: chips are added and removed, and no label is read or pushed", async () => {
-  const h = harness({ labels: false, health: report(["down"]) });
+test("one failing connector: '1 connector failing' with the warning icon", async () => {
+  const h = harness({ health: report([{ name: "supabase", status: "down" }, { name: "linear", status: "ok" }]) });
   h.registry.upsert(agent("a1"));
   await h.settle();
-  assert.deepEqual(h.faces.get("a1"), [CHIP_FIRST_FACE]);
-  assert.equal(h.meterCalls(), 0);
+  assert.deepEqual(last(h, "a1"), { label: "1 connector failing", icon: "TriangleAlert" });
+  assert.equal(h.published.at(-1)!.host, "failing");
+});
+
+test("sign-in: '2 connectors need sign-in' with the key icon, only for the chat whose account needs it", async () => {
+  const h = harness({ health: report([{ name: "linear", status: "ok" }]), signIn: [{ name: "jam", providerIds: ["claude"] }, { name: "posthog", providerIds: ["claude", "claude-work"] }] });
+  h.registry.replaceAll([agent("claude-chat"), agent("codex-chat", "codex")]);
+  await h.settle();
+  assert.deepEqual(last(h, "claude-chat"), { label: "2 connectors need sign-in", icon: "KeyRound" });
+  assert.deepEqual(h.registry.shown(), ["claude-chat"], "Codex's account needs nothing: no chip there");
+  assert.equal(h.published.at(-1)!.host, "sign-in");
+});
+
+test("failing and sign-in together: both counted, failing first; a failing one isn't counted twice", async () => {
+  const h = harness({ health: report([{ name: "supabase", status: "binary-missing" }]), signIn: [{ name: "jam", providerIds: ["claude"] }, { name: "supabase", providerIds: ["claude"] }] });
+  h.registry.upsert(agent("a1"));
+  await h.settle();
+  assert.deepEqual(last(h, "a1"), { label: "1 connector failing, 1 needs sign-in", icon: "TriangleAlert" });
+});
+
+test("a failing connector belongs to the chats that load it: its provider's config, or the project the agent works in", async () => {
+  const h = harness({
+    health: report([
+      { name: "codex-only", status: "down", scopes: [codexScope] },
+      { name: "project-db", status: "warn", scopes: [projectScope] },
+    ]),
+  });
+  h.registry.replaceAll([agent("claude-elsewhere"), agent("codex-elsewhere", "codex"), agent("claude-in-project", "claude", `${HOME}/projects/data-glue/src`)]);
+  await h.settle();
+  assert.deepEqual(h.registry.shown().sort(), ["claude-in-project", "codex-elsewhere"]);
+  assert.deepEqual(last(h, "codex-elsewhere"), { label: "1 connector failing", icon: "TriangleAlert" });
+  assert.deepEqual(last(h, "claude-in-project"), { label: "1 connector failing", icon: "TriangleAlert" });
+  assert.equal(h.published.at(-1)!.host, "failing", "the dot shows for anything on this computer");
+});
+
+test("a report from an older host (no provider id on its scopes) counts every user-level config", async () => {
+  const old = { level: "user", label: "Claude", configPath: `${HOME}/.claude.json` };
+  const h = harness({ health: report([{ name: "a", status: "down", scopes: [old] }]) });
+  h.registry.replaceAll([agent("c1"), agent("x1", "codex")]);
+  await h.settle();
+  assert.deepEqual(h.registry.shown().sort(), ["c1", "x1"]);
+});
+
+test("the chip goes away when the problem is fixed, and changes its words when the problem changes", async () => {
+  const h = harness({ health: report([{ name: "a", status: "down" }, { name: "b", status: "down" }]) });
+  h.registry.upsert(agent("a1"));
+  await h.settle();
+  assert.deepEqual(last(h, "a1"), { label: "2 connectors failing", icon: "TriangleAlert" });
+  h.setHealth(report([{ name: "a", status: "down" }, { name: "b", status: "ok" }]));
+  await h.tick();
+  assert.deepEqual(last(h, "a1"), { label: "1 connector failing", icon: "TriangleAlert" });
+  const updates = h.faces.get("a1")!.length;
+  await h.tick();
+  assert.equal(h.faces.get("a1")!.length, updates, "the same words are not pushed again");
+  h.setHealth(report([{ name: "a", status: "ok" }, { name: "b", status: "ok" }]));
+  await h.tick();
+  assert.deepEqual(h.registry.shown(), []);
+  assert.deepEqual(h.removed, ["a1"]);
+  assert.equal(h.published.at(-1)!.host, null);
+  assert.equal(h.published.at(-1)!.faces.size, 0);
+});
+
+test("nothing shows before the first read, and one read serves every agent (no tool, Paseo or meter reads)", async () => {
+  const h = harness({ health: report([{ name: "a", status: "down" }]) });
+  h.registry.replaceAll([agent("a1"), agent("a2"), agent("a3", "codex")]);
+  assert.deepEqual(h.registry.shown(), [], "no chip until the host has answered");
+  await h.settle();
+  assert.equal(h.reads(), 1, "one read for three agents");
+  h.registry.upsert(agent("a4"));
+  await h.settle();
+  assert.equal(h.reads(), 1, "a new agent is decided from the last read");
+  assert.deepEqual(h.registry.shown().sort(), ["a1", "a2", "a4"]);
+});
+
+test("snapshots that arrive before the first answer share one read", async () => {
+  const h = harness({ health: report([{ name: "a", status: "down" }]) });
+  h.registry.replaceAll([agent("a1")]);
+  h.registry.replaceAll([agent("a1"), agent("a2")]);
+  h.registry.upsert(agent("a3"));
+  await h.settle();
+  assert.equal(h.reads(), 1);
+  assert.deepEqual(h.registry.shown().sort(), ["a1", "a2", "a3"]);
 });
 
 test("the setting hides every chip and brings them back; an agent that goes away loses its chip", async () => {
-  const h = harness();
+  const h = harness({ health: report([{ name: "a", status: "down" }]) });
   h.registry.upsert(agent("a1"));
   h.registry.upsert(agent("a2"));
   await h.settle();
@@ -141,21 +217,21 @@ test("the setting hides every chip and brings them back; an agent that goes away
 });
 
 test("a snapshot replaces what was known: missing agents lose their chips, new ones get one", async () => {
-  const h = harness();
+  const h = harness({ health: report([{ name: "a", status: "down" }]) });
   h.registry.replaceAll([agent("a1"), agent("a2")]);
   await h.settle();
   h.registry.replaceAll([agent("a2"), agent("a3")]);
   await h.settle();
   assert.deepEqual(h.registry.shown().sort(), ["a2", "a3"]);
   assert.ok(h.removed.includes("a1"));
-  assert.ok(h.faces.get("a3")!.length >= 2, "a chip added later still gets its label");
+  assert.deepEqual(last(h, "a3"), { label: "1 connector failing", icon: "TriangleAlert" });
 });
 
-test("a host that doesn't answer keeps the chips and reads less often (1, 2, 4 … 15 minutes)", async () => {
+test("a host that doesn't answer shows nothing new and reads less often (1, 2, 4 … 15 minutes)", async () => {
   const h = harness({ failHealth: true });
   h.registry.upsert(agent("a1"));
   await h.settle();
-  assert.deepEqual(h.registry.shown(), ["a1"], "assumed on until the host says otherwise");
+  assert.deepEqual(h.registry.shown(), [], "no verdict, no chip");
   const before = h.timers.at(-1)!.ms;
   await h.tick();
   const after = h.timers.at(-1)!.ms;
@@ -165,8 +241,17 @@ test("a host that doesn't answer keeps the chips and reads less often (1, 2, 4 �
   assert.equal(h.timers.at(-1)!.ms, 60_000, "back to once a minute after an answer");
 });
 
+test("a failed read keeps the chips the last read decided", async () => {
+  const h = harness({ health: report([{ name: "a", status: "down" }]) });
+  h.registry.upsert(agent("a1"));
+  await h.settle();
+  h.setFailHealth(true);
+  await h.tick();
+  assert.deepEqual(h.registry.shown(), ["a1"]);
+});
+
 test("stop removes every chip and the timer", async () => {
-  const h = harness();
+  const h = harness({ health: report([{ name: "a", status: "down" }]) });
   h.registry.upsert(agent("a1"));
   await h.settle();
   h.registry.stop();
@@ -176,44 +261,11 @@ test("stop removes every chip and the timer", async () => {
   assert.deepEqual(h.registry.shown(), [], "nothing after stop");
 });
 
-// ---------------------------------------------- 0.18.3: only live agents, and few reads
-
-test("which agents get a chip: not closed or archived ones, nor one without a workspace; only running ones are metered", () => {
-  assert.deepEqual(chipAgentFrom({ id: "a", workspaceId: "w", provider: "claude", status: "running" }), { id: "a", workspaceId: "w", provider: "claude", active: true });
-  assert.deepEqual(chipAgentFrom({ id: "a", workspaceId: "w", provider: "codex", status: "idle" }), { id: "a", workspaceId: "w", provider: "codex", active: false });
+test("which agents can get a chip: not closed or archived ones, nor one without a workspace; the folder comes along", () => {
+  assert.deepEqual(chipAgentFrom({ id: "a", workspaceId: "w", provider: "claude", status: "running", cwd: "/p" }), { id: "a", workspaceId: "w", provider: "claude", cwd: "/p" });
+  assert.deepEqual(chipAgentFrom({ id: "a", workspaceId: "w", provider: "codex", status: "idle" }), { id: "a", workspaceId: "w", provider: "codex", cwd: "" });
   assert.equal(chipAgentFrom({ id: "a", workspaceId: "w", provider: "claude", status: "closed" }), null);
   assert.equal(chipAgentFrom({ id: "a", workspaceId: "w", provider: "claude", status: "idle", archivedAt: "2026-10-04T00:00:00Z" }), null);
   assert.equal(chipAgentFrom({ id: "a", workspaceId: "", provider: "claude", status: "running" }), null);
   assert.equal(chipAgentFrom(undefined), null);
-});
-
-test("an idle agent's chip is labelled without its meter: one read per running agent, not per agent", async () => {
-  const h = harness({ health: report(["ok"]) });
-  h.registry.replaceAll([agent("run"), agent("idle-1", "claude", false), agent("idle-2", "codex", false)]);
-  await h.settle();
-  assert.deepEqual(h.registry.shown().sort(), ["idle-1", "idle-2", "run"]);
-  assert.equal(h.meterCalls(), 1, "only the running agent");
-  assert.deepEqual(h.faces.get("idle-1")!.at(-1), { label: "1 connector · healthy", icon: "Plug" });
-});
-
-test("a meter that fails (a workspace that's gone) isn't asked again for 10 minutes", async () => {
-  const h = harness({ failMeter: true });
-  h.registry.upsert(agent("a1"));
-  await h.settle();
-  assert.equal(h.meterCalls(), 1);
-  await h.tick();
-  await h.tick();
-  assert.equal(h.meterCalls(), 1, "not every minute");
-  h.advance(METER_RETRY_MS + 1);
-  h.setFailMeter(false);
-  await h.tick();
-  assert.equal(h.meterCalls(), 2, "asked again after the wait");
-});
-
-test("an agent that closes loses its chip", async () => {
-  const h = harness();
-  h.registry.replaceAll([agent("a1"), agent("a2")]);
-  await h.settle();
-  h.registry.remove("a2");
-  assert.deepEqual(h.registry.shown(), ["a1"]);
 });

@@ -28,7 +28,7 @@ paseo plugin update paseo-mcp
 - Shows each Paseo workspace's project-level `.mcp.json` servers in a **Workspace connectors (MCP)** tab, available in both the workspace view and the Projects/Explorer view.
 - Tells each workspace what an agent started there loads (project, local and user-level servers), what it costs in child processes and memory, and warns when the count is heavy enough to exhaust the agent's context.
 - Checks every server's health in the background and flags problems per agent, per project, and per user config.
-- Lists the tools each server exposes, the way Claude Code's `/mcp` view does, and keeps an always-on chip on every agent's composer with the server count and what their tool definitions cost that agent (`14 MCP · ~38k tokens`), or its status when something is wrong.
+- Lists the tools each server exposes, the way Claude Code's `/mcp` view does, and shows what their tool definitions cost each agent in its Connectors panel. A chip appears on a chat's composer only when one of its connectors is failing or needs sign-in (`1 connector failing`, `2 connectors need sign-in`); a calm chat has none.
 - Shows, per agent, which servers the chat actually used and which it loaded without using, and turns the unused ones off for the workspace in one confirmed step. `/mcp` in a composer opens that panel.
 - Puts a small "needs sign-in" card in the chat when a tool call fails for lack of a sign-in, with a Connect button.
 - Shows and switches Paseo's own built-in tools (the `mcp__paseo__*` tools the daemon adds to agents): for the whole host, per provider, and per tool.
@@ -397,7 +397,7 @@ fresh probe and wait for it. Configure it under **Settings → Plugins → Paseo
 | --- | --- | --- |
 | Check servers in the background | on | Probe on a timer, not only when Refresh is pressed |
 | Interval | 10 minutes | Time between background checks (1 to 1440 minutes) |
-| Composer chip | on | Show an always-on MCP chip on each agent's composer |
+| Composer chip | on | Show a Connectors chip on a chat when one of its connectors is failing or needs sign-in |
 | Chat notices: sign-in problems | on | Add one card to a chat when an MCP tool call there fails for lack of a sign-in (see [In-chat sign-in card](#in-chat-sign-in-card)) |
 
 Settings live on the host at `$PASEO_HOME/plugin-settings/paseo-mcp/health.json`; an unreadable or

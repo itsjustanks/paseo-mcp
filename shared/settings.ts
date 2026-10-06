@@ -70,13 +70,13 @@ export const healthSettings = defineSettings({
       .max(1440)
       .default(10)
       .describe("Minutes between background checks"),
-    // Since 0.6.0 the pill is an always-on chip: server count and status, with
-    // the text shifting to the problem when there is one. The key kept its
+    // 0.6.0–0.19.0 the pill was an always-on chip; since 0.19.1 it shows only
+    // on a chat that needs attention (shared/attention.ts). The key kept its
     // name so a 0.4 settings file still applies.
     showComposerPill: z
       .boolean()
       .default(true)
-      .describe("Show a Connectors chip on each agent's composer with the connector count and status"),
+      .describe("Show a Connectors chip on a chat when one of its connectors is failing or needs sign-in"),
     // 0.14.0, added with a default so version 1 documents still read as valid.
     chatSignInNotices: z
       .boolean()

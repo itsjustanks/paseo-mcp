@@ -13,3 +13,18 @@ export function addServerParams(at: number = Date.now()): Record<string, string>
 export function addServerRequest(params: Record<string, string> | undefined | null): string | null {
   return params?.[ADD_SERVER_PARAM] === "server" ? (params.at ?? "1") : null;
 }
+
+/**
+ * 0.19.1: `check=now` opens the screen and checks every connector again, from
+ * the "Check connectors" command. `at` makes each press new, like Add.
+ */
+export const CHECK_PARAM = "check";
+
+export function checkNowParams(at: number = Date.now()): Record<string, string> {
+  return { [CHECK_PARAM]: "now", at: String(at) };
+}
+
+/** The press to act on when the screen was opened to check now, else null. */
+export function checkNowRequest(params: Record<string, string> | undefined | null): string | null {
+  return params?.[CHECK_PARAM] === "now" ? (params.at ?? "1") : null;
+}

@@ -1,13 +1,15 @@
 import type { PluginHandlerContext } from "@getpaseo/plugin/server";
 import { existsSync } from "node:fs";
-import { join } from "node:path";
-import { healthIsSignIn, healthNeedsAttention, type McpHealth, type McpHealthReport, type McpHealthScope } from "../shared/contracts";
+import { dirname, join } from "node:path";
+import type { SignInNeed } from "../shared/attention";
+import { healthIsSignIn, healthNeedsAttention, type McpAuthAccount, type McpHealth, type McpHealthReport, type McpHealthScope } from "../shared/contracts";
 import { HEALTH_DEFAULTS, healthSettings, type HealthSettings } from "../shared/settings";
 import { mapLimit } from "../shared/tools";
 import { backgroundPass } from "./background";
 import {
   binaryOnPath,
   buildDestinations,
+  collectAccounts,
   destRead,
   discoverProjects,
   findDef,
@@ -57,9 +59,10 @@ export async function probeAll(
   };
   for (const dest of destinations) {
     for (const name of Object.keys(defsByDest.get(dest.id) ?? {})) {
-      addScope(name, { level: "user", label: dest.label, configPath: dest.configPath });
+      addScope(name, { level: "user", label: dest.label, configPath: dest.configPath, providerId: dest.providerId });
     }
   }
+  rememberProviders(destinations);
   // Project definitions only fill in when no editor defines the name: the
   // user-level copy is what the editor actually runs.
   const projectDefs = new Map<string, McpDef>();
@@ -103,6 +106,59 @@ let inFlight: Promise<McpHealthReport> | null = null;
 let lastPaseo: PluginHandlerContext["paseo"] | null = null;
 let restored = false;
 let readPassFailedAt = 0;
+
+// ------------------------------------------------------------------ sign-in
+
+/**
+ * 0.19.1: which Paseo provider ids read each editor config, from the last
+ * pass's destinations (so the sign-in read below makes no daemon call). Null
+ * until this run's first pass: then a primary account maps to its own name.
+ */
+let providersByConfig: Map<string, string[]> | null = null;
+let signInMemo: { at: number; value: SignInNeed[] } | null = null;
+const SIGN_IN_MEMO_MS = 15_000;
+
+function rememberProviders(destinations: ReadonlyArray<{ configPath: string; providerId: string }>): void {
+  const map = new Map<string, string[]>();
+  for (const dest of destinations) {
+    if (!dest.providerId) continue;
+    map.set(dest.configPath, [...(map.get(dest.configPath) ?? []), dest.providerId]);
+  }
+  providersByConfig = map;
+  signInMemo = null;
+}
+
+function accountConfigPath(account: McpAuthAccount): string {
+  if (account.provider === "codex") return join(account.dir, "config.toml");
+  // The primary Claude account keeps its config beside its directory: ~/.claude.json next to ~/.claude.
+  return account.isPrimary ? join(dirname(account.dir), ".claude.json") : join(account.dir, ".claude.json");
+}
+
+/** Connectors an account still has to sign in to, from each editor's own files (never by asking Codex), for the composer chip. */
+export function signInNeeds(accounts: readonly McpAuthAccount[] = collectAccounts({ askCodex: false })): SignInNeed[] {
+  const needs = new Map<string, Set<string>>();
+  for (const account of accounts) {
+    const providerIds = providersByConfig ? (providersByConfig.get(accountConfigPath(account)) ?? []) : account.isPrimary ? [account.provider] : [];
+    const names = new Set([...account.needsAuth, ...Object.entries(account.authStatus).filter(([, state]) => state === "not-connected").map(([name]) => name)]);
+    for (const name of names) {
+      const set = needs.get(name) ?? new Set<string>();
+      for (const id of providerIds) set.add(id);
+      needs.set(name, set);
+    }
+  }
+  return [...needs.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([name, ids]) => ({ name, providerIds: [...ids].sort() }));
+}
+
+function signInNeedsMemo(): SignInNeed[] | undefined {
+  const now = Date.now();
+  if (signInMemo && now - signInMemo.at < SIGN_IN_MEMO_MS) return signInMemo.value;
+  try {
+    signInMemo = { at: now, value: signInNeeds() };
+    return signInMemo.value;
+  } catch {
+    return signInMemo?.value;
+  }
+}
 
 /** The verdict the last run saved, "as of" its time, until this run has its own. */
 function restoreSaved(): void {
@@ -213,5 +269,6 @@ export async function handleMcpHealthCached(_input: Record<string, never>, { pas
     showComposerPill: settings.showComposerPill,
     nextCheckAt: settings.backgroundChecks ? pass.nextRunAt() : null,
     checking: inFlight !== null,
+    signIn: signInNeedsMemo(),
   };
 }
