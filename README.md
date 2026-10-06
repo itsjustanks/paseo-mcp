@@ -25,11 +25,11 @@ paseo plugin update paseo-mcp
 - Adds, edits, renames, imports, and exports definitions with masked secrets; removes a server from one editor, all editors, or everywhere including project `.mcp.json` files.
 - Turns servers on or off per workspace from the workspace and agent panels, where the editor has such a switch.
 - Starts Claude or Codex OAuth in the computer's default browser and shows the fallback URL.
-- Shows each Paseo workspace's project-level `.mcp.json` servers in a **Workspace connectors (MCP)** tab, available in both the workspace view and the Projects/Explorer view.
+- Shows each Paseo workspace's project-level `.mcp.json` servers in a **Connectors** tab, available in both the workspace view and the Projects/Explorer view.
 - Tells each workspace what an agent started there loads (project, local and user-level servers), what it costs in child processes and memory, and warns when the count is heavy enough to exhaust the agent's context.
 - Checks every server's health in the background and flags problems per agent, per project, and per user config.
-- Lists the tools each server exposes, the way Claude Code's `/mcp` view does, and shows what their tool definitions cost each agent in its Connectors panel. A chip appears on a chat's composer only when one of its connectors is failing or needs sign-in (`1 connector failing`, `2 connectors need sign-in`); a calm chat has none.
-- Shows, per agent, which servers the chat actually used and which it loaded without using, and turns the unused ones off for the workspace in one confirmed step. `/mcp` in a composer opens that panel.
+- Lists the tools each server exposes, the way Claude Code's `/mcp` view does. A chip appears on a chat's composer only when a connector that chat loads is broken or needs sign-in (`2 broken`, `1 needs sign-in`), and only on a running chat or one active in the last hour; a calm chat has none. Everything else that needs you shows as the sidebar row's dot, which opens a quick popover.
+- Shows, per agent, which servers the chat actually used and which it loaded without using, and turns the unused ones off for the workspace in one confirmed step. `/connectors` in a composer opens that panel.
 - Puts a small "needs sign-in" card in the chat when a tool call fails for lack of a sign-in, with a Connect button.
 - Shows and switches Paseo's own built-in tools (the `mcp__paseo__*` tools the daemon adds to agents): for the whole host, per provider, and per tool.
 - Copies every server to every AI app and account that doesn't have it (**Copy to all my AI apps**, which replaces Sync accounts), after a preview, never removing or overwriting anything and never copying a sign-in. Only what can be copied exactly goes; a server another app wouldn't read the same way is left for you to copy by hand, with the reason.
@@ -300,7 +300,7 @@ label, when the labels don't fit), and on every tab its title, one or two plain 
 can do here" (behind **Learn more** on a phone). The words are in `shared/guide.ts`, tested for plain
 English. On Paseo 0.11 the page is a full screen with the app's own sidebar row; on 0.10 and later links
 open in the system browser. Older apps keep the surface and sidebar item they had, decided at runtime
-(`shared/host-features.ts`), so `requirements.paseo` stays `>=0.8.0`.
+(`shared/host-features.ts`). `requirements.paseo` is `>=0.9.0` since 0.19.2: Paseo accepts the manifest's `description` only from 0.9.0.
 
 **Overview** is calm (0.18.0, AI Router 0.15.0's rules): a status card with the state in words
 ("Fix the server that isn't working", "All set: your servers are working"), three rows (health, AI
@@ -363,7 +363,7 @@ The result is reported per target, so a partial failure is visible.
 
 ## Per-workspace switches
 
-The **Workspace connectors** panel and each agent's **Connectors** panel list the servers an agent there
+The workspace's **Connectors** panel and each agent's **Connectors** panel list the servers an agent there
 loads, each tagged with its origin (user-level, this project's `.mcp.json`, local) and with a switch
 where the editor has one. A switch takes effect when a new agent session starts; a running agent keeps
 the servers it started with. State is read from the config on every refresh, so a `/mcp disable` done in
@@ -454,20 +454,18 @@ before it is cached, shown, or logged. Missing sign-ins are reported per account
 
 ### Composer chip
 
-Every live agent's composer carries one **MCP** chip, always on. It reads the number of servers
-that agent loads and the one thing worth knowing about them, in this order: `14 MCP · 2 issues`
-while a server is down, missing its binary, or answering with an error; `14 MCP · 3 need sign-in`
-while OAuth servers are waiting on a grant; otherwise what their tool definitions cost that agent,
-`14 MCP · ~38k tokens`, or `14 MCP · deferred` when its provider's tool search is on (see
-[Context meter](#context-meter)). Until the estimate is in, or on a host older than 0.14.0, the chip
-reads as it did before (`12 MCP · 340 tools`). Press it, or type `/mcp` in the composer, to open that
-agent's **MCP** panel: the servers it loads with their switches, sign-in, tools and context cost,
-plus a **Manage all servers** button to the full surface. Turn the chip off with the **Composer chip**
-setting.
+A chat's composer gets a **Connectors** chip only when a connector that chat loads needs you
+(0.19.1; trimmed in 0.19.2): `2 broken` or `1 needs sign-in`, short enough not to be cut off. A
+connector switched off for the chat's project (or everywhere), a tool that comes with the Codex app,
+or a sign-in for a connector no settings file lists doesn't count, and only a running chat or one
+active in the last hour gets a chip. Press it, or type `/connectors` in the composer, to open that
+chat's **Connectors** panel: what needs a look (broken first), the connectors it loads with their
+switches, and folded below them what it hasn't used, the project's own connectors and the technical
+details. Paseo shows the chat's context use itself, so the panel doesn't estimate it. Turn the chip
+off with the **Composer chip** setting.
 
-Paseo ranks its own slash commands first, then plugins', then the provider's, so in Paseo's composer
-`/mcp` opens this panel and hides the provider's own `/mcp`, which only works interactively in the
-CLIs anyway. A message with an attachment still reaches the provider.
+Since 0.19.2 the plugin no longer registers `/mcp` (Paseo can't hide a slash command, and two entries
+for one panel were noise), so the provider's own `/mcp` is untouched. Use `/connectors`.
 
 The chip never makes a network call or starts a process: its estimate uses cached tool counts only.
 

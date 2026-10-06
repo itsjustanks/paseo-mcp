@@ -1,8 +1,9 @@
 import type { PluginHandlerContext } from "@getpaseo/plugin/server";
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
-import type { SignInNeed } from "../shared/attention";
-import { healthIsSignIn, healthNeedsAttention, type McpAuthAccount, type McpHealth, type McpHealthReport, type McpHealthScope } from "../shared/contracts";
+import { claudeOffIn, tomlSwitchedOff, type SignInNeed } from "../shared/attention";
+import { BUILT_IN_LABEL, isCodexBuiltIn } from "../shared/builtin";
+import { healthIsSignIn, healthNeedsAttention, resultNeedsAttention, type McpAuthAccount, type McpHealth, type McpHealthReport, type McpHealthScope } from "../shared/contracts";
 import { HEALTH_DEFAULTS, healthSettings, type HealthSettings } from "../shared/settings";
 import { mapLimit } from "../shared/tools";
 import { backgroundPass } from "./background";
@@ -17,6 +18,7 @@ import {
   probeHttp,
   type McpDef,
 } from "./handlers";
+import { readJsonCached } from "./files";
 import { onShutdown, onStart } from "./lifecycle";
 import { resolveSearchPath, settledSearchPath } from "./path";
 import { definitionKey, loadSavedReports, restoredHealth, saveHealthReport } from "./report-cache";
@@ -58,8 +60,19 @@ export async function probeAll(
     scopes.set(name, list);
   };
   for (const dest of destinations) {
-    for (const name of Object.keys(defsByDest.get(dest.id) ?? {})) {
-      addScope(name, { level: "user", label: dest.label, configPath: dest.configPath, providerId: dest.providerId });
+    const defs = defsByDest.get(dest.id) ?? {};
+    // 0.19.2: what this config switches off, so a chat's chip counts only what that chat loads.
+    const projects = dest.format === "json-mcp" ? (readJsonCached(dest.configPath) as { projects?: unknown } | null)?.projects : undefined;
+    for (const [name, def] of Object.entries(defs)) {
+      const offIn = claudeOffIn(projects, name);
+      addScope(name, {
+        level: "user",
+        label: dest.label,
+        configPath: dest.configPath,
+        providerId: dest.providerId,
+        ...(tomlSwitchedOff(def) ? { off: true } : {}),
+        ...(offIn.length > 0 ? { offIn } : {}),
+      });
     }
   }
   rememberProviders(destinations);
@@ -82,6 +95,9 @@ export async function probeAll(
       const where = scopes.get(name) ?? [];
       const def = findDef(destinations, name, defsByDest) ?? projectDefs.get(name) ?? null;
       options.keys?.set(name, definitionKey(def));
+      // 0.19.2: a tool the Codex app ships runs inside the app; checking its program from here only ever says "not installed".
+      const holders = [...destinations.filter((dest) => defsByDest.get(dest.id)?.[name]).map((dest) => dest.provider), ...(projectDefs.has(name) ? ["project"] : [])];
+      if (isCodexBuiltIn(name, def, holders)) return { name, status: "unknown", note: BUILT_IN_LABEL, scopes: where, builtIn: true };
       if (!def) return { name, status: "unknown", note: "no readable definition", scopes: where };
       if (def.command) {
         return binaryOnPath(def.command)
@@ -227,7 +243,7 @@ const pass = backgroundPass({
   },
   run: async () => {
     const report = await refreshHealth(null);
-    const issues = report.results.filter((entry) => healthNeedsAttention(entry.status)).length;
+    const issues = report.results.filter((entry) => resultNeedsAttention(entry)).length;
     const signIn = report.results.filter((entry) => healthIsSignIn(entry.status)).length;
     console.log(`${TAG} health check: ${report.results.length} servers, ${issues} need attention, ${signIn} OAuth`);
   },

@@ -18,11 +18,12 @@
  * Reported, with a first fix, by @hteo1337 in itsjustanks/paseo-mcp#1. On the
  * old shape the component draws the face it gets from `publish`.
  */
-import { attentionFace, chatAttention, hostNeedsAttention, type SignInNeed } from "./attention";
+import { attentionFace, chatAttention, chatIsLive, hostAttentionNames, hostNeedsAttention, type ChatAttention, type SignInNeed } from "./attention";
 import type { McpHealthReport } from "./contracts";
 import { backoffMs } from "./schedule";
 
-export type ChipAgent = { id: string; workspaceId: string; provider: string; cwd: string };
+/** `status` and `lastActivityAt` (0.19.2) decide whether the chat is live enough for a chip; absent on older apps. */
+export type ChipAgent = { id: string; workspaceId: string; provider: string; cwd: string; status?: string; lastActivityAt?: string | null };
 
 /**
  * The agent a chip is for, from what the app reports, or null for none: a
@@ -30,15 +31,31 @@ export type ChipAgent = { id: string; workspaceId: string; provider: string; cwd
  * own observation lists every agent the daemon has (83 on one host, closed
  * ones and ones whose workspace is gone among them), so this filter matters.
  */
-export function chipAgentFrom(raw: { id?: string; workspaceId?: string | null; provider?: string | null; status?: string; archivedAt?: string | null; cwd?: string | null } | undefined): ChipAgent | null {
+export function chipAgentFrom(
+  raw: { id?: string; workspaceId?: string | null; provider?: string | null; status?: string; archivedAt?: string | null; cwd?: string | null; lastActivityAt?: string | null; updatedAt?: string | null } | undefined,
+): ChipAgent | null {
   if (!raw?.id || !raw.workspaceId || raw.status === "closed" || raw.archivedAt) return null;
-  return { id: raw.id, workspaceId: raw.workspaceId, provider: raw.provider ?? "", cwd: raw.cwd ?? "" };
+  // Paseo 0.11's agent list sends `updatedAt` (checked on the wire, 2026-10-06); `lastActivityAt` is the SDK's name for it.
+  const lastActivityAt = raw.lastActivityAt ?? raw.updatedAt ?? null;
+  return {
+    id: raw.id,
+    workspaceId: raw.workspaceId,
+    provider: raw.provider ?? "",
+    cwd: raw.cwd ?? "",
+    ...(raw.status ? { status: raw.status } : {}),
+    ...(lastActivityAt ? { lastActivityAt } : {}),
+  };
 }
 export type ChipFace = { label: string; icon: string };
 export type ChipHandle = { update(face: ChipFace): void; remove(): void };
 
 /** What the registry last decided, for the sidebar row's dot and the old chip component. */
-export type AttentionState = { host: "failing" | "sign-in" | null; faces: ReadonlyMap<string, ChipFace> };
+export type AttentionState = {
+  host: "failing" | "sign-in" | null;
+  faces: ReadonlyMap<string, ChipFace>;
+  /** 0.19.2: the connectors behind the dot, for its popover. */
+  names?: ChatAttention;
+};
 
 export type ChipDeps = {
   /** Put one chip on an agent's composer; returns how to change and remove it. */
@@ -52,6 +69,8 @@ export type ChipDeps = {
   /** One read a minute while there is an agent; slower after failures, up to `maxPollMs`. */
   pollMs: number;
   maxPollMs: number;
+  /** The clock, for which chats are live (0.19.2); `Date.now` when absent. */
+  now?(): number;
 };
 
 export function createChipRegistry(deps: ChipDeps) {
@@ -67,6 +86,8 @@ export function createChipRegistry(deps: ChipDeps) {
 
   const faceFor = (agent: ChipAgent): ChipFace | null => {
     if (!read?.wanted) return null;
+    // 0.19.2: an old finished chat gets no chip; it gets one again when it runs.
+    if (!chatIsLive(agent, (deps.now ?? Date.now)())) return null;
     return attentionFace(chatAttention(read.report, read.signIn, agent));
   };
 
@@ -104,6 +125,7 @@ export function createChipRegistry(deps: ChipDeps) {
     for (const id of [...chips.keys()]) if (!agents.has(id)) drop(id);
     deps.publish?.({
       host: read ? hostNeedsAttention(read.report, read.signIn) : null,
+      names: read ? hostAttentionNames(read.report, read.signIn) : { failing: [], signIn: [] },
       faces: new Map([...chips.entries()].map(([id, chip]) => [id, chip.face])),
     });
   };

@@ -23,7 +23,7 @@ export const TABS_META = {
   overview: { label: "Overview", icon: "LayoutDashboard" },
   servers: { label: "Connectors", icon: "Plug" },
   projects: { label: "Projects", icon: "FolderCode" },
-  guide: { label: "Help", icon: "LifeBuoy" },
+  guide: { label: "Help", icon: "CircleHelp" },
   // Not in the tab bar since 0.19.0: adding with a link, pasting setup instructions and backups
   // open from Add connector and Help, and the Connectors tab stays lit while they're open.
   transfer: { label: "Add with a link", icon: "Link" },
@@ -100,6 +100,9 @@ export type HelpQuestion = {
   answer: readonly string[];
   action?: { label: string; target: HelpTarget };
 };
+
+/** Help's last question, which holds the whole guide (0.19.2: Help is folded questions only). */
+export const HOW_IT_WORKS_QUESTION = `How do ${MCP_NAME_LOWER} work?`;
 
 /** The Help tab: plain questions, each folded until opened. */
 export const HELP_QUESTIONS: readonly HelpQuestion[] = [

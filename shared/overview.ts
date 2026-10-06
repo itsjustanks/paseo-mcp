@@ -22,6 +22,12 @@ export type OverviewFacts = {
   signIn: number;
   /** Servers missing from at least one editor. */
   gaps: number;
+  /**
+   * 0.19.2: the health check or the sign-in read isn't in yet. The verdict
+   * says "Checking…" instead of an "All working" that turns into "4 not
+   * working" a moment later.
+   */
+  checking?: boolean;
 };
 
 export type OverviewTone = "ok" | "attention" | "error" | "neutral";
@@ -56,8 +62,10 @@ function firstProblem(facts: OverviewFacts): Problem | null {
 export function overviewVerdict(facts: OverviewFacts): { status: OverviewTone; label: string } {
   if (facts.state === "error") return { status: "error", label: "Can't reach Paseo" };
   if (facts.staleAt) return { status: "attention", label: `As of ${facts.staleAt}` };
-  if (facts.state === "loading") return { status: "neutral", label: "Connecting" };
+  if (facts.state === "loading") return { status: "neutral", label: "Checking…" };
   if (facts.servers === 0) return { status: "neutral", label: "No connectors yet" };
+  // A problem already known shows at once; "all working" waits for every read.
+  if (facts.checking && firstProblem(facts) === null) return { status: "neutral", label: "Checking…" };
   switch (firstProblem(facts)) {
     case "broken":
       return { status: "error", label: `${facts.broken} not working` };
@@ -82,6 +90,9 @@ export function overviewNextStep(facts: OverviewFacts): OverviewStep {
   }
   if (facts.servers === 0) {
     return { title: "Add your first connector", detail: "Pick an app from the gallery, like GitHub or Notion. It's added to every AI app you choose.", label: "Add a connector", target: { section: "add" } };
+  }
+  if (facts.checking && firstProblem(facts) === null) {
+    return { title: "Checking your connectors…", detail: "Asking each one if it answers, and reading your sign-ins. This takes a moment.", label: "See your connectors", target: { section: "servers", filter: "all" } };
   }
   switch (firstProblem(facts)) {
     case "broken":

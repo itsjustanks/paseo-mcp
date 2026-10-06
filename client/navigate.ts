@@ -29,3 +29,22 @@ export function takePendingServer(): string | null {
   pendingServer = null;
   return server;
 }
+
+/**
+ * 0.19.2: on Paseo 0.11 the page keeps its tab in the screen's params, so the
+ * window title follows it ("Connectors · Help"). The entry registers how; an
+ * older app has none and the title stays "Connectors".
+ */
+let tabSync: ((tab: "overview" | "servers" | "projects" | "guide") => void) | null = null;
+
+export function registerTabSync(sync: typeof tabSync): void {
+  tabSync = sync;
+}
+
+export function syncTab(tab: "overview" | "servers" | "projects" | "guide"): void {
+  tabSync?.(tab);
+}
+
+export function canSyncTab(): boolean {
+  return tabSync !== null;
+}

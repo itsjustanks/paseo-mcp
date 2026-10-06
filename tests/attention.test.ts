@@ -7,11 +7,11 @@ import { signInNeeds } from "../server/health";
 
 test("the chip's words: singular and plural, failing first, nothing when calm", () => {
   assert.equal(attentionLabel({ failing: [], signIn: [] }), null);
-  assert.equal(attentionLabel({ failing: ["a"], signIn: [] }), "1 connector failing");
-  assert.equal(attentionLabel({ failing: ["a", "b"], signIn: [] }), "2 connectors failing");
-  assert.equal(attentionLabel({ failing: [], signIn: ["a"] }), "1 connector needs sign-in");
-  assert.equal(attentionLabel({ failing: [], signIn: ["a", "b"] }), "2 connectors need sign-in");
-  assert.equal(attentionLabel({ failing: ["a"], signIn: ["b", "c"] }), "1 connector failing, 2 need sign-in");
+  assert.equal(attentionLabel({ failing: ["a"], signIn: [] }), "1 broken");
+  assert.equal(attentionLabel({ failing: ["a", "b"], signIn: [] }), "2 broken");
+  assert.equal(attentionLabel({ failing: [], signIn: ["a"] }), "1 needs sign-in");
+  assert.equal(attentionLabel({ failing: [], signIn: ["a", "b"] }), "2 need sign-in");
+  assert.equal(attentionLabel({ failing: ["a"], signIn: ["b", "c"] }), "1 broken", "broken leads; the panel lists the sign-ins");
 });
 
 test("the sidebar dot: failing wins; a sign-in no Paseo provider uses doesn't count", () => {

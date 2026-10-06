@@ -1,4 +1,4 @@
-/** What an agent in this workspace loads, what it costs, and what is running for it now. */
+/** What an agent in this workspace loads, where from, and what is running for it now (the panels' Technical details). */
 import React from "react";
 import { Text, View } from "react-native";
 import { z } from "zod";
@@ -16,21 +16,15 @@ import {
   type WorkspaceLoad,
 } from "../shared/budget";
 import type { mcpWorkspace } from "../shared/contracts";
-import { MCP_NAME } from "../shared/guide";
 import { PASEO_TOOLS_LABEL } from "../shared/paseo-tools";
 import { toolSearchLine, toolSearchOnLine } from "../shared/tool-search";
 import { formatMemory } from "../shared/processes";
-import { canOpenMcp, openMcp } from "./navigate";
-import { Button, Card, Disclosure, Facts, Notice, Tag, useTokens, type Status } from "./ui";
+import { Facts, useTokens } from "./ui";
 
 type WorkspaceData = z.output<typeof mcpWorkspace.output>;
 
 function plural(count: number, word: string): string {
   return `${count} ${word}${count === 1 ? "" : "s"}`;
-}
-
-function tierStatus(tier: "ok" | "attention" | "problem"): Status {
-  return tier === "problem" ? "error" : tier === "attention" ? "attention" : "ok";
 }
 
 /**
@@ -52,58 +46,6 @@ export function pickLoad(data: WorkspaceData, providerId?: string, added?: reado
     }
   }
   return loadsForWorkspace(data.profile, injection, paseo, search)[0] ?? null;
-}
-
-// -------------------------------------------------------------- context budget
-
-function ContextBudget({ load, providerId }: { load: WorkspaceLoad; providerId?: string }) {
-  const t = useTokens();
-  const cost = costProfile(load);
-  const userNames = userLevelNames(load);
-  const who = providerId ? "This agent" : load.label ? `A ${load.label.split(" · ")[0]} agent here` : "An agent here";
-  if (cost.tier === "ok") return null;
-  const severe = cost.tier === "problem";
-  const loads = `${who} loads ${plural(cost.total, "connector")}`;
-  // Tool search on: definitions are deferred, so only the server count raised the tier.
-  const heading = cost.deferred
-    ? `${loads} — tool definitions wait until needed, but each connector still starts with every session`
-    : severe
-      ? `${loads}${cost.builtIn ? ` and about ${cost.tools} tools` : ""} — enough to exhaust its context before it starts`
-      : `${loads}${cost.builtIn ? ` and about ${cost.tools} tools` : ""} — a real share of its context goes to tool definitions`;
-  const why = cost.deferred && load.toolSearch
-    ? `${toolSearchOnLine(load.toolSearch)} The count still matters: each connector on this computer starts a program for every agent session, and each connector is a connection, so past ${BUDGET_ATTENTION} connectors the cost shows and past ${BUDGET_PROBLEM} it is heavy.`
-    : load.toolSearch
-      ? `${toolSearchLine(load.toolSearch, cost.tools)} Cursor stops at 40 tools. Past ${BUDGET_ATTENTION} connectors the cost shows, past ${BUDGET_PROBLEM} agents can fail with "Prompt is too long" before their first tool call.`
-      : `Every connector's tool definitions are sent with the first prompt. Claude Code defers them past 10% of the window; Cursor stops at 40 tools. Past ${BUDGET_ATTENTION} connectors the cost shows, past ${BUDGET_PROBLEM} agents can fail with "Prompt is too long" before their first tool call.`;
-  return (
-    <Notice tone={severe ? "error" : "attention"}>
-      <View style={{ gap: t.space.sm }}>
-        <Text style={t.text.bodyStrong}>{heading}</Text>
-        <Text style={t.text.body}>{why}</Text>
-        {cost.builtIn && !cost.deferred ? (
-          <Text style={t.text.body}>
-            {`${cost.paseoTools} of those tools are Paseo's own (counted exactly; other connectors at five each). ${cost.paseoTools >= BUDGET_TOOLS_ATTENTION ? `That alone reaches the ${BUDGET_TOOLS_ATTENTION}-tool line. ` : ""}Groups agents here do not use can be turned off under Connectors → Paseo tools (browser is the largest); that applies to every workspace.`}
-          </Text>
-        ) : null}
-        {userNames.length > 0 ? (
-          <>
-            <Text style={t.text.body}>
-              {plural(userNames.length, "connector")} come from your AI apps' own settings and load in every workspace. Move
-              the ones only this project needs into its .mcp.json, or remove them from the AI app's settings.
-            </Text>
-            <View style={{ flexDirection: "row", flexWrap: "wrap", gap: t.space.xs }}>
-              {userNames.map((name) => <Tag key={name} label={name} />)}
-            </View>
-          </>
-        ) : null}
-        {canOpenMcp() ? (
-          <View style={{ flexDirection: "row" }}>
-            <Button label={`Open ${MCP_NAME}`} onPress={() => openMcp()} />
-          </View>
-        ) : null}
-      </View>
-    </Notice>
-  );
 }
 
 // ------------------------------------------------------------------ running
@@ -143,73 +85,48 @@ function RunningNow({ processes }: { processes: NonNullable<WorkspaceData["proce
   );
 }
 
-// ------------------------------------------------------------------- summary
+// ------------------------------------------------------------ technical details
 
 /**
- * The card the workspace and agent panels lead with: how many servers an
- * agent here loads and from where, what they cost, and which ones are running.
- * `attention` is how many of those servers the health check flags.
+ * The panels' "Technical details" (0.19.2): where the connectors an agent here
+ * loads come from, how many run on this computer, the tool-search note, the
+ * program count advice, and what is running now. The same facts the old
+ * summary card and warning showed, as plain lines inside one fold-out: no
+ * card, no warning box and no fold-out inside it.
  */
-export function WorkspaceContext({
-  data,
-  providerId,
-  attention,
-  added,
-}: {
-  data: WorkspaceData;
-  providerId?: string;
-  attention: { here: number; elsewhere: number } | null;
-  /** Servers other plugins added to this agent (agent panel only). */
-  added?: readonly AddedServer[];
-}) {
+export function LoadDetails({ data, providerId, added }: { data: WorkspaceData; providerId?: string; added?: readonly AddedServer[] }) {
   const t = useTokens();
   const load = pickLoad(data, providerId, added);
   if (!load) return null;
   const cost = costProfile(load);
-  const scope = cost.local > 0 ? ` · ${cost.local} local` : "";
-  const who = providerId ? "this agent" : load.label ? `a ${load.label.split(" · ")[0]} agent here` : "an agent here";
+  const userNames = userLevelNames(load);
+  const local = cost.local > 0 ? ` · ${cost.local} only in this folder` : "";
   return (
-    <View style={{ gap: t.space.row }}>
-      <Card tone={cost.total > 0 ? tierStatus(cost.tier) : undefined}>
-        <View style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: t.space.sm }}>
-          <Text style={t.text.heading}>
-            {plural(cost.total, "connector")} for {who}
-          </Text>
-          {cost.total > 0 ? <Tag label={cost.tier === "ok" ? "within budget" : cost.tier === "attention" ? "getting heavy" : "over budget"} tone={tierStatus(cost.tier)} /> : null}
-        </View>
-        <Facts
-          items={[
-            { value: `${cost.project} from this project's .mcp.json${scope}` },
-            { value: `${cost.user} from your AI apps' own settings` },
-            cost.builtIn ? { value: `${PASEO_TOOLS_LABEL}: ${cost.paseoTools} tools` } : null,
-            cost.added ? { value: `${cost.added} added when created` } : null,
-            attention
-              ? attention.here > 0
-                ? { value: `${attention.here} need attention here`, tone: "attention" }
-                : { value: "none need attention here", tone: "ok" }
-              : null,
-            attention && attention.elsewhere > 0 ? { value: `${attention.elsewhere} elsewhere` } : null,
-          ]}
-        />
-        <Facts
-          items={[
-            { value: `${cost.stdio} on this computer — a program starts for each agent session` },
-            { value: `${cost.http} on the web — nothing runs here` },
-            cost.unknown ? { value: `${cost.unknown} unreadable` } : null,
-          ]}
-        />
-        {!load.projectIncluded && load.projectNote ? <Text style={t.text.caption}>{load.projectNote}.</Text> : null}
-        {/* The warning below says it when it shows; otherwise one line here. Never both (say it once). */}
-        {load.toolSearch && cost.tier === "ok" && cost.total > 0 ? (
-          <Text style={t.text.caption}>{toolSearchLine(load.toolSearch, cost.tools)}</Text>
-        ) : null}
-        {data.processes ? (
-          <Disclosure title="Running now" open={data.processes.available && data.processes.observed.agents > 0}>
-            <RunningNow processes={data.processes} />
-          </Disclosure>
-        ) : null}
-      </Card>
-      <ContextBudget load={load} providerId={providerId} />
+    <View style={{ gap: t.space.sm }}>
+      <Facts
+        items={[
+          { value: `${plural(cost.total, "connector")}${load.label ? ` for ${load.label}` : ""}` },
+          { value: `${cost.project} from this project's .mcp.json${local}` },
+          { value: `${cost.user} from your AI apps' own settings` },
+          cost.builtIn ? { value: `${PASEO_TOOLS_LABEL}: ${cost.paseoTools} tools` } : null,
+          cost.added ? { value: `${cost.added} added when the chat started` } : null,
+        ]}
+      />
+      <Facts
+        items={[
+          { value: `${cost.stdio} stdio (a program starts on this computer for each chat)` },
+          { value: `${cost.http} http (on the web)` },
+          cost.unknown ? { value: `${cost.unknown} unreadable` } : null,
+        ]}
+      />
+      {!load.projectIncluded && load.projectNote ? <Text style={t.text.caption}>{load.projectNote}.</Text> : null}
+      {load.toolSearch ? <Text style={t.text.caption}>{cost.deferred ? toolSearchOnLine(load.toolSearch) : toolSearchLine(load.toolSearch, cost.tools)}</Text> : null}
+      {cost.tier !== "ok" ? (
+        <Text style={t.text.caption}>
+          {`Past ${BUDGET_ATTENTION} connectors each chat starts more programs and connections than it needs; past ${BUDGET_PROBLEM} it is heavy.${cost.builtIn && cost.paseoTools >= BUDGET_TOOLS_ATTENTION ? ` Paseo's own tools alone are ${cost.paseoTools}; unused groups can be turned off under Connectors → Built-in tools.` : ""}${userNames.length > 0 ? ` ${plural(userNames.length, "connector")} from your AI apps' own settings load in every project (${userNames.join(", ")}); move the ones only this project needs into its .mcp.json.` : ""}`}
+        </Text>
+      ) : null}
+      {data.processes ? <RunningNow processes={data.processes} /> : null}
     </View>
   );
 }

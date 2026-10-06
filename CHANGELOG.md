@@ -1,5 +1,41 @@
 # Changelog
 
+## 0.19.2 — 2026-10-06
+
+Fixes from a real-app UX audit (the user: "improve the UX and design experience"). Checked in the Paseo app itself, not only in tests.
+
+### Changed
+- **The chat chip is short and only where it belongs.** It says "2 broken" or "1 needs sign-in" with the Connectors icon; "2 connectors failing" was cut off as "2 connectors faili…" (the app gives it about 110 px). "2 connectors broken" would still be cut, so the word "connectors" moved into the icon. When a chat has both, the broken count leads and the panel lists the sign-ins.
+  - It counts only connectors that chat loads: a connector switched off for the chat's project (Claude's per-project list) or everywhere (Codex's `enabled = false`) doesn't count, nor does a sign-in for a connector no settings file lists (a Claude Code plugin's own).
+  - Old finished chats get no chip: only a running chat, or one active in the last hour. A three-week-old chat had one. Paseo 0.11's agent list sends `updatedAt`, which is what this reads.
+  - Problems that belong to no chat stay on the sidebar dot.
+- **The chat's Connectors panel and the workspace panel, rebuilt.** Header: the chat's state ("2 broken", "All working", "Checking…") and a Refresh link. Then "Needs a look" (broken first, each with Fix, then sign-ins with their sign-in rows), then the connectors the chat loads with their switches (broken first, plain words: "In every project", "Off in this project"). Folded at the bottom: "Not used in this chat" (with "Turn off the unused ones"), "This project's own connectors", "Problems elsewhere" and "Technical details" (.mcp.json, stdio/http, programs running now, the tool-search note, how each switch works).
+  - The workspace panel is titled "Connectors", like the page.
+- **One connector, one name.** Codex writes a name with a space as a quoted key (`[mcp_servers."Acme: CRM"]`) and the quote marks were kept, so the connector was listed twice, each copy "missing" from the other app. Names are read without their quotes now, so the counts are right (on the audited Mac: 11 connectors, not 15; 2 missing from some apps, not 8). A quoted Codex block can also be removed by its plain name now; writing a new name that needs quotes is still refused, as before.
+- **Tools that come with the Codex app** (`computer-use`, `node_repl`, or any program inside the Codex or ChatGPT app) are labelled "Comes with the Codex app", folded into their own row at the bottom of Connectors, and left out of every count, "Fix N", "missing from some apps", the dot and the chip. They're no longer checked (that only ever said "not on PATH"), never copied to Claude, and their page has no Fix, Add or Rename.
+- **A broken connector's page** leads with Fix (opens its settings in Your AI apps) and Remove, never "Add to the app missing it". It says what's wrong in a sentence; the check's own message is under Technical details.
+- **"Checking…" until the data is in.** Overview's rows, the header and the hero wait for the health check and the sign-in read instead of showing "All working" or "none needed" that changes a moment later; a problem already known still shows at once. The Add gallery waits for your own connectors before it lists cards or says how many you already have.
+- **Overview has one button**, plus each row's Show link. The second button and the "See which connectors need a look" fold-out are gone (there were six ways to the same list).
+- **Help is folded questions only.** How connectors work is the last question. Its tab icon is `CircleHelp`.
+- **Refresh is a link in the page header** (as in Memories), not a button on the Connectors tab. The panels have one too.
+- **The window title follows the tab** ("Connectors · Help", "Connectors · Your connectors", "Connectors · Add a connector"). The tab lives in the screen's params on Paseo 0.11.
+- **The sidebar row's "+"** is the same text "+" as Memories' and Skills'.
+
+### Added
+- **The sidebar dot opens a quick popover** (Paseo 0.11, as AI Router's and Hosts' do): which connectors are broken or need sign-in, "Show them" (Connectors on that filter) and "Check again".
+- A plain `description` in `paseo-plugin.json`, shown in Settings → Plugins.
+
+### Removed
+- **The context estimate** ("≈108k if all loaded", the heaviest connectors, "JSON ÷ 4") from the chat's panel: Paseo shows a chat's context use itself.
+- **`/mcp`.** Paseo has no way to hide a slash command, so only `/connectors` remains.
+- The AI Router suggestion when AI Router is installed (it used to say "(installed)").
+
+### Fixed
+- Two timing tests failed under heavy load, on `main` too: a hung Claude Code was stopped at 300 ms before it had written anything, and a "didn't wait" check allowed 50 ms. They now allow 2 s and 1 s, still far inside what they check (10 s, and the 8 s slow daemon).
+
+### Requirements
+- **Paseo 0.9.0 or later** (was 0.8.0). Paseo checks `paseo-plugin.json` strictly and accepts `description` only from 0.9.0, so the stated minimum is raised to match. Hosts on 0.8 stay on 0.19.1.
+
 ## 0.19.1 — 2026-10-06
 
 Fewer composer chips, at the user's request: our plugins added "too many… like composer chips".

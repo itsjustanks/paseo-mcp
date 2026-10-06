@@ -7,6 +7,8 @@ import { basename, dirname, join } from "node:path";
 import type { AuthState } from "../shared/accounts";
 import type { Destination, McpAuthAccount } from "../shared/contracts";
 import { probeMcp } from "../shared/health";
+import { normaliseConnectorName, tomlKeyPattern } from "../shared/names";
+import { isCodexBuiltIn } from "../shared/builtin";
 import type { Dialect } from "../shared/mcpjson";
 import { codexAuthView } from "./codex-auth";
 import { forgetFile, readJsonCached, readTextCached } from "./files";
@@ -388,8 +390,12 @@ function tomlPairKey(raw: string): string | null {
 
 // Table headers may be indented — valid TOML, and missing it once caused a
 // duplicate table to be appended (which makes the whole file unparseable).
+// 0.19.2: a quoted key (`[mcp_servers."Acme: CRM"]`, as Codex writes a name
+// with a space) is read without its quote marks, so it matches the same
+// connector in Claude's settings instead of being listed twice.
 export function tomlMcpNamesFromText(text: string): string[] {
-  return [...new Set([...text.matchAll(/^[ \t]*\[mcp_servers\.([^\].]+)/gm)].map((match) => match[1] ?? ""))];
+  const header = /^[ \t]*\[\s*mcp_servers\s*\.\s*("(?:[^"\\]|\\.)*"|'[^']*'|[^\].\s]+)/gm;
+  return [...new Set([...text.matchAll(header)].map((match) => normaliseConnectorName(match[1] ?? "")).filter(Boolean))];
 }
 
 export function tomlMcpNames(path: string): string[] {
@@ -414,7 +420,7 @@ function tomlUnquote(raw: string): string | null {
 }
 
 export function tomlServerBlock(text: string, name: string): { start: number; end: number } | null {
-  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const escaped = tomlKeyPattern(name);
   const header = new RegExp(`^[ \\t]*\\[mcp_servers\\.${escaped}(?:\\.[^\\]]+)?\\]`, "m");
   const startMatch = header.exec(text);
   if (!startMatch) return null;
@@ -449,7 +455,7 @@ const MODELLED_TABLES = new Set(["env", "headers", "http_headers"]);
 export function tomlMcpReadOneFromText(text: string, name: string): McpDef | null {
   const block = tomlServerBlock(text, name);
   if (!block) return null;
-  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const escaped = tomlKeyPattern(name);
   const own = new RegExp(`^[ \\t]*\\[mcp_servers\\.${escaped}(?:\\.([^\\]]+))?\\][ \\t]*(?:#.*)?$`);
   const def: McpDef = {};
   const extra: string[] = [];
@@ -549,7 +555,8 @@ export function tomlApply(
   fileHint = "",
   forceHeaderTable?: "headers" | "http_headers",
 ): string {
-  if (!TOML_SAFE_NAME.test(name)) {
+  // Taking a connector out works whatever its key looks like; writing one needs a bare key.
+  if (def && !TOML_SAFE_NAME.test(name)) {
     throw new Error(`'${name}' is not a valid TOML table name (letters, numbers, - and _ only)`);
   }
   assertCopyable(name, def);
@@ -557,7 +564,7 @@ export function tomlApply(
   // Whichever subtable this file already used for headers wins: rewriting a
   // Codex block's `http_headers` as `headers` deletes the token Codex reads.
   const existingHeaderTable = new RegExp(
-    `^[ \\t]*\\[mcp_servers\\.${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\.(http_headers|headers)\\]`,
+    `^[ \\t]*\\[mcp_servers\\.${tomlKeyPattern(name)}\\.(http_headers|headers)\\]`,
     "m",
   ).exec(text)?.[1] as "headers" | "http_headers" | undefined;
   let block = tomlServerBlock(next, name);
@@ -908,6 +915,7 @@ export async function handleMcpMatrix(_input: Record<string, never>, { paseo }: 
       .filter((dest) => hasInlineCredentials(defsByDest.get(dest.id)?.[name] ?? null))
       .map((dest) => dest.id);
     const detail = redactDetail(def).slice(0, 80);
+    const builtIn = isCodexBuiltIn(name, def, destinations.filter((dest) => presentIn.includes(dest.id)).map((dest) => dest.provider));
     return {
       name,
       transport,
@@ -915,6 +923,7 @@ export async function handleMcpMatrix(_input: Record<string, never>, { paseo }: 
       authStyle: inlineCredentialsIn.length > 0 ? ("inline-credentials" as const) : ("oauth-or-none" as const),
       inlineCredentialsIn,
       presentIn,
+      ...(builtIn ? { builtIn: true } : {}),
     };
   });
   return { destinations, servers };

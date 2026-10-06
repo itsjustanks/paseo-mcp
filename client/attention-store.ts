@@ -25,6 +25,13 @@ export function useHostAttention(): AttentionState["host"] {
   return useSyncExternalStore(subscribe, () => state.host, () => null);
 }
 
+const NO_NAMES = { failing: [] as string[], signIn: [] as string[] };
+
+/** The connectors behind the sidebar dot: broken ones and ones that need sign-in. */
+export function useHostAttentionNames(): NonNullable<AttentionState["names"]> {
+  return useSyncExternalStore(subscribe, () => state.names ?? NO_NAMES, () => NO_NAMES);
+}
+
 /** This agent's chip face, or null when its chat is calm. */
 export function useChipFace(agentId: string): ChipFace | null {
   return useSyncExternalStore(subscribe, () => state.faces.get(agentId) ?? null, () => null);

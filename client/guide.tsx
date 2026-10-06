@@ -174,10 +174,10 @@ function Glossary() {
   );
 }
 
-/** The whole guide in one card: what connectors are, how they work, how to use them, and the words. */
-export function GuideCard({ apps, onAdd, onCopy }: { apps: readonly string[]; onAdd: () => void; onCopy: () => void }) {
+/** The guide's parts: what connectors are, how they work, how to use them, and the words. Help shows them inside its last question. */
+export function GuideParts({ apps, onAdd, onCopy }: { apps: readonly string[]; onAdd: () => void; onCopy: () => void }) {
   return (
-    <Card>
+    <>
       <WhatIs apps={apps} />
       <Divider />
       <HowItWorks />
@@ -185,6 +185,15 @@ export function GuideCard({ apps, onAdd, onCopy }: { apps: readonly string[]; on
       <HowToUse onAdd={onAdd} onCopy={onCopy} />
       <Divider />
       <Glossary />
+    </>
+  );
+}
+
+/** The whole guide in one card. */
+export function GuideCard(props: { apps: readonly string[]; onAdd: () => void; onCopy: () => void }) {
+  return (
+    <Card>
+      <GuideParts {...props} />
     </Card>
   );
 }

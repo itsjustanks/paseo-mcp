@@ -291,7 +291,9 @@ test("an account kept at ~/.claude is written there, not into the primary ~/.cla
 });
 
 test("a Claude Code that hangs is killed, and the half-added server is taken out again", async () => {
-  setByoTimeouts({ termMs: 300, killMs: 300 });
+  // 2 s before the stop (0.19.2): with 300 ms, under heavy load the fake Claude Code was stopped before it had
+  // written anything ("Nothing was written"), on main too. It still has to be stopped well inside the 10 s check below.
+  setByoTimeouts({ termMs: 2_000, killMs: 500 });
   process.env.FAKE_CLAUDE_MODE = "hang";
   try {
     const started = Date.now();

@@ -95,6 +95,8 @@ export const TYPE = {
   secondary: { fontSize: 14, lineHeight: 20 },
   small: { fontSize: 13, lineHeight: 18 },
   mono: { fontSize: 13, lineHeight: 19, fontFamily: "monospace" },
+  /** The sidebar row's "+", the same text "+" as Memories' and Skills' rows. */
+  sidebarPlus: { fontSize: 18, lineHeight: 20 },
   /** A headline number, such as a token count. */
   figure: { fontSize: 26, lineHeight: 32, fontWeight: "700" },
 } as const;
@@ -275,7 +277,7 @@ export function IconBadge({ name, tone = "accent", size = 32 }: { name: string; 
  * and one line on its state with a coloured dot (and the word, so colour is
  * never the only channel).
  */
-export function Header({ title, status, caption, icon: name = "Plug" }: { title: string; status: { status: Status; label: string }; caption?: string; icon?: string }) {
+export function Header({ title, status, caption, icon: name = "Plug", trailing }: { title: string; status: { status: Status; label: string }; caption?: string; icon?: string; /** A quiet link at the end, such as Refresh (0.19.2). */ trailing?: React.ReactNode }) {
   const t = useTokens();
   const color = statusColor(t, status.status);
   return (
@@ -291,6 +293,7 @@ export function Header({ title, status, caption, icon: name = "Plug" }: { title:
           </Text>
         </View>
       </View>
+      {trailing}
     </View>
   );
 }

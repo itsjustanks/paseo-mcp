@@ -160,30 +160,23 @@ export function PaseoToolsAgentRow({ info, providerLabel, first }: { info: { too
   const t = useTokens();
   const on = info.tools > 0;
   const reason = on
-    ? `Paseo's own connector, added by the daemon to every ${providerLabel} agent. Switch it or its tools under Connectors → Built-in tools; that changes every workspace.`
+    ? `Paseo's own tools, in every ${providerLabel} chat. Turn them or some of them off under Connectors → Built-in tools.`
     : info.blocker
       ? blockerText(info.blocker)
       : `Off for ${providerLabel} agents on this host.`;
+  // 0.19.2: plain, like the rows above it; the tool names' prefix, the transport and where the list came from are on the Connectors page.
   return (
     <Row
       first={first}
       tone={on ? undefined : "neutral"}
-      title={
-        <View style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: t.space.sm, minWidth: 0 }}>
-          <Text numberOfLines={1} style={[t.text.bodyStrong, { flexShrink: 1, opacity: on ? 1 : 0.6 }]}>{PASEO_TOOLS_LABEL}</Text>
-          <Tag label="http" />
-          <Tag label="built in" tone="ok" />
-          {on ? <Tag label={plural(info.tools, "tool")} tone="ok" /> : null}
+      title={<Text numberOfLines={1} style={[t.text.bodyStrong, { opacity: on ? 1 : 0.6 }]}>{PASEO_TOOLS_LABEL}</Text>}
+      meta={
+        <View style={{ gap: t.space.hair }}>
+          <Text style={t.text.caption}>{on ? `Built in · ${plural(info.tools, "tool")}` : "Built in · off"}</Text>
+          <Text style={t.text.caption}>{reason}</Text>
         </View>
       }
-      subtitle={`mcp__paseo__* · ${info.source === "live" ? "tool list live from this host" : `tool list as of Paseo ${info.asOf}`}`}
-      meta={<Text style={t.text.caption}>{reason}</Text>}
-      trailing={
-        <View style={{ flexDirection: "row", alignItems: "center", gap: t.space.sm }}>
-          <Tag label={on ? "on" : "off"} tone={on ? "ok" : undefined} />
-          {canOpenMcp() ? <Button label="Manage" variant="ghost" onPress={() => openMcp()} /> : null}
-        </View>
-      }
+      trailing={canOpenMcp() ? <Button label="Manage" variant="ghost" onPress={() => openMcp()} /> : undefined}
     />
   );
 }

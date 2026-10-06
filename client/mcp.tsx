@@ -8,6 +8,7 @@ import { Pressable, Text, View } from "react-native";
 import { z } from "zod";
 import {
   healthNeedsAttention,
+  resultNeedsAttention,
   mcpAdd,
   mcpAgentServers,
   mcpApply,
@@ -22,6 +23,8 @@ import {
   type AgentServer,
   type Destination,
   type McpAuthAccount,
+  type McpHealth,
+  type McpHealthStatus,
   type McpDefRow,
   type McpServerTools,
   type PluginServer,
@@ -33,11 +36,12 @@ import { plainError } from "../shared/errors";
 import { clockTime } from "../shared/schedule";
 import { ownedFromRow } from "../shared/catalog";
 import { CURATED_CATALOG } from "../shared/catalog-curated";
-import { SERVER_FILTERS, healthPlainNote, healthPlainWord, projectFilesFor, providerName, removePlan, serverGallery, signInState, type RemovePlan, type RemoveScope, type ServerCardModel, type ServerFilter } from "../shared/servers";
+import { BUILT_IN_LABEL, BUILT_IN_NOTE } from "../shared/builtin";
+import { SERVER_FILTERS, appsLine, healthPlainNote, projectFilesFor, providerName, removePlan, serverGallery, signInState, type RemovePlan, type RemoveScope, type ServerCardModel, type ServerFilter } from "../shared/servers";
 import { COPY_ALL_EXPLAINER, COPY_ALL_LABEL } from "../shared/copy-all";
 import { overviewNextStep, overviewVerdict, type OverviewTarget } from "../shared/overview";
-import { HELP_QUESTIONS, MCP_NAME, MCP_NAME_LOWER, PROJECTS_LINE, WHAT_CONNECTORS_ARE, type HelpTarget } from "../shared/guide";
-import { addServerRequest, checkNowRequest } from "../shared/screen-params";
+import { HELP_QUESTIONS, HOW_IT_WORKS_QUESTION, MCP_NAME, MCP_NAME_LOWER, PROJECTS_LINE, WHAT_CONNECTORS_ARE, type HelpTarget } from "../shared/guide";
+import { addServerRequest, checkNowRequest, filterRequest, tabFromParams, type ScreenFilter, type ScreenTab } from "../shared/screen-params";
 import { summarizeTools } from "../shared/tools";
 import {
   ParsedServerSchema,
@@ -56,13 +60,13 @@ import {
   type LoginSession,
   type RawDefRow,
 } from "../shared/mcpjson";
-import { WorkspaceContext, pickLoad } from "./budget";
+import { LoadDetails, pickLoad } from "./budget";
 import { CatalogGallery, CopyCatalogEntryButton } from "./catalog";
 import { CopyAllPanel } from "./copy-all";
-import { HealthSummary, ServerHealthTag, healthCheckedLabel, healthStatus, healthWord, splitIssues, useHealth } from "./health";
+import { ServerHealthTag, healthCheckedLabel, healthStatus, healthWord, splitIssues, useHealth } from "./health";
 import { setSignInFocus, useSignInFocus } from "./focus";
-import { canOpenMcp, openMcp, takePendingServer } from "./navigate";
-import { GuideCard, OverviewGuide } from "./guide";
+import { canOpenMcp, canSyncTab, openMcp, syncTab, takePendingServer } from "./navigate";
+import { GuideParts, OverviewGuide } from "./guide";
 import { useOpenLink } from "./links";
 import { TabBar, type SectionId } from "./navigation";
 import { PaseoToolsAgentRow, PaseoToolsCard, PaseoToolsLine, paseoToolsTitle, usePaseoTools } from "./paseo-tools";
@@ -92,7 +96,6 @@ import {
   Row,
   Screen,
   Section,
-  SectionTitle,
   Segmented,
   StaleNote,
   StatusLine,
@@ -717,117 +720,105 @@ function AuthRows({
 // --------------------------------------------------------------- switches
 
 function scopeWord(scope: AgentServer["scope"]): string {
-  return scope === "user" ? "in every workspace" : scope === "project" ? "this project's own" : "this folder only";
+  return scope === "user" ? "In every project" : scope === "project" ? "This project's own" : "This folder only";
 }
 
 /**
- * What one agent loads here, one row per server, with the per-workspace switch
- * its editor actually has. Claude: `disabledMcpServers` for user and local
- * servers, the `.mcp.json` approval lists for project ones. Codex: only the
- * servers the hook injects can be left out. Anything else shows its state and
- * says why there is no switch. State is read from the config on every call, so
- * a `/mcp disable` in a terminal shows up on the next refresh.
+ * What one agent loads here, one row per connector, with the per-workspace
+ * switch its app actually has. Claude: `disabledMcpServers` for user and local
+ * connectors, the `.mcp.json` approval lists for project ones. Codex: only the
+ * connectors the hook injects can be left out. Anything else shows its state;
+ * why there is no switch is under Technical details. State is read from the
+ * config on every call, so a `/mcp disable` in a terminal shows up on the next
+ * refresh.
+ *
+ * 0.19.2: plain rows (name, health, where it comes from); broken ones first.
+ * Transport, file names and each switch's mechanics moved to Technical details.
  */
 function AgentServers({
   data,
   loading,
   error,
-  providerLabel,
   onToggle,
   toggling,
   toolsByName,
+  health,
   signIn,
 }: {
   data: z.output<typeof mcpAgentServers.output> | undefined;
   loading: boolean;
   error: unknown;
-  providerLabel: string;
   onToggle: (name: string, enabled: boolean) => void;
   toggling: string | null;
   toolsByName: Map<string, McpServerTools> | null;
+  health: ReadonlyMap<string, McpHealth> | null;
   signIn: (server: AgentServer) => React.ReactNode;
 }) {
   const t = useTokens();
-  if (loading && !data) return <Loading label="Reading what this agent loads…" />;
+  // 0.19.2: a 401 is how a working sign-in connector answers the check, so the word comes from this chat's account.
+  const word = (name: string, result: McpHealth): { status: Status; label: string } => {
+    if (result.status !== "auth-required") return { status: healthStatus(result.status), label: healthWord(result.status) };
+    const state = data?.account?.authStatus[name];
+    if (data?.account?.needsAuth.includes(name) || state === "not-connected") return { status: "attention", label: "Needs sign-in" };
+    return state === "connected" ? { status: "ok", label: "Signed in" } : { status: "neutral", label: "Uses sign-in" };
+  };
+  if (loading && !data) return <Loading label="Checking…" />;
   if (error && !data) return <ErrorText>{errorText(error)}</ErrorText>;
   if (!data) return null;
+  const rank = (entry: AgentServer) => {
+    const result = health?.get(entry.name);
+    if (!result || !resultNeedsAttention(result)) return 2;
+    return result.status === "down" || result.status === "binary-missing" ? 0 : 1;
+  };
+  const rows = [...data.servers].sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name));
   const anySwitch = data.servers.some((entry) => entry.enabled.writable);
-  const offCount = data.servers.filter((entry) => entry.enabled.state === "disabled").length;
   return (
-    <Section
-      title={`Connectors for a ${providerLabel} agent here`}
-      trailing={canOpenMcp() ? <Button label="All connectors" variant="ghost" onPress={() => openMcp()} /> : undefined}
-    >
-      <View style={{ gap: t.space.sm }}>
-        <Facts
-          items={[
-            { value: plural(data.servers.length + (data.paseoTools && data.paseoTools.tools > 0 ? 1 : 0) + (data.pluginServers?.length ?? 0), "connector") },
-            offCount > 0 ? { value: `${offCount} off for this workspace`, tone: "attention" } : null,
-            data.scope ? { value: data.scope.label } : { value: "no settings found for this agent's app" },
-          ]}
-        />
-        <Text style={t.text.caption}>
-          {anySwitch
-            ? `A switch changes what an agent started in ${data.directory} loads. ${SWITCH_EFFECT_NOTE}`
-            : data.scope?.provider === "codex"
-              ? "Codex always loads the connectors in its own settings, so only this project's own connectors can be switched off here. To stop Codex loading one, remove it under Connectors."
-              : "This app can't switch connectors off for one workspace; each shows whether it's on."}
-        </Text>
-        {!data.projectIncluded && data.projectNote ? <Text style={t.text.caption}>{data.projectNote}.</Text> : null}
-        <Card padded={false}>
-          {data.servers.length === 0 && !data.paseoTools && !data.pluginServers?.length ? <EmptyState title="Nothing loads here" body="This agent's app has no connectors for this workspace." /> : null}
-          {data.paseoTools ? <PaseoToolsAgentRow info={data.paseoTools} providerLabel={providerLabel} first /> : null}
-          {data.servers.map((entry, index) => {
-            const tools = toolsByName?.get(entry.name);
-            const off = entry.enabled.state === "disabled";
-            return (
-              <Row
-                key={entry.name}
-                first={index === 0 && !data.paseoTools}
-                tone={off ? "neutral" : undefined}
-                title={
-                  <View style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: t.space.sm, minWidth: 0 }}>
-                    <Text numberOfLines={1} style={[t.text.bodyStrong, { flexShrink: 1, opacity: off ? 0.6 : 1 }]}>{entry.name}</Text>
-                    <Tag label={entry.transport} />
-                    <Tag label={scopeWord(entry.scope)} tone={entry.scope === "user" ? undefined : "ok"} />
-                    {entry.enabled.state === "undecided" ? <Tag label="asks at launch" tone="attention" /> : null}
-                    {tools ? <Tag label={toolsWord(tools)} tone={toolsStatus(tools.kind)} /> : null}
-                  </View>
-                }
-                subtitle={entry.detail || undefined}
-                meta={<Text style={t.text.caption}>{entry.enabled.reason}</Text>}
-                trailing={
-                  entry.enabled.writable ? (
-                    <Toggle
-                      label={`${entry.name} ${off ? "off" : "on"} for this workspace`}
-                      value={!off}
-                      loading={toggling === entry.name}
-                      disabled={toggling !== null}
-                      onChange={(next) => onToggle(entry.name, next)}
-                    />
-                  ) : (
-                    <Tag label={off ? "off here" : "on"} tone={off ? undefined : "ok"} />
-                  )
-                }
-                expanded={
-                  <View style={{ gap: t.space.sm }}>
-                    {signIn(entry)}
-                    {tools && tools.kind === "listed" && tools.tools.length > 0 ? (
-                      <Disclosure title={`Tools · ${toolsWord(tools)}`}>
-                        <ServerTools entry={tools} open />
-                      </Disclosure>
-                    ) : null}
-                  </View>
-                }
-              />
-            );
-          })}
-          {(data.pluginServers ?? []).map((entry, index) => (
-            <PluginServerRow key={`plugin:${entry.name}`} entry={entry} first={index === 0 && data.servers.length === 0 && !data.paseoTools} />
-          ))}
-        </Card>
-      </View>
-    </Section>
+    <View style={{ gap: t.space.sm }}>
+      {anySwitch ? <Text style={t.text.caption}>{`A switch changes what new chats in this project load. ${SWITCH_EFFECT_NOTE}`}</Text> : null}
+      <Card padded={false}>
+        {rows.length === 0 && !data.paseoTools && !data.pluginServers?.length ? <EmptyState title="Nothing loads here" body="This chat's AI app has no connectors for this project." /> : null}
+        {rows.map((entry, index) => {
+          const tools = toolsByName?.get(entry.name);
+          const off = entry.enabled.state === "disabled";
+          const result = health?.get(entry.name);
+          const problem = result && resultNeedsAttention(result) ? result : null;
+          return (
+            <Row
+              key={entry.name}
+              first={index === 0}
+              tone={problem ? healthStatus(problem.status) : undefined}
+              title={<Text numberOfLines={1} style={[t.text.bodyStrong, { opacity: off ? 0.6 : 1 }]}>{entry.name}</Text>}
+              meta={
+                <View style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: t.space.sm }}>
+                  {result?.builtIn ? <Tag label={BUILT_IN_LABEL} /> : result ? <StatusPill {...word(entry.name, result)} /> : null}
+                  <Text style={t.text.caption}>{off ? "Off in this project" : scopeWord(entry.scope)}</Text>
+                  {entry.enabled.state === "undecided" ? <Tag label="Asks when a chat starts" tone="attention" /> : null}
+                  {tools && tools.kind === "listed" ? <Text style={t.text.caption}>{toolsWord(tools)}</Text> : null}
+                </View>
+              }
+              trailing={
+                entry.enabled.writable ? (
+                  <Toggle
+                    label={`${entry.name} ${off ? "off" : "on"} in this project`}
+                    value={!off}
+                    loading={toggling === entry.name}
+                    disabled={toggling !== null}
+                    onChange={(next) => onToggle(entry.name, next)}
+                  />
+                ) : problem && canOpenMcp() ? (
+                  <Button label="Fix" onPress={() => openMcp(entry.name)} />
+                ) : undefined
+              }
+              expanded={signIn(entry)}
+            />
+          );
+        })}
+        {data.paseoTools ? <PaseoToolsAgentRow info={data.paseoTools} providerLabel={providerName(data.scope?.provider ?? "")} first={rows.length === 0} /> : null}
+        {(data.pluginServers ?? []).map((entry, index) => (
+          <PluginServerRow key={`plugin:${entry.name}`} entry={entry} first={index === 0 && rows.length === 0 && !data.paseoTools} />
+        ))}
+      </Card>
+    </View>
   );
 }
 
@@ -843,8 +834,7 @@ function PluginServerRow({ entry, first }: { entry: PluginServer; first: boolean
       title={
         <View style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: t.space.sm, minWidth: 0 }}>
           <Text numberOfLines={1} style={[t.text.bodyStrong, { flexShrink: 1 }]}>{entry.name}</Text>
-          <Tag label={entry.transport} />
-          <Tag label="Added when created" />
+          <Tag label="Added when the chat started" />
           {entry.tools !== undefined ? <Tag label={plural(entry.tools, "tool")} tone="ok" /> : null}
         </View>
       }
@@ -1019,11 +1009,20 @@ function appNames(destinations: Destination[]): string[] {
 }
 
 /** The hero's tone and icons, from the verdict and where the next step goes. */
+/** A broken connector in a sentence: what's wrong and what to do, without the check's raw message (0.19.2). */
+function brokenLine(status: McpHealthStatus): string {
+  return status === "binary-missing"
+    ? "The program it needs isn't on this computer. Fix it by changing what it runs, or remove it if you don't use it."
+    : "It didn't answer when checked. Fix its address or key, or remove it if you don't use it.";
+}
+
 function heroFor(status: Status, target: OverviewTarget, facts: { state: string; staleAt: string | null; servers: number; signIn: number }): { tone: Status; icon: string; action?: string } {
   if (facts.state === "error") return { tone: "error", icon: "CircleAlert", action: "RefreshCw" };
   if (facts.state === "loading") return { tone: "neutral", icon: "Loader", action: "RefreshCw" };
   if (facts.staleAt) return { tone: "attention", icon: "Clock", action: "RefreshCw" };
   if (facts.servers === 0) return { tone: "neutral", icon: "Plus", action: "Plus" };
+  // Still checking (0.19.2): no verdict yet, so no alarm colour.
+  if (status === "neutral") return { tone: "neutral", icon: "Loader", action: "Plug" };
   if (status === "ok") return { tone: "ok", icon: "CircleCheck", action: "Plug" };
   if (target.section === "copy") return { tone: "attention", icon: "Copy", action: "Copy" };
   if (status === "error") return { tone: "error", icon: "CircleAlert", action: "Search" };
@@ -1035,12 +1034,28 @@ export function McpSurface({ theme, layout, host, params }: PluginSurfaceProps &
   const t = useUi(theme, layout.compact);
   return (
     <TokensProvider value={t}>
-      <McpBody key={host.id} theme={theme} layout={layout} host={host} addRequest={addServerRequest(params)} checkRequest={checkNowRequest(params)} />
+      <McpBody
+        key={host.id}
+        theme={theme}
+        layout={layout}
+        host={host}
+        addRequest={addServerRequest(params)}
+        checkRequest={checkNowRequest(params)}
+        tabParam={tabFromParams(params)}
+        filterRequest={filterRequest(params)}
+      />
     </TokensProvider>
   );
 }
 
-function McpBody({ layout, host, addRequest, checkRequest }: PluginSurfaceProps & { addRequest: string | null; checkRequest: string | null }) {
+function McpBody({
+  layout,
+  host,
+  addRequest,
+  checkRequest,
+  tabParam,
+  filterRequest: filterAsked,
+}: PluginSurfaceProps & { addRequest: string | null; checkRequest: string | null; tabParam: ScreenTab | null; filterRequest: { filter: ScreenFilter; at: string } | null }) {
   const t = useTokens();
   const toast = useToast();
   const queryClient = useQueryClient();
@@ -1065,9 +1080,9 @@ function McpBody({ layout, host, addRequest, checkRequest }: PluginSurfaceProps 
   const callLoginCancel = useRpc(mcpLoginCancel);
   const callLogout = useRpc(mcpLogout);
 
-  const [section, setSection] = useState<SectionId>("overview");
+  const [section, setSection] = useState<SectionId>(tabParam ?? (filterAsked ? "servers" : "overview"));
   const [search, setSearch] = useState("");
-  const [filter, setFilter] = useState<Filter>("all");
+  const [filter, setFilter] = useState<Filter>(filterAsked?.filter ?? "all");
   const [mode, setMode] = useState<Mode>("add");
   const [selected, setSelected] = useState<string | null>(null);
   const [editing, setEditing] = useState<string | null>(null);
@@ -1075,6 +1090,8 @@ function McpBody({ layout, host, addRequest, checkRequest }: PluginSurfaceProps 
   const [revealed, setRevealed] = useState(false);
   const [exportRevealed, setExportRevealed] = useState(false);
   const [renameTo, setRenameTo] = useState("");
+  // 0.19.2: Fix and Remove on a broken connector's page open their fold-out.
+  const [detailFocus, setDetailFocus] = useState<"apps" | "remove" | null>(null);
   // 0.15.0: "Copy to all my AI apps" opens its preview in place of the section.
   const [copyOpen, setCopyOpen] = useState(false);
   // 0.19.0: Help's "Save a backup" opens the backup fold-out at the bottom of the Connectors tab.
@@ -1089,6 +1106,25 @@ function McpBody({ layout, host, addRequest, checkRequest }: PluginSurfaceProps 
     setSelected(null);
     setCatalogOpen(true);
   }, [addRequest]);
+
+  // The sidebar dot's popover (0.19.2): "Show them" opens Connectors on that filter, again on each press.
+  const filterAt = filterAsked ? `${filterAsked.filter}@${filterAsked.at}` : null;
+  useEffect(() => {
+    if (!filterAsked) return;
+    setCopyOpen(false);
+    setCatalogOpen(false);
+    setSection("servers");
+    setSelected(null);
+    setFilter(filterAsked.filter);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filterAt]);
+  // The tab lives in the screen's params on Paseo 0.11, so the window title follows it (0.19.2).
+  const shownTab = section === "transfer" ? "servers" : section;
+  const paramTab = tabParam ?? (addRequest !== null || filterAsked ? "servers" : "overview");
+  useEffect(() => {
+    if (canSyncTab() && shownTab !== paramTab) syncTab(shownTab);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shownTab]);
 
   const [addName, setAddName] = useState("");
   const [addKind, setAddKind] = useState<Kind>("http");
@@ -1230,6 +1266,7 @@ function McpBody({ layout, host, addRequest, checkRequest }: PluginSurfaceProps 
 
   const selectServer = (name: string | null) => {
     setSection("servers");
+    setDetailFocus(null);
     setSelected(name);
     setEditing(null);
     setRevealed(false);
@@ -1404,17 +1441,19 @@ function McpBody({ layout, host, addRequest, checkRequest }: PluginSurfaceProps 
   // ------------------------------------------------------------ derived state
 
   const query = search.trim().toLowerCase();
-  const gapServers = servers.filter((server) => server.presentIn.length < destinations.length);
+  // 0.19.2: tools that come with the Codex app are listed on their own and never counted: not as broken, missing or to sign in to.
+  const ownServers = servers.filter((server) => !server.builtIn && !health?.get(server.name)?.builtIn);
+  const builtInServers = servers.filter((server) => !ownServers.includes(server));
+  const gapServers = ownServers.filter((server) => server.presentIn.length < destinations.length);
   const isIssue = (server: McpServerRow) => {
     const entry = health?.get(server.name);
-    return Boolean(entry && healthNeedsAttention(entry.status));
+    return Boolean(entry && resultNeedsAttention(entry));
   };
-  const issueServers = health ? servers.filter(isIssue) : [];
+  const issueServers = health ? ownServers.filter(isIssue) : [];
   const brokenServers = issueServers.filter((server) => {
     const status = health?.get(server.name)?.status;
     return status === "down" || status === "binary-missing";
   });
-  const inlineServers = servers.filter((server) => server.inlineCredentialsIn.length > 0);
   const projectServers = authQuery.data?.projectServers ?? [];
   const projectGroups = [...projectServers.reduce((groups, entry) => {
     const names = groups.get(entry.project) ?? [];
@@ -1423,11 +1462,11 @@ function McpBody({ layout, host, addRequest, checkRequest }: PluginSurfaceProps 
     return groups;
   }, new Map<string, string[]>()).entries()];
   const signInOf = (server: McpServerRow) => signInState(server.name, accounts);
-  const signInServers = servers.filter((server) => signInOf(server) === "needs");
+  const signInServers = ownServers.filter((server) => signInOf(server) === "needs");
   // Your servers as the Add gallery's "already have" rules read them (shared/catalog.ts alreadyHave).
   const owned = useMemo(() => servers.map(ownedFromRow), [servers]);
   // The Servers gallery: cards, what the filter and search keep, and each pill's count (shared/servers.ts).
-  const gallery = serverGallery({ servers, destinations, health, accounts, authRead: Boolean(authQuery.data), known: KNOWN_SERVERS, filter, query });
+  const gallery = serverGallery({ servers: ownServers, destinations, health, accounts, authRead: Boolean(authQuery.data), known: KNOWN_SERVERS, filter, query });
   const toolTotals = toolsQuery.data ? summarizeTools(toolsQuery.data.servers) : null;
 
   const server = selected ? servers.find((entry) => entry.name === selected) : undefined;
@@ -1458,11 +1497,12 @@ function McpBody({ layout, host, addRequest, checkRequest }: PluginSurfaceProps 
     state: matrixQuery.data ? ("ready" as const) : matrixQuery.isError ? ("error" as const) : ("loading" as const),
     staleAt: matrixStale ? readAt(matrixQuery.dataUpdatedAt) : null,
     hostLabel: host.label,
-    servers: servers.length,
+    servers: ownServers.length,
     broken: brokenServers.length,
     warnings: issueServers.length - brokenServers.length,
     signIn: signInServers.length,
     gaps: gapServers.length,
+    checking: !health || !authQuery.data || Boolean(authQuery.data.checking),
   };
   const headerPill: { status: Status; label: string } = overviewVerdict(overviewFacts);
   const nextStep = overviewNextStep(overviewFacts);
@@ -1473,23 +1513,6 @@ function McpBody({ layout, host, addRequest, checkRequest }: PluginSurfaceProps 
     else if (target.section === "add") { go("servers", { server: null }); setCatalogOpen(true); }
     else go("servers", { server: null, filter: target.filter });
   };
-
-  // One row per connector that needs a look, with every reason it is listed.
-  const attentionByServer = new Map<string, { label: string; detail: string; tone: Status }[]>();
-  const noteAttention = (name: string, item: { label: string; detail: string; tone: Status }) =>
-    attentionByServer.set(name, [...(attentionByServer.get(name) ?? []), item]);
-  for (const entry of issueServers) {
-    const item = health!.get(entry.name)!;
-    noteAttention(entry.name, { label: healthPlainWord(item.status), detail: healthPlainNote(item.status), tone: healthStatus(item.status) });
-  }
-  for (const entry of inlineServers) {
-    noteAttention(entry.name, {
-      label: `saved key in ${plural(entry.inlineCredentialsIn.length, "app")}`,
-      detail: "A key is saved as plain text in that app's settings file. Exports hide it unless you choose to include it.",
-      tone: "attention",
-    });
-  }
-  const attention = [...attentionByServer.entries()];
 
   // ---------------------------------------------------------------- sections
 
@@ -1502,15 +1525,19 @@ function McpBody({ layout, host, addRequest, checkRequest }: PluginSurfaceProps 
   };
   const connectedCount = servers.filter((entry) => signInOf(entry) === "connected").length;
 
-  // At a glance, inside the hero: three questions, each with the link to where it is dealt with (the calm standard:
-  // at most four rows). Tools, Paseo's own tools and projects have their own tabs.
+  // At a glance, inside the hero: three questions, each with the one link to where it is dealt with (the calm standard:
+  // at most four rows). 0.19.2: every row says "Checking…" until its read is in, never a word that changes a moment later.
+  const checking = { value: "Checking…", status: "busy" as Status, hint: null };
+  const authSettled = Boolean(authQuery.data) && !(authQuery.data?.checking && signInServers.length === 0);
   const glance = (
     <View style={{ gap: t.space.xs }}>
       <StatusLine
         label="Health"
         {...(!health
-          ? { value: healthQuery.error ? "unavailable" : healthQuery.isFetching ? "checking" : "not checked yet", status: healthQuery.isFetching ? "busy" as Status : "neutral" as Status, hint: healthQuery.error ? errorText(healthQuery.error) : null }
-          : health.size === 0
+          ? healthQuery.error && !healthQuery.isFetching
+            ? { value: "unavailable", status: "neutral" as Status, hint: errorText(healthQuery.error) }
+            : checking
+          : ownServers.length === 0
             ? { value: "nothing to check", status: "neutral" as Status, hint: null }
           : brokenServers.length > 0
             ? { value: `${brokenServers.length} not working`, status: "error" as Status, hint: nameList(brokenServers), action: { label: "Show", onPress: toServers("issues") } }
@@ -1521,17 +1548,19 @@ function McpBody({ layout, host, addRequest, checkRequest }: PluginSurfaceProps 
       <StatusLine
         label="AI apps"
         {...(!ready
-          ? { value: "reading", status: "neutral" as Status }
-          : servers.length === 0
+          ? checking
+          : ownServers.length === 0
             ? { value: "no connectors yet", status: "neutral" as Status, hint: `${plural(destinations.length, "AI app and account", "AI apps and accounts")} found on ${host.label}` }
             : gapServers.length > 0
-              ? { value: `${plural(gapServers.length, "connector")} missing from some apps`, status: "attention" as Status, action: { label: "Show", onPress: toServers("gaps") } }
-              : { value: "every app has every connector", status: "ok" as Status, hint: `${plural(servers.length, "connector")} in ${plural(destinations.length, "AI app and account", "AI apps and accounts")}`, action: { label: "Connectors", onPress: toServers("all") } })}
+              ? { value: `${plural(gapServers.length, "connector")} missing from some apps`, status: "attention" as Status, hint: nameList(gapServers), action: { label: "Show", onPress: toServers("gaps") } }
+              : { value: "every app has every connector", status: "ok" as Status, hint: `${plural(ownServers.length, "connector")} in ${plural(destinations.length, "AI app and account", "AI apps and accounts")}` })}
       />
       <StatusLine
         label="Sign-in"
-        {...(!authQuery.data
-          ? { value: authQuery.error ? "unavailable" : "reading", status: "neutral" as Status, hint: authQuery.error ? errorText(authQuery.error) : null }
+        {...(!authSettled
+          ? authQuery.error && !authQuery.data
+            ? { value: "unavailable", status: "neutral" as Status, hint: errorText(authQuery.error) }
+            : checking
           : signInServers.length > 0
             ? { value: `${signInServers.length} need sign-in`, status: "attention" as Status, hint: nameList(signInServers), action: { label: "Show", onPress: toServers("sign-in") } }
             : connectedCount > 0
@@ -1541,59 +1570,31 @@ function McpBody({ layout, host, addRequest, checkRequest }: PluginSurfaceProps 
     </View>
   );
 
-  // The hero says the state in words, then three rows, one muted line and at most two buttons. The per-connector
-  // detail folds behind a quiet link; teaching folds into one "New to connectors?" link; AI Router is one line.
+  // The hero says the state in words, then three rows (each with its own link), one muted line and ONE button
+  // (0.19.2: there were six ways to the same list). Teaching folds into one "New to connectors?" link; AI Router is one line.
   const hero = heroFor(headerPill.status, nextStep.target, overviewFacts);
   const checkedLine = healthQuery.data ? healthCheckedLabel(healthQuery.data) : null;
-  const secondary =
-    servers.length > 0 && nextStep.label !== "See your connectors"
-      ? { label: "See your connectors", icon: "Plug", onPress: toServers("all") }
-      : { label: "Add a connector", icon: "Plus", onPress: () => { go("servers", { server: null }); setCatalogOpen(true); } };
   const overview = (
     <View style={{ gap: t.space.section }}>
       <HeroCard tone={hero.tone} icon={hero.icon} title={nextStep.title} lead={nextStep.detail}>
         {matrixQuery.isError && !matrixQuery.data ? <ErrorText>{errorText(matrixQuery.error)}</ErrorText> : null}
         {glance}
         {checkedLine ? <Text style={t.text.caption}>{`Health ${checkedLine}`}</Text> : null}
-        {attention.length > 0 ? (
-          <Disclosure quiet title={`See which connectors need a look (${attention.length})`} openTitle="Hide which connectors need a look">
-            <Card padded={false} level={2}>
-              {attention.map(([name, items], index) => (
-                <Row
-                  key={name}
-                  first={index === 0}
-                  tone={items.some((item) => item.tone === "error") ? "error" : "attention"}
-                  title={name}
-                  meta={
-                    <View style={{ gap: t.space.xs, paddingTop: t.space.hair }}>
-                      {items.map((item) => (
-                        <View key={item.label} style={{ gap: t.space.hair }}>
-                          <StatusPill status={item.tone} label={item.label} />
-                          <Text style={t.text.caption}>{item.detail}</Text>
-                        </View>
-                      ))}
-                    </View>
-                  }
-                  trailing={<Button label="Open" onPress={() => selectServer(name)} />}
-                />
-              ))}
-            </Card>
-          </Disclosure>
-        ) : null}
-        <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: t.space.sm }}>
-          <Button
-            label={nextStep.label}
-            variant="primary"
-            icon={hero.action}
-            loading={nextStep.target.section === "refresh" && matrixQuery.isFetching}
-            onPress={() => goTo(nextStep.target)}
-          />
-          <Button label={secondary.label} icon={secondary.icon} onPress={secondary.onPress} />
-        </View>
+        {overviewFacts.state === "loading" ? null : (
+          <View style={{ flexDirection: "row" }}>
+            <Button
+              label={nextStep.label}
+              variant="primary"
+              icon={hero.action}
+              loading={nextStep.target.section === "refresh" && matrixQuery.isFetching}
+              onPress={() => goTo(nextStep.target)}
+            />
+          </View>
+        )}
       </HeroCard>
       <View style={{ gap: t.space.sm }}>
         <QuietLine icon="Info">{WHAT_CONNECTORS_ARE}</QuietLine>
-        <OverviewGuide apps={appNames(destinations)} open={ready && servers.length === 0} onAdd={() => go("servers", { server: null })} onCopy={() => setCopyOpen(true)} />
+        <OverviewGuide apps={appNames(destinations)} open={ready && ownServers.length === 0} onAdd={() => go("servers", { server: null })} onCopy={() => setCopyOpen(true)} />
       </View>
       <AiRouterCard />
     </View>
@@ -1615,7 +1616,7 @@ function McpBody({ layout, host, addRequest, checkRequest }: PluginSurfaceProps 
   const summaryStrip = (
     <Facts
       items={[
-        { value: `${plural(servers.length, "connector")} across ${plural(destinations.length, "app account")}` },
+        { value: `${plural(ownServers.length, "connector")} across ${plural(destinations.length, "app account")}` },
         toolTotals ? { value: `${toolTotals.tools} tools from ${toolTotals.listed} of ${plural(toolTotals.servers, "connector")}`, tone: toolTotals.tools > 0 ? "ok" : undefined } : { value: "tools not listed yet" },
         authQuery.data ? { value: `${signInServers.length} need sign-in`, tone: signInServers.length > 0 ? "attention" : undefined } : null,
         health ? { value: `${issueServers.length} need${issueServers.length === 1 ? "s" : ""} attention`, tone: issueServers.length > 0 ? "attention" : "ok" } : null,
@@ -1653,7 +1654,7 @@ function McpBody({ layout, host, addRequest, checkRequest }: PluginSurfaceProps 
       ) : null}
       {ready && gallery.cards.length === 0 ? (
         <Card>
-          {servers.length === 0 ? (
+          {ownServers.length === 0 ? (
             <EmptyState
               title="No connectors yet"
               body={`None of your AI apps on ${host.label} has a connector yet. Add one from the gallery and it shows here.`}
@@ -1662,7 +1663,7 @@ function McpBody({ layout, host, addRequest, checkRequest }: PluginSurfaceProps 
           ) : (
             <EmptyState
               title="No connector matches"
-              body={noMatchLine(servers.length, search, filter)}
+              body={noMatchLine(ownServers.length, search, filter)}
               action={<Button label="Show all connectors" onPress={() => { setSearch(""); setFilter("all"); }} />}
             />
           )}
@@ -1734,6 +1735,8 @@ function McpBody({ layout, host, addRequest, checkRequest }: PluginSurfaceProps 
       ? `In all ${plural(destinations.length, "AI app")}`
       : `In ${server.presentIn.length} of ${plural(destinations.length, "AI app")}`
     : "";
+  const serverBuiltIn = Boolean(server?.builtIn || serverHealth?.builtIn);
+  const serverBroken = !serverBuiltIn && (serverHealth?.status === "down" || serverHealth?.status === "binary-missing");
   const serverPane = server ? (
     <View style={{ gap: t.space.section }}>
       {back}
@@ -1742,29 +1745,42 @@ function McpBody({ layout, host, addRequest, checkRequest }: PluginSurfaceProps 
           <Text style={[t.text.display, { flexShrink: 1 }]} numberOfLines={1}>
             {server.name}
           </Text>
-          {serverHealth ? (
+          {serverBuiltIn ? (
+            <StatusPill status="neutral" label="Built in" />
+          ) : serverHealth ? (
             <StatusPill status={healthStatus(serverHealth.status)} label={healthWord(serverHealth.status)} />
           ) : null}
         </View>
-        <Text style={t.text.body}>{`${kindWord} · ${appsWord}`}</Text>
-        {serverHealth && serverHealth.status !== "ok" && serverHealth.note ? (
-          <Text style={t.text.body}>{serverHealth.note}</Text>
+        <Text style={t.text.body}>{serverBuiltIn ? `${BUILT_IN_LABEL} · In Codex` : `${kindWord} · ${appsWord}`}</Text>
+        {/* 0.19.2: plain words here; the check's own message is under Technical details. */}
+        {serverBuiltIn ? (
+          <Text style={t.text.body}>{BUILT_IN_NOTE}</Text>
+        ) : serverHealth && resultNeedsAttention(serverHealth) ? (
+          <Text style={t.text.body}>{serverBroken ? brokenLine(serverHealth.status) : healthPlainNote(serverHealth.status)}</Text>
         ) : null}
-        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: t.space.sm }}>
-          {missing.length > 0 ? (
+        {serverBuiltIn ? null : (
+          <View style={{ flexDirection: "row", flexWrap: "wrap", gap: t.space.sm }}>
+            {serverBroken ? (
+              // A broken connector's main button fixes or removes it; adding it to more apps would spread the problem.
+              <>
+                <Button label="Fix" icon="Wrench" variant="primary" onPress={() => { setDetailFocus("apps"); setEditing(server.presentIn[0] ?? null); setEditTab("fields"); }} />
+                <Button label="Remove" icon="Trash2" onPress={() => setDetailFocus("remove")} />
+              </>
+            ) : missing.length > 0 ? (
+              <Button
+                label={`Add to the ${plural(missing.length, "app")} missing it`}
+                variant="primary"
+                loading={applyMutation.isPending}
+                onPress={() => applyMutation.mutate({ name: server.name, targets: missing.map((dest) => dest.id) })}
+              />
+            ) : null}
             <Button
-              label={`Add to the ${plural(missing.length, "app")} missing it`}
-              variant="primary"
-              loading={applyMutation.isPending}
-              onPress={() => applyMutation.mutate({ name: server.name, targets: missing.map((dest) => dest.id) })}
+              label="Check now"
+              loading={healthQuery.isFetching}
+              onPress={() => { void healthQuery.refetch(); }}
             />
-          ) : null}
-          <Button
-            label="Check now"
-            loading={healthQuery.isFetching}
-            onPress={() => { void healthQuery.refetch(); }}
-          />
-        </View>
+          </View>
+        )}
       </Card>
 
       {server.transport === "http" && authQuery.error ? (
@@ -1811,7 +1827,8 @@ function McpBody({ layout, host, addRequest, checkRequest }: PluginSurfaceProps 
         />
       ) : null}
 
-      <Accordion>
+      {/* Keyed by connector, so each page starts folded (a fold-out left open on one connector stayed open on the next). */}
+      <Accordion key={server.name}>
         <AccordionItem
           icon="Wrench"
           title="What it can do"
@@ -1828,7 +1845,13 @@ function McpBody({ layout, host, addRequest, checkRequest }: PluginSurfaceProps 
             <Button label="Refresh" variant="ghost" loading={toolsQuery.isFetching} onPress={() => void toolsQuery.refetch()} />
           </View>
         </AccordionItem>
-        <AccordionItem icon="Bot" title="Your AI apps" summary={missing.length > 0 ? `${appsWord} · missing from ${plural(missing.length, "app")}` : appsWord} open={missing.length > 0}>
+        <AccordionItem
+          key={`apps-${detailFocus === "apps" ? "focus" : ""}`}
+          icon="Bot"
+          title="Your AI apps"
+          summary={serverBuiltIn ? "In Codex" : missing.length > 0 ? `${appsWord} · missing from ${plural(missing.length, "app")}` : appsWord}
+          open={detailFocus === "apps" || (!serverBuiltIn && !serverBroken && missing.length > 0)}
+        >
           <Card padded={false} level={2}>
           {destinations.map((dest, index) => {
             const present = server.presentIn.includes(dest.id);
@@ -1865,6 +1888,8 @@ function McpBody({ layout, host, addRequest, checkRequest }: PluginSurfaceProps 
                         }}
                       />
                     )
+                  ) : serverBuiltIn ? (
+                    <Tag label="Codex only" />
                   ) : (
                     <Button
                       label="Add here"
@@ -1904,7 +1929,8 @@ function McpBody({ layout, host, addRequest, checkRequest }: PluginSurfaceProps 
           })}
           </Card>
         </AccordionItem>
-        <AccordionItem icon="PenLine" title="Rename" summary="Change its name in every AI app">
+{serverBuiltIn ? null : (
+                <AccordionItem icon="PenLine" title="Rename" summary="Change its name in every AI app">
           <Field label="New name" value={renameTo} onChangeText={setRenameTo} placeholder={server.name} />
           <View style={{ flexDirection: "row" }}>
             <Button
@@ -1915,10 +1941,12 @@ function McpBody({ layout, host, addRequest, checkRequest }: PluginSurfaceProps 
             />
           </View>
         </AccordionItem>
+        )}
         <AccordionItem icon="SlidersHorizontal" title="Technical details" summary="Its address, saved keys, and copies to share">
           <Facts
             items={[
               server.detail ? { value: server.detail } : null,
+              serverHealth?.note && serverHealth.status !== "ok" ? { value: `Last check: ${serverHealth.note}` } : null,
               ...editorFacts(server.presentIn, destinations).map((value) => ({ value })),
               inlineCredentialCount > 0 ? { value: `Key saved in ${plural(inlineCredentialCount, "app")}` } : null,
               oauthDestinations.length > 0 ? { value: `Sign-in in ${plural(oauthDestinations.length, "app")}` } : null,
@@ -1958,7 +1986,7 @@ function McpBody({ layout, host, addRequest, checkRequest }: PluginSurfaceProps 
             <Loading label="Reading…" />
           ) : null}
         </AccordionItem>
-        <AccordionItem icon="Trash2" title="Remove" summary="From one app, or from all of them" tone="error">
+        <AccordionItem key={`remove-${detailFocus === "remove" ? "focus" : ""}`} icon="Trash2" title="Remove" summary="From one app, or from all of them" tone="error" open={detailFocus === "remove"}>
           {removePanel(server)}
         </AccordionItem>
       </Accordion>
@@ -2002,7 +2030,17 @@ function McpBody({ layout, host, addRequest, checkRequest }: PluginSurfaceProps 
       <AccordionItem icon="Boxes" title="Built-in tools" summary={paseoToolsTitle(paseoToolsQuery.data, Boolean(paseoToolsQuery.error))}>
         <PaseoToolsCard hostLabel={host.label} />
       </AccordionItem>
-      <AccordionItem icon="ChartColumn" title="Totals and last check" summary={`${plural(servers.length, "connector")} · ${plural(destinations.length, "app account")}`}>
+      {builtInServers.length > 0 ? (
+        <AccordionItem icon="Package" title={BUILT_IN_LABEL} summary={builtInServers.map((entry) => entry.name).join(", ")}>
+          <Text style={t.text.body}>{BUILT_IN_NOTE}</Text>
+          <Card padded={false} level={2}>
+            {builtInServers.map((entry, index) => (
+              <Row key={entry.name} first={index === 0} title={entry.name} meta={<Text style={t.text.caption}>{appsLine(entry.presentIn, destinations).line.split(" · ")[0]}</Text>} onPress={() => selectServer(entry.name)} />
+            ))}
+          </Card>
+        </AccordionItem>
+      ) : null}
+      <AccordionItem icon="ChartColumn" title="Totals and last check" summary={`${plural(ownServers.length, "connector")} · ${plural(destinations.length, "app account")}`}>
         {summaryStrip}
       </AccordionItem>
     </Accordion>
@@ -2012,6 +2050,7 @@ function McpBody({ layout, host, addRequest, checkRequest }: PluginSurfaceProps 
     <CatalogGallery
       destinations={destinations}
       owned={owned}
+      ownedReady={ready}
       onClose={() => setCatalogOpen(false)}
       onAddByHand={(name) => {
         setCatalogOpen(false);
@@ -2035,16 +2074,6 @@ function McpBody({ layout, host, addRequest, checkRequest }: PluginSurfaceProps 
         actions={
           <>
             <Button label="Add connector" icon="Plus" variant="primary" onPress={() => setCatalogOpen(true)} />
-            {/* One Refresh: settings, health, sign-in and every connector's tool list. */}
-            <Button
-              label="Refresh"
-              variant="ghost"
-              loading={matrixQuery.isFetching || healthQuery.isFetching || authQuery.isFetching || toolsQuery.isFetching}
-              onPress={() => {
-                refreshAll();
-                void toolsQuery.refetch();
-              }}
-            />
           </>
         }
       />
@@ -2309,30 +2338,25 @@ function McpBody({ layout, host, addRequest, checkRequest }: PluginSurfaceProps 
     else if (target.to === "add") { go("servers", { server: null }); setCatalogOpen(true); }
     else { setExtraOpen("backup"); go("servers", { server: null, filter: "all" }); }
   };
+  // 0.19.2: folded questions only, as in every plugin. How connectors work is one of them.
   const helpSection = (
-    <View style={{ gap: t.space.section }}>
-      <View style={{ gap: t.space.row }}>
-        <SectionTitle icon="CircleHelp">Common questions</SectionTitle>
-        <Accordion>
-          {HELP_QUESTIONS.map((item) => (
-            <AccordionItem key={item.question} icon={item.icon} title={item.question}>
-              {item.answer.map((line) => (
-                <Text key={line} style={t.text.body}>{line.split("{host}").join(host.label)}</Text>
-              ))}
-              {item.action ? (
-                <View style={{ flexDirection: "row" }}>
-                  <Button label={item.action.label} onPress={() => helpAction(item.action!.target)} />
-                </View>
-              ) : null}
-            </AccordionItem>
+    <Accordion>
+      {HELP_QUESTIONS.map((item) => (
+        <AccordionItem key={item.question} icon={item.icon} title={item.question}>
+          {item.answer.map((line) => (
+            <Text key={line} style={t.text.body}>{line.split("{host}").join(host.label)}</Text>
           ))}
-        </Accordion>
-      </View>
-      <View style={{ gap: t.space.row }}>
-        <SectionTitle icon="BookOpen">How connectors work</SectionTitle>
-        <GuideCard apps={appNames(destinations)} onAdd={() => { go("servers", { server: null }); setCatalogOpen(true); }} onCopy={() => setCopyOpen(true)} />
-      </View>
-    </View>
+          {item.action ? (
+            <View style={{ flexDirection: "row" }}>
+              <Button label={item.action.label} onPress={() => helpAction(item.action!.target)} />
+            </View>
+          ) : null}
+        </AccordionItem>
+      ))}
+      <AccordionItem icon="BookOpen" title={HOW_IT_WORKS_QUESTION}>
+        <GuideParts apps={appNames(destinations)} onAdd={() => { go("servers", { server: null }); setCatalogOpen(true); }} onCopy={() => setCopyOpen(true)} />
+      </AccordionItem>
+    </Accordion>
   );
 
   const content = copyOpen
@@ -2353,7 +2377,24 @@ function McpBody({ layout, host, addRequest, checkRequest }: PluginSurfaceProps 
       {/* Padded the same way as Screen below, so the header, the tab bar and the content share one left edge. */}
       <View style={{ paddingHorizontal: pad, paddingTop: pad }}>
         <View style={{ width: "100%", maxWidth: t.maxWidth, alignSelf: "center", gap: t.space.row }}>
-          <Header title={MCP_NAME} status={headerPill} caption={ready ? `${plural(servers.length, "connector")} on ${host.label}` : `on ${host.label}`} />
+          <Header
+            title={MCP_NAME}
+            status={headerPill}
+            caption={ready ? `${plural(ownServers.length, "connector")} on ${host.label}` : `on ${host.label}`}
+            // One Refresh, in the header (0.19.2, as in Memories): settings, health, sign-in and every connector's tool list.
+            trailing={
+              <Button
+                label="Refresh"
+                icon="RefreshCw"
+                variant="ghost"
+                loading={matrixQuery.isFetching || healthQuery.isFetching || authQuery.isFetching || toolsQuery.isFetching}
+                onPress={() => {
+                  refreshAll();
+                  void toolsQuery.refetch();
+                }}
+              />
+            }
+          />
           <TabBar active={section} onSelect={(next) => { setCopyOpen(false); go(next, next === "servers" ? { server: null } : {}); }} />
         </View>
       </View>
@@ -2439,7 +2480,7 @@ export function McpWorkspacePanel(props: PluginWorkspacePanelProps) {
 export function WorkspaceBody({
   host,
   workspaceId,
-  caption = "this project's connectors and sign-in",
+  caption = "Connectors for this project",
   intro,
   providerId,
   agentId,
@@ -2575,21 +2616,34 @@ export function WorkspaceBody({
   });
 
   const data = workspaceQuery.data;
-  // What an agent here loads, by name, so health issues can be split into
-  // "this workspace" and "elsewhere" on the same basis as the budget card.
+  const healthByName = useMemo(
+    () => (healthQuery.data ? new Map(healthQuery.data.results.map((entry) => [entry.name, entry] as const)) : null),
+    [healthQuery.data],
+  );
+  // What a chat here loads, by name (0.19.2: the switch list when it's read, so a connector switched off here
+  // doesn't count), so problems split into "here" and "elsewhere" on the same basis as the list.
   const loaded = useMemo(() => {
+    const list = agentServersQuery.data;
+    if (list) {
+      const names = new Set(list.servers.filter((entry) => entry.enabled.state !== "disabled").map((entry) => entry.name));
+      for (const entry of list.pluginServers ?? []) names.add(entry.name);
+      return names;
+    }
     if (!data?.profile) return null;
     const names = new Set((pickLoad(data, providerId)?.servers ?? []).map((entry) => entry.name));
     for (const entry of data.profile.project) names.add(entry.name);
     return names;
-  }, [data, providerId]);
-  const attention = useMemo(() => {
-    if (!healthQuery.data) return null;
+  }, [agentServersQuery.data, data, providerId]);
+  const account = agentServersQuery.data?.account ?? null;
+  const problems = useMemo(() => {
+    if (!healthQuery.data || !loaded) return null;
     const directory = workspace?.directory ?? "";
     const { issues, project } = splitIssues(healthQuery.data, directory);
-    const here = issues.filter((entry) => healthNeedsAttention(entry.status) && (loaded ? loaded.has(entry.name) : project.includes(entry))).length;
-    return { here, elsewhere: issues.length - here };
-  }, [healthQuery.data, loaded, workspace]);
+    const broken = (entry: McpHealth) => entry.status === "down" || entry.status === "binary-missing";
+    const here = issues.filter((entry) => loaded.has(entry.name) || (loaded.size === 0 && project.includes(entry))).sort((x, y) => Number(broken(y)) - Number(broken(x)) || x.name.localeCompare(y.name));
+    const signIn = account ? [...loaded].filter((name) => (account.needsAuth.includes(name) || account.authStatus[name] === "not-connected") && !here.some((entry) => entry.name === name)).sort() : [];
+    return { here, broken: here.filter(broken).length, signIn, elsewhere: issues.filter((entry) => !here.includes(entry)) };
+  }, [healthQuery.data, loaded, account, workspace]);
   const server: ProjectMcpServer | undefined = selected
     ? data?.servers.find((entry) => entry.name === selected)
     : undefined;
@@ -2637,17 +2691,20 @@ export function WorkspaceBody({
       />
     ) : null;
   const workspaceStale = workspaceQuery.isError && Boolean(data);
-  const pill = !workspace
-    ? { status: "error" as Status, label: "Workspace unavailable" }
+  // 0.19.2: the header says whether this chat's connectors work, "Checking…" until every read is in.
+  const pill: { status: Status; label: string } = !workspace
+    ? { status: "error", label: "Workspace unavailable" }
     : workspaceQuery.isError && !data
-      ? { status: "error" as Status, label: "Host unavailable" }
-      : workspaceStale
-        ? { status: "attention" as Status, label: `As of ${readAt(workspaceQuery.dataUpdatedAt)}` }
-      : !data
-        ? { status: "neutral" as Status, label: "Reading" }
-        : data.servers.length === 0
-          ? { status: "neutral" as Status, label: "No project connectors" }
-          : { status: "ok" as Status, label: plural(data.servers.length, "project connector") };
+      ? { status: "error", label: "Host unavailable" }
+      : !problems || (switchProvider !== "" && agentServersQuery.isLoading)
+        ? { status: "neutral", label: "Checking…" }
+        : problems.broken > 0
+          ? { status: "error", label: `${problems.broken} broken` }
+          : problems.here.length > 0
+            ? { status: "attention", label: plural(problems.here.length, "warning") }
+            : problems.signIn.length > 0
+              ? { status: "attention", label: `${problems.signIn.length} need${problems.signIn.length === 1 ? "s" : ""} sign-in` }
+              : { status: "ok", label: "All working" };
 
   const body = !workspace ? (
     <EmptyState title="Workspace unavailable" body="This Paseo workspace no longer exists." />
@@ -2665,15 +2722,14 @@ export function WorkspaceBody({
   ) : server && data ? (
     <View style={{ gap: t.space.section }}>
       <View style={{ flexDirection: "row" }}>
-        <Button label={`← Workspace ${MCP_NAME_LOWER}`} variant="ghost" onPress={() => setSelected(null)} />
+        <Button label="← Back" variant="ghost" onPress={() => setSelected(null)} />
       </View>
       <View style={{ gap: t.space.sm }}>
         <View style={{ flexDirection: "row", alignItems: "center", gap: t.space.sm }}>
           <Text style={[t.text.display, { flexShrink: 1 }]} numberOfLines={1}>{server.name}</Text>
-          <Tag label={server.transport} />
-          {projectOauthAccounts.length > 0 ? <Tag label={`sign-in on ${projectOauthAccounts.length}`} /> : null}
+          <ServerHealthTag name={server.name} />
         </View>
-        {server.detail ? <Text style={t.text.caption}>{server.detail}</Text> : null}
+        <Text style={t.text.body}>{`This project's own connector · ${server.transport === "http" ? "on the web" : "runs on this computer"}`}</Text>
       </View>
       {server.authStyle === "inline-credentials" ? (
         <Notice tone="ok">This project's server already includes its key; no sign-in needed here.</Notice>
@@ -2730,49 +2786,112 @@ export function WorkspaceBody({
       {workspaceStale ? (
         <StaleNote what="this workspace" at={readAt(workspaceQuery.dataUpdatedAt)} reason={errorText(workspaceQuery.error)} onRetry={refresh} />
       ) : null}
-      {switchProvider ? (
-        <AgentServers
-          data={agentServersQuery.data}
-          loading={agentServersQuery.isLoading}
-          error={agentServersQuery.error}
-          providerLabel={providerName(agentServersQuery.data?.scope?.provider ?? switchProvider)}
-          onToggle={(name, enabled) => setEnabledMutation.mutate({ name, enabled })}
-          toggling={setEnabledMutation.isPending ? setEnabledMutation.variables?.name ?? null : null}
-          toolsByName={toolsByName}
-          signIn={(entry) => authFor(entry.name, agentServersQuery.data?.account ?? null, entry.inlineCredentials, entry.transport)}
-        />
+      {problems && (problems.here.length > 0 || problems.signIn.length > 0) ? (
+        <Section title="Needs a look">
+          <Card padded={false}>
+            {problems.here.map((entry, index) => (
+              <Row
+                key={entry.name}
+                first={index === 0}
+                tone={healthStatus(entry.status)}
+                title={entry.name}
+                meta={
+                  <View style={{ gap: t.space.hair }}>
+                    <View style={{ flexDirection: "row" }}>
+                      <StatusPill status={healthStatus(entry.status)} label={healthWord(entry.status)} />
+                    </View>
+                    <Text style={t.text.caption}>{healthPlainNote(entry.status)}</Text>
+                  </View>
+                }
+                trailing={canOpenMcp() ? <Button label="Fix" variant="primary" onPress={() => openMcp(entry.name)} /> : undefined}
+              />
+            ))}
+            {problems.signIn.map((name, index) => {
+              const entry = agentServersQuery.data?.servers.find((candidate) => candidate.name === name) ?? null;
+              const rows = entry ? authFor(entry.name, account, entry.inlineCredentials, entry.transport) : null;
+              return (
+                <Row
+                  key={`sign-in:${name}`}
+                  first={index === 0 && problems.here.length === 0}
+                  tone="attention"
+                  title={name}
+                  meta={
+                    <View style={{ flexDirection: "row" }}>
+                      <StatusPill status="attention" label="Needs sign-in" />
+                    </View>
+                  }
+                  trailing={!rows && canOpenMcp() ? <Button label="Sign in" onPress={() => openMcp(name)} /> : undefined}
+                  expanded={rows}
+                />
+              );
+            })}
+          </Card>
+        </Section>
       ) : null}
-      <Section title="This project's own connectors">
-      <Facts
-        items={[
-          { value: data.configPath || "No .mcp.json file" },
-          { value: plural(data.servers.length, "project connector") },
-        ]}
-      />
-      <Card padded={false}>
-        {data.servers.length === 0 ? (
-          <EmptyState
-            title={data.configPath ? "No connectors of its own" : "This project has no connectors of its own"}
-            body={data.configPath ? "Its .mcp.json file is there but lists no connectors." : "A project lists its own connectors in a file called .mcp.json in its top folder."}
+      {switchProvider ? (
+        <Section
+          title={agentId ? "Connectors this chat loads" : `Connectors a ${providerName(agentServersQuery.data?.scope?.provider ?? switchProvider)} chat here loads`}
+          trailing={canOpenMcp() ? <Button label={`All ${MCP_NAME_LOWER}`} variant="ghost" onPress={() => openMcp()} /> : undefined}
+        >
+          <AgentServers
+            data={agentServersQuery.data}
+            loading={agentServersQuery.isLoading}
+            error={agentServersQuery.error}
+            onToggle={(name, enabled) => setEnabledMutation.mutate({ name, enabled })}
+            toggling={setEnabledMutation.isPending ? setEnabledMutation.variables?.name ?? null : null}
+            toolsByName={toolsByName}
+            health={healthByName}
+            signIn={(entry) => (problems?.signIn.includes(entry.name) ? null : authFor(entry.name, account, entry.inlineCredentials, entry.transport))}
           />
+        </Section>
+      ) : null}
+      <Accordion>
+        {chatSection}
+        <AccordionItem icon="FolderCode" title="This project's own connectors" summary={data.servers.length === 0 ? "None" : plural(data.servers.length, "connector")}>
+          {data.servers.length === 0 ? (
+            <Text style={t.text.body}>{data.configPath ? "Its .mcp.json file is there but lists no connectors." : "This project has none. A project lists its own connectors in a file called .mcp.json in its top folder."}</Text>
+          ) : (
+            <Card padded={false} level={2}>
+              {data.servers.map((entry, index) => (
+                <Row key={entry.name} first={index === 0} title={entry.name} onPress={() => setSelected(entry.name)} trailing={<ServerHealthTag name={entry.name} />} />
+              ))}
+            </Card>
+          )}
+        </AccordionItem>
+        {problems && problems.elsewhere.length > 0 ? (
+          <AccordionItem icon="TriangleAlert" title="Problems elsewhere" summary={`${plural(problems.elsewhere.length, "connector")} this chat doesn't load`}>
+            <Text style={t.text.body}>These don't affect this chat. They show as the dot on Connectors in the sidebar.</Text>
+            <Card padded={false} level={2}>
+              {problems.elsewhere.map((entry, index) => (
+                <Row
+                  key={entry.name}
+                  first={index === 0}
+                  title={entry.name}
+                  meta={<View style={{ flexDirection: "row" }}><StatusPill status={healthStatus(entry.status)} label={healthWord(entry.status)} /></View>}
+                  trailing={canOpenMcp() ? <Button label="Fix" onPress={() => openMcp(entry.name)} /> : undefined}
+                />
+              ))}
+            </Card>
+          </AccordionItem>
         ) : null}
-        {data.servers.map((entry, index) => (
-          <Row
-            key={entry.name}
-            first={index === 0}
-            title={entry.name}
-            subtitle={entry.detail}
-            onPress={() => setSelected(entry.name)}
-            trailing={
-              <View style={{ flexDirection: "row", alignItems: "center", gap: t.space.xs }}>
-                <ServerHealthTag name={entry.name} />
-                <Tag label={entry.transport} />
-              </View>
-            }
-          />
-        ))}
-      </Card>
-      </Section>
+        <AccordionItem icon="SlidersHorizontal" title="Technical details" summary="Files, programs running now, and how each switch works">
+          {intro}
+          <Facts items={[{ value: data.configPath || "No .mcp.json in this project" }, healthQuery.data ? { value: healthCheckedLabel(healthQuery.data, (iso) => new Date(iso).toLocaleString()) } : null]} />
+          <LoadDetails data={data} providerId={providerId} added={agentId ? agentServersQuery.data?.pluginServers : undefined} />
+          {agentServersQuery.data && agentServersQuery.data.servers.length > 0 ? (
+            <View style={{ gap: t.space.xs }}>
+              <Text style={t.text.label}>{agentServersQuery.data.scope ? `Settings: ${agentServersQuery.data.scope.label}` : "No settings found for this chat's AI app"}</Text>
+              {agentServersQuery.data.servers.map((entry) => (
+                <Text key={entry.name} style={t.text.caption}>{`${entry.name} (${entry.transport}): ${entry.enabled.reason}${entry.detail ? ` ${entry.detail}` : ""}`}</Text>
+              ))}
+              {!agentServersQuery.data.projectIncluded && agentServersQuery.data.projectNote ? <Text style={t.text.caption}>{agentServersQuery.data.projectNote}.</Text> : null}
+            </View>
+          ) : null}
+          {data.servers.map((entry) => (
+            <Text key={`project:${entry.name}`} style={t.text.caption}>{`${entry.name} (${entry.transport}, .mcp.json): ${entry.detail}`}</Text>
+          ))}
+        </AccordionItem>
+      </Accordion>
     </View>
   ) : null;
 
@@ -2780,8 +2899,13 @@ export function WorkspaceBody({
   return (
     <View style={{ flex: 1, backgroundColor: t.color.surface0 }}>
       <View style={{ padding: pad, paddingBottom: t.space.row, gap: t.space.row, width: "100%", maxWidth: t.maxWidth, alignSelf: "center" }}>
-        <Header title={workspace?.name ?? `Workspace ${MCP_NAME_LOWER}`} status={pill} caption={`${caption} · on ${host.label}`} icon={agentId ? "Bot" : "FolderCode"} />
-        {intro}
+        <Header
+          title={workspace?.name ?? MCP_NAME}
+          status={pill}
+          caption={caption}
+          icon={agentId ? "Bot" : "FolderCode"}
+          trailing={<Button label="Refresh" icon="RefreshCw" variant="ghost" loading={workspaceQuery.isFetching || healthQuery.isFetching} onPress={refresh} />}
+        />
         {signInFocus && agentId ? (
           <SignInFocus
             server={signInFocus}
@@ -2791,12 +2915,6 @@ export function WorkspaceBody({
             onDismiss={() => setSignInFocus(agentId, null)}
           />
         ) : null}
-        {data && !server ? <WorkspaceContext data={data} providerId={providerId} attention={attention} added={agentId ? agentServersQuery.data?.pluginServers : undefined} /> : null}
-        {data && !server ? chatSection : null}
-        <HealthSummary directory={workspace?.directory ?? ""} names={loaded} />
-        <View style={{ flexDirection: "row" }}>
-          <Button label="Refresh" variant="ghost" loading={workspaceQuery.isFetching || healthQuery.isFetching} onPress={refresh} />
-        </View>
       </View>
       <Screen t={t} paddingTop={t.space.xs}>{body}</Screen>
     </View>

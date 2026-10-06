@@ -3,7 +3,7 @@ import { useAgent, useSettings } from "@getpaseo/plugin/client";
 import React from "react";
 import { Text, View } from "react-native";
 import { injectionSettings, injectionTargets } from "../shared/settings";
-import { ContextSection } from "./chat";
+import { UnusedInChatItem } from "./chat";
 import { WorkspaceBody } from "./mcp";
 import { Tag, TokensProvider, useTokens, useUi, type Status } from "./ui";
 
@@ -13,7 +13,7 @@ function providerLabel(provider: string): string {
   return provider;
 }
 
-/** One line: which provider this agent runs on, and whether injection applies to it. */
+/** Under Technical details: which app this chat runs on, and whether project connectors are added to it. */
 function AgentIntro({ agentId }: { agentId: string }) {
   const t = useTokens();
   const agent = useAgent(agentId, ({ provider, model }) => ({ provider, model }));
@@ -22,7 +22,7 @@ function AgentIntro({ agentId }: { agentId: string }) {
 
   const injection: { label: string; tone: Status } =
     settings.status === "loading"
-      ? { label: "Reading project-connector settings", tone: "neutral" }
+      ? { label: "Checking…", tone: "neutral" }
       : settings.status !== "ready"
         ? { label: "Project-connector settings unavailable", tone: "attention" }
         : !settings.values.injectWorkspaceServers
@@ -56,11 +56,11 @@ export function McpAgentPanel(props: PluginAgentPanelProps) {
         key={`${props.workspaceId}:${props.agentId}`}
         host={props.host}
         workspaceId={props.workspaceId}
-        caption="Connectors this agent loads"
+        caption="Connectors for this chat"
         intro={<AgentIntro agentId={props.agentId} />}
         providerId={provider ?? undefined}
         agentId={props.agentId}
-        chatSection={<ContextSection workspaceId={props.workspaceId} agentId={props.agentId} providerId={provider} />}
+        chatSection={<UnusedInChatItem workspaceId={props.workspaceId} agentId={props.agentId} providerId={provider} />}
       />
     </TokensProvider>
   );

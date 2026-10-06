@@ -23,6 +23,8 @@ export const McpServerRowSchema = z.object({
   authStyle: z.enum(["inline-credentials", "oauth-or-none"]),
   inlineCredentialsIn: z.array(z.string()),
   presentIn: z.array(z.string()), // destination ids
+  // 0.19.2: a tool the Codex app ships (shared/builtin.ts). Absent from older hosts.
+  builtIn: z.boolean().optional(),
 });
 export type McpServerRow = z.infer<typeof McpServerRowSchema>;
 
@@ -424,6 +426,12 @@ export const McpHealthScopeSchema = z.object({
   // config ("" for a slot no provider is wired to), so the composer chip can
   // tell which chats a failing connector belongs to. Absent from older reports.
   providerId: z.string().optional(),
+  // 0.19.2, user level only: what this config switches off. `off`: everywhere
+  // (Codex `enabled = false`). `offIn`: the folders whose sessions leave it out
+  // (Claude's per-project `disabledMcpServers`). A chat started there doesn't
+  // load it, so its chip doesn't count it. Absent from older reports.
+  off: z.boolean().optional(),
+  offIn: z.array(z.string()).optional(),
 });
 export type McpHealthScope = z.infer<typeof McpHealthScopeSchema>;
 
@@ -436,6 +444,8 @@ export const McpHealthSchema = z.object({
   note: z.string(),
   // Every config that defines this server. Absent on results from older hosts.
   scopes: z.array(McpHealthScopeSchema).default([]),
+  // 0.19.2: a tool the Codex app ships; never counted as a problem. Absent from older hosts.
+  builtIn: z.boolean().optional(),
 });
 export type McpHealth = z.infer<typeof McpHealthSchema>;
 
@@ -574,6 +584,11 @@ export const mcpToolsCached = defineRpc({
  */
 export function healthNeedsAttention(status: McpHealthStatus): boolean {
   return status !== "ok" && status !== "unknown" && status !== "auth-required";
+}
+
+/** A health result the user has to act on: its status needs attention and it isn't a tool the Codex app ships (0.19.2). */
+export function resultNeedsAttention(entry: { status: McpHealthStatus; builtIn?: boolean }): boolean {
+  return !entry.builtIn && healthNeedsAttention(entry.status);
 }
 
 /** Sign-in state: the server is up but this probe carried no grant. */

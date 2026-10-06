@@ -1,5 +1,6 @@
 import type { PluginHandlerContext } from "@getpaseo/plugin/server";
 import { isPaseoOwnServer, placeLabel, sameDefinition, type CopyPlanServer, type CopyResult } from "../shared/copy-all";
+import { BUILT_IN_LABEL, isCodexBuiltIn } from "../shared/builtin";
 import type { Destination } from "../shared/contracts";
 import type { Dialect } from "../shared/mcpjson";
 import {
@@ -145,6 +146,10 @@ function planFrom(destinations: Destination[]): { servers: Plan[]; excluded: Arr
     const anyDef = holders.map((dest) => defs.get(dest.id)?.[name]).find(Boolean);
     if (anyDef && isPaseoOwnServer(name, anyDef)) {
       excluded.push({ name, reason: "Paseo's own tools: Paseo adds them to its agents itself." });
+      continue;
+    }
+    if (isCodexBuiltIn(name, anyDef, holders.map((dest) => dest.provider))) {
+      excluded.push({ name, reason: `${BUILT_IN_LABEL}: Codex adds it itself, and other apps can't run it.` });
       continue;
     }
     if (gaps.length === 0) continue;

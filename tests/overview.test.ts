@@ -45,7 +45,7 @@ test("counts read naturally in the singular and the plural", () => {
 
 test("before there is data: connecting, unavailable, or a stale read says so", () => {
   const loading = { ...calm, state: "loading" as const };
-  assert.deepEqual(overviewVerdict(loading), { status: "neutral", label: "Connecting" });
+  assert.deepEqual(overviewVerdict(loading), { status: "neutral", label: "Checking…" });
   assert.deepEqual(overviewNextStep(loading).target, { section: "refresh" });
   assert.match(overviewNextStep(loading).detail, /on paseo/);
 

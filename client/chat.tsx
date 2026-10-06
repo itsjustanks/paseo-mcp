@@ -1,4 +1,4 @@
-/** The agent's context meter, what its chat used, and the in-chat sign-in card (0.14.0). */
+/** What an agent's chat used (the agent panel's fold-out) and the in-chat sign-in card (0.14.0). */
 import type { PluginTimelineItemProps } from "@getpaseo/plugin/client";
 import { useAgent, useRpc } from "@getpaseo/plugin/client";
 import { useToast } from "@getpaseo/plugin/client/react-native";
@@ -7,12 +7,11 @@ import React, { useMemo, useState } from "react";
 import { Text, View } from "react-native";
 import { z } from "zod";
 import { planTurnOffUnused, usedLine, usedUnused } from "../shared/chat";
-import { mcpAgentChat, mcpAgentServers, mcpTurnOffUnused, type AgentMeter } from "../shared/contracts";
-import { basisWord, shortTokens, usageLine, UNLISTED_SERVER_TOKENS } from "../shared/meter";
+import { mcpAgentChat, mcpAgentServers, mcpTurnOffUnused } from "../shared/contracts";
 import { CHECKING_POLL_MS, backoffMs, failureStreak } from "../shared/schedule";
 import { SWITCH_EFFECT_NOTE } from "../shared/enabled";
 import { setSignInFocus } from "./focus";
-import { Button, Card, Disclosure, Loading, Meter, Notice, Row, Section, Tag, TokensProvider, useTokens, useUi } from "./ui";
+import { AccordionItem, Button, Loading, Notice, TokensProvider, useTokens, useUi } from "./ui";
 
 export const AGENT_CHAT_QUERY_KEY = ["paseo-mcp", "agent-chat"] as const;
 
@@ -43,14 +42,6 @@ function plural(count: number, word: string): string {
   return `${count} ${word}${count === 1 ? "" : "s"}`;
 }
 
-/** "14 connectors · ≈38k tokens of tool definitions", or deferred. */
-export function meterHeadline(meter: AgentMeter): string {
-  const head = plural(meter.servers, "connector");
-  return meter.deferred
-    ? `${head} · definitions deferred (tool search is on; ≈${shortTokens(meter.tokens)} if all loaded)`
-    : `${head} · ≈${shortTokens(meter.tokens)} tokens of tool definitions`;
-}
-
 // ------------------------------------------------------------------ panel
 
 /**
@@ -66,13 +57,17 @@ export function turnOffBlocker(read: { chat: { complete: boolean } | null; stale
 }
 
 /**
- * The agent panel's context section: the meter, this chat's context use, the
- * heaviest servers, what the chat used and what it loaded without using, and
- * one action that turns the unused ones off for this workspace. The host
- * decides that on a fresh read of the whole chat and refuses if the list
- * shown here is no longer right (server/chat.ts `handleMcpTurnOffUnused`).
+ * The agent panel's "Not used in this chat" fold-out (0.19.2): what the chat
+ * used and what it loaded without using, and one action that turns the unused
+ * ones off for this workspace. The host decides that on a fresh read of the
+ * whole chat and refuses if the list shown here is no longer right
+ * (server/chat.ts `handleMcpTurnOffUnused`).
+ *
+ * 0.19.2 removed the context estimate ("≈108k if all loaded", heaviest
+ * connectors, "JSON ÷ 4"): Paseo shows a chat's context use itself, and the
+ * standard says never to duplicate a number Paseo already shows.
  */
-export function ContextSection({ workspaceId, agentId, providerId }: { workspaceId: string; agentId: string; providerId: string | null | undefined }) {
+export function UnusedInChatItem({ workspaceId, agentId, providerId }: { workspaceId: string; agentId: string; providerId: string | null | undefined }) {
   const t = useTokens();
   const toast = useToast();
   const queryClient = useQueryClient();
@@ -92,21 +87,16 @@ export function ContextSection({ workspaceId, agentId, providerId }: { workspace
   const [running, setRunning] = useState(false);
 
   const data = read.data;
-  const meter = data?.meter ?? null;
   const chat = data?.chat ?? null;
   const split = useMemo(() => (chat ? usedUnused(chat.loaded, chat.calls) : null), [chat]);
   const plan = useMemo(
     () => (chat && serversQuery.data ? planTurnOffUnused(serversQuery.data.servers, chat.calls) : null),
     [chat, serversQuery.data],
   );
+  if (!provider || (read.isError && !data)) return null;
 
-  if (!provider) return null;
-  if (!data) {
-    if (read.isError) return null;
-    return <Loading label="Estimating what this agent's connectors cost…" />;
-  }
-
-  const blocker = turnOffBlocker(data);
+  const blocker = data ? turnOffBlocker(data) : null;
+  const summary = !split ? "Checking…" : split.unused.length === 0 ? "It has used every connector it loads" : `${plural(split.unused.length, "connector")} loaded but not used yet`;
 
   const turnOff = async () => {
     if (!plan) return;
@@ -114,9 +104,9 @@ export function ContextSection({ workspaceId, agentId, providerId }: { workspace
     try {
       const result = await callTurnOff({ workspaceId, providerId: provider, agentId, expected: plan.off });
       if (result.done.length) toast.show(result.failed.length ? `Off for this workspace: ${result.done.join(", ")}. New sessions start without them.` : result.message, { variant: "success" });
-      if (result.refused || result.failed.length) toast.error(result.refused ? result.message : `Not changed: ${result.failed.join(", ")}. Try their switches below.`);
+      if (result.refused || result.failed.length) toast.error(result.refused ? result.message : `Not changed: ${result.failed.join(", ")}. Try their switches above.`);
     } catch {
-      toast.error("The host did not answer. Check the switches below before trying again.");
+      toast.error("The host did not answer. Check the switches above before trying again.");
     }
     setRunning(false);
     setArmed(false);
@@ -124,72 +114,40 @@ export function ContextSection({ workspaceId, agentId, providerId }: { workspace
     void queryClient.invalidateQueries({ queryKey: AGENT_CHAT_QUERY_KEY });
   };
 
-  const usage = data.usage;
   return (
-    <Section title="Context">
-      <View style={{ gap: t.space.sm }}>
-        {meter ? <Text style={t.text.bodyStrong}>{meterHeadline(meter)}</Text> : <Text style={t.text.caption}>Estimating…</Text>}
-        {usage ? (
-          <Meter fraction={usage.usedTokens / usage.maxTokens} label={usageLine(usage, meter)} tone={usage.usedTokens / usage.maxTokens >= 0.8 ? "attention" : "neutral"} />
-        ) : data.checking && !chat ? null : (
-          <Text style={t.text.caption}>This agent has not reported its context use yet.</Text>
-        )}
-        {meter && meter.defaults > 0 ? (
-          <Text style={t.text.caption}>
-            {`Estimates: listed connectors are measured from their tool lists (JSON ÷ 4). ${plural(meter.defaults, "connector")} could not be listed and count at a ${shortTokens(UNLISTED_SERVER_TOKENS)} default.`}
-          </Text>
-        ) : meter ? (
-          <Text style={t.text.caption}>Estimates: measured from each connector's tool list (JSON ÷ 4).</Text>
-        ) : null}
-        {meter && meter.costs.length > 0 ? (
-          <Disclosure title="Heaviest connectors" open>
-            <Card padded={false}>
-              {meter.costs.map((entry, index) => (
-                <Row
-                  key={entry.name}
-                  first={index === 0}
-                  title={entry.name}
-                  meta={<Text style={t.text.caption}>{basisWord(entry.basis)}</Text>}
-                  trailing={<Tag label={`≈${shortTokens(entry.tokens)}`} tone={entry.basis === "default" ? "neutral" : undefined} />}
-                />
-              ))}
-            </Card>
-          </Disclosure>
-        ) : null}
-        {chat && split ? (
-          <View style={{ gap: t.space.xs }}>
-            <Text style={t.text.body}>{split.used.length ? `Used in this chat: ${usedLine(split.used)}` : "Used in this chat: no connector tool calls yet"}</Text>
-            <Text style={t.text.body}>{`Loaded but unused: ${split.unused.length}`}</Text>
-            {split.unused.length > 0 ? <Text style={t.text.caption}>{split.unused.join(", ")}</Text> : null}
-            {chat.truncated ? <Text style={t.text.caption}>{`Read the last ${chat.scanned.toLocaleString()} timeline items; older calls are not counted.`}</Text> : null}
-          </View>
-        ) : data.checking ? (
-          <Loading label="Reading this chat…" />
-        ) : null}
-        {blocker ? <Text style={t.text.caption}>{blocker}</Text> : null}
-        {plan && plan.off.length > 0 && !blocker && !armed ? (
-          <View style={{ flexDirection: "row" }}>
-            <Button label="Turn off the unused ones for this workspace" onPress={() => setArmed(true)} />
-          </View>
-        ) : null}
-        {plan && armed && !blocker ? (
-          <Notice tone="attention">
-            <View style={{ gap: t.space.sm }}>
-              <Text style={t.text.bodyStrong}>{`Turn off ${plural(plan.off.length, "connector")} for this workspace?`}</Text>
-              <Text style={t.text.body}>{plan.off.join(", ")}</Text>
-              {plan.kept.length > 0 ? (
-                <Text style={t.text.caption}>{`Left as they are, with no switch for this provider: ${plan.kept.map((entry) => entry.name).join(", ")}.`}</Text>
-              ) : null}
-              <Text style={t.text.caption}>{`${SWITCH_EFFECT_NOTE} Each switch is the one in the list below; turn any back on there.`}</Text>
-              <View style={{ flexDirection: "row", gap: t.space.sm }}>
-                <Button label={`Turn off ${plan.off.length}`} variant="danger" loading={running} onPress={() => void turnOff()} />
-                <Button label="Cancel" variant="ghost" disabled={running} onPress={() => setArmed(false)} />
-              </View>
+    <AccordionItem icon="Archive" title="Not used in this chat" summary={summary}>
+      {chat && split ? (
+        <View style={{ gap: t.space.xs }}>
+          <Text style={t.text.body}>{split.used.length ? `Used in this chat: ${usedLine(split.used)}` : "This chat hasn't used a connector yet."}</Text>
+          {split.unused.length > 0 ? <Text style={t.text.body}>{`Loaded but not used: ${split.unused.join(", ")}`}</Text> : null}
+          {chat.truncated ? <Text style={t.text.caption}>{`Read the last ${chat.scanned.toLocaleString()} messages; older ones are not counted.`}</Text> : null}
+        </View>
+      ) : (
+        <Loading label="Reading this chat…" />
+      )}
+      {blocker ? <Text style={t.text.caption}>{blocker}</Text> : null}
+      {plan && plan.off.length > 0 && !blocker && !armed ? (
+        <View style={{ flexDirection: "row" }}>
+          <Button label="Turn off the unused ones for this workspace" onPress={() => setArmed(true)} />
+        </View>
+      ) : null}
+      {plan && armed && !blocker ? (
+        <Notice tone="attention">
+          <View style={{ gap: t.space.sm }}>
+            <Text style={t.text.bodyStrong}>{`Turn off ${plural(plan.off.length, "connector")} for this workspace?`}</Text>
+            <Text style={t.text.body}>{plan.off.join(", ")}</Text>
+            {plan.kept.length > 0 ? (
+              <Text style={t.text.caption}>{`Left as they are, with no switch for this app: ${plan.kept.map((entry) => entry.name).join(", ")}.`}</Text>
+            ) : null}
+            <Text style={t.text.caption}>{`${SWITCH_EFFECT_NOTE} Turn any back on with its switch above.`}</Text>
+            <View style={{ flexDirection: "row", gap: t.space.sm }}>
+              <Button label={`Turn off ${plan.off.length}`} variant="danger" loading={running} onPress={() => void turnOff()} />
+              <Button label="Cancel" variant="ghost" disabled={running} onPress={() => setArmed(false)} />
             </View>
-          </Notice>
-        ) : null}
-      </View>
-    </Section>
+          </View>
+        </Notice>
+      ) : null}
+    </AccordionItem>
   );
 }
 

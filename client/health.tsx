@@ -1,10 +1,9 @@
 /** Cached MCP health, shared by the composer pill, the panels, and the surface. */
 import { useRpc } from "@getpaseo/plugin/client";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import React, { useCallback, useMemo } from "react";
-import { Text, View } from "react-native";
+import React, { useCallback } from "react";
 import {
-  healthNeedsAttention,
+  resultNeedsAttention,
   mcpHealth,
   mcpHealthCached,
   scopedToDirectory,
@@ -15,8 +14,7 @@ import { cachedReadInterval, clockTime, failureStreak, type CachedRead } from ".
 import { healthPlainWord } from "../shared/servers";
 
 export { CHECKING_POLL_MS, cachedReadInterval, type CachedRead } from "../shared/schedule";
-import { canOpenMcp, openMcp } from "./navigate";
-import { Button, Disclosure, Facts, Notice, Tag, useTokens, type Status } from "./ui";
+import { Tag, type Status } from "./ui";
 
 export const HEALTH_QUERY_KEY = ["paseo-mcp", "health"] as const;
 
@@ -86,7 +84,7 @@ export function healthWord(status: McpHealth["status"]): string {
 
 /** Results that need attention, split by where the definition lives relative to `directory`. */
 export function splitIssues(report: McpHealthReport | undefined, directory: string) {
-  const issues = (report?.results ?? []).filter((entry) => healthNeedsAttention(entry.status));
+  const issues = (report?.results ?? []).filter((entry) => resultNeedsAttention(entry));
   const scopes = (entry: McpHealth) => entry.scopes ?? [];
   return {
     issues,
@@ -102,64 +100,10 @@ export function splitIssues(report: McpHealthReport | undefined, directory: stri
   };
 }
 
-function plural(count: number, word: string): string {
-  return `${count} ${word}${count === 1 ? "" : "s"}`;
-}
-
 // The composer chip moved to client/tools.tsx (McpChip) in 0.6.0: it is always
 // on and reads both the health and the tool reports.
 
 // ---------------------------------------------------------------- panels
-
-/**
- * One block under a workspace or agent panel header: the servers an agent
- * here would load that need attention, each one press from its management
- * page, with problems elsewhere folded away. `names` is what an agent in this
- * workspace loads (see shared/budget.ts); without it, "here" falls back to
- * definitions scoped to the directory. Silent while everything is healthy.
- */
-export function HealthSummary({ directory, names }: { directory: string; names: Set<string> | null }) {
-  const t = useTokens();
-  const { data, error } = useHealth();
-  const { issues, project, user, elsewhere } = useMemo(() => splitIssues(data, directory), [data, directory]);
-  if (error && !data) return <Text style={t.text.caption}>Health check unavailable.</Text>;
-  if (!data || issues.length === 0) return null;
-  const here = issues.filter((entry) => (names ? names.has(entry.name) : project.includes(entry)));
-  const away = issues.filter((entry) => !here.includes(entry));
-  const where = (entry: McpHealth) =>
-    project.includes(entry) ? "this project" : user.includes(entry) ? "user config" : elsewhere.includes(entry) ? "other project" : "";
-  const rows = (entries: McpHealth[]) =>
-    entries.map((entry) => (
-      <View key={entry.name} style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: t.space.sm }}>
-        <Text style={t.text.bodyStrong}>{entry.name}</Text>
-        <Tag label={healthWord(entry.status)} tone={healthStatus(entry.status)} />
-        <Tag label={where(entry)} />
-        {entry.note ? <Text style={[t.text.caption, { flexShrink: 1 }]}>{entry.note}</Text> : null}
-        {canOpenMcp() ? <Button label="Open" variant="ghost" onPress={() => openMcp(entry.name)} /> : null}
-      </View>
-    ));
-  const tone: Status = here.some((entry) => healthStatus(entry.status) === "error") ? "error" : here.length > 0 ? "attention" : "neutral";
-  return (
-    <Notice tone={tone}>
-      <View style={{ gap: t.space.sm }}>
-        <Text style={t.text.body}>
-          {here.length > 0
-            ? `${plural(here.length, "connector")} this workspace loads ${here.length === 1 ? "needs" : "need"} attention`
-            : `No connector problems here · ${plural(away.length, "issue")} elsewhere`}
-        </Text>
-        {rows(here)}
-        {away.length > 0 ? (
-          here.length > 0 ? (
-            <Disclosure title={`${plural(away.length, "issue")} elsewhere`}>{rows(away)}</Disclosure>
-          ) : (
-            rows(away)
-          )
-        ) : null}
-        <Facts items={[{ value: healthCheckedLabel(data, (iso) => new Date(iso).toLocaleString()) }]} />
-      </View>
-    </Notice>
-  );
-}
 
 /** Trailing tag for a project server row: its health, when the host has checked it. */
 export function ServerHealthTag({ name }: { name: string }) {

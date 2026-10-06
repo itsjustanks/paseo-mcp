@@ -185,8 +185,11 @@ export function CatalogGallery({
   onPaste,
   onInstalled,
   onOpenServer,
+  ownedReady = true,
 }: {
   destinations: Destination[];
+  /** 0.19.2: false until your connectors are read; the gallery says "Checking…" instead of a count that changes. */
+  ownedReady?: boolean;
   /** Your servers (0.15.0): a card you already have in any sense is hidden until asked for. */
   owned: readonly OwnedServer[];
   onClose: () => void;
@@ -218,7 +221,8 @@ export function CatalogGallery({
     refetchInterval: (state) => (state.state.data?.libraries.some((library) => library.state === "loading" || library.state === "searching") ? 1500 : false),
     retry: 1,
   });
-  const data = catalogQuery.data;
+  // Nothing is listed until your own connectors are read too: a card shown, then hidden as "already have", reads as a glitch.
+  const data = ownedReady ? catalogQuery.data : undefined;
   const cards = data?.cards ?? [];
   const matching = cards.filter((card) => (card.shelf === "registry" ? category === "all" || card.entry.category === category : cardMatches(card, query, category)));
   const haves = useMemo(() => new Map(cards.map((card) => [card.key, alreadyHave(card, owned)] as const)), [cards, owned]);
@@ -302,7 +306,9 @@ export function CatalogGallery({
         <QuietLine icon="Link" links={[{ label: "Add with a link", onPress: () => onAddByHand() }, { label: "Paste setup instructions", onPress: onPaste }]}>
           Not in the gallery?
         </QuietLine>
-        {hidden > 0 || showAdded ? (
+        {!ownedReady ? (
+          <QuietLine icon="Loader">Checking which ones you already have…</QuietLine>
+        ) : hidden > 0 || showAdded ? (
           <QuietLine
             icon={showAdded ? "Eye" : "EyeOff"}
             links={[{ label: showAdded ? "Hide them" : "Show them", onPress: () => setShowAdded((value) => !value) }]}
@@ -312,7 +318,7 @@ export function CatalogGallery({
         ) : null}
       </View>
 
-      {catalogQuery.isLoading ? <Loading label="Reading the gallery…" /> : null}
+      {catalogQuery.isLoading || !ownedReady ? <Loading label="Checking…" /> : null}
       {catalogQuery.error ? <ErrorText>{`Could not read the gallery: ${plainError(catalogQuery.error)}`}</ErrorText> : null}
 
       {data && shown.length === 0 && data.registry.state !== "searching" ? (

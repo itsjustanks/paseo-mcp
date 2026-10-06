@@ -3,7 +3,7 @@ import type { ComponentType } from "react";
 import { McpAgentPanel } from "./client/agent";
 import { SignInCardSchema, makeSignInCard } from "./client/chat";
 import { McpSurface, McpWorkspacePanel } from "./client/mcp";
-import { registerSurfaceOpener } from "./client/navigate";
+import { registerSurfaceOpener, registerTabSync } from "./client/navigate";
 import { HealthSettingsScreen, InjectionSettingsScreen } from "./client/settings";
 import { MCP_SCREEN_ID, McpSidebarItem, SidebarRow, type OpenScreen, type SidebarItemProps } from "./client/sidebar";
 import { McpChip } from "./client/tools";
@@ -12,8 +12,11 @@ import { mcpHealth, mcpHealthCached } from "./shared/contracts";
 import { chipAgentFrom, createChipRegistry, type ChipAgent } from "./shared/chips";
 import { SIGN_IN_KIND, SIGN_IN_VERSION } from "./shared/chat";
 import { canObserveAgents, supportsButtonPills, supportsNativeScreens } from "./shared/host-features";
-import { MCP_NAME, MCP_NAME_LOWER } from "./shared/guide";
-import { addServerParams, checkNowParams } from "./shared/screen-params";
+import { MCP_NAME, MCP_NAME_LOWER, TABS_META } from "./shared/guide";
+import { addServerParams, checkNowParams, screenTitle } from "./shared/screen-params";
+
+// The window title per tab; "Connectors · Connectors" would say nothing, so that tab is "Your connectors" there.
+const TAB_LABELS = { overview: TABS_META.overview.label, servers: "Your connectors", projects: TABS_META.projects.label, guide: TABS_META.guide.label };
 
 /**
  * What Paseo 0.11 adds to the client context: full screens and native sidebar
@@ -21,7 +24,7 @@ import { addServerParams, checkNowParams } from "./shared/screen-params";
  * them; older apps keep the surface and the sidebar item as before.
  */
 type ScreensClient = {
-  addScreen?: (contribution: { id: string; title: string; Component: ComponentType<PluginSurfaceProps> }) => () => void;
+  addScreen?: (contribution: { id: string; title: string | ((params: Record<string, string>) => string); Component: ComponentType<PluginSurfaceProps> }) => () => void;
   addSidebarHeaderItem?: (contribution: { id: string; title: string; Component: ComponentType<SidebarItemProps> }) => () => void;
   openScreen?: OpenScreen;
 };
@@ -40,7 +43,9 @@ export default function contribute(client: PluginClientContext) {
     return false;
   };
   if (native) {
-    screens.addScreen!({ id: MCP_SCREEN_ID, title: MCP_NAME, Component: McpSurface });
+    // The window title follows the tab ("Connectors · Help"), from the screen's params (0.19.2).
+    screens.addScreen!({ id: MCP_SCREEN_ID, title: (params) => screenTitle(MCP_NAME, TAB_LABELS, params), Component: McpSurface });
+    registerTabSync((tab) => screens.openScreen!({ screenId: MCP_SCREEN_ID, params: tab === "overview" ? {} : { tab } }));
     screens.addSidebarHeaderItem!({ id: MCP_SCREEN_ID, title: MCP_NAME, Component: McpSidebarItem });
     registerSurfaceOpener(() => screens.openScreen!({ screenId: MCP_SCREEN_ID }));
   } else {
@@ -50,7 +55,8 @@ export default function contribute(client: PluginClientContext) {
   }
   client.addWorkspacePanel({
     id: "mcp-connections",
-    title: `Workspace ${MCP_NAME_LOWER}`,
+    // 0.19.2: the plugin's own name, as the standard asks of every workspace panel.
+    title: MCP_NAME,
     icon: "Plug",
     context: "workspace",
     locations: ["workspace", "explorer"],
@@ -151,20 +157,11 @@ export default function contribute(client: PluginClientContext) {
   // The chip, `/mcp` and the in-chat sign-in card all open the agent's MCP
   // panel the same way.
   const openAgentPanel = (workspaceId: string, agentId: string) => client.openPanel("mcp-agent", { workspaceId, agentId });
-  // 0.14.0. Paseo lists its own commands first, then plugins', then the
-  // provider's, so this one is what `/mcp` runs in an agent's composer.
-  client.addSlashCommand({
-    name: "mcp",
-    description: "Open this agent's connectors: what it loads, what it costs, sign-in",
-    argumentHint: "",
-    context: "agent",
-    onSubmit({ workspace, agent }) {
-      openAgentPanel(workspace.id, agent.id);
-    },
-  });
+  // 0.19.2: one command, by the plugin's visible name. `/mcp` is gone: the
+  // SDK can't hide a slash command, and two entries for one panel were noise.
   client.addSlashCommand({
     name: "connectors",
-    description: "Open this agent's connectors: what it loads, what it costs, sign-in",
+    description: "Open this chat's connectors: what's broken, what it loads, sign-in",
     argumentHint: "",
     context: "agent",
     onSubmit({ workspace, agent }) {
@@ -181,6 +178,7 @@ export default function contribute(client: PluginClientContext) {
   return () => {
     removeChips();
     registerSurfaceOpener(null);
+    registerTabSync(null);
   };
 }
 
@@ -213,7 +211,7 @@ type ChipButtonsClient = {
     button: { title: string; icon: string; label?: string; behavior: { kind: "action"; onPress(): void } };
   }): { update(patch: { label?: string; icon?: string }): void; remove(): void };
 };
-type AgentLike = { id?: string; workspaceId?: string | null; provider?: string | null; status?: string; archivedAt?: string | null; cwd?: string | null };
+type AgentLike = { id?: string; workspaceId?: string | null; provider?: string | null; status?: string; archivedAt?: string | null; cwd?: string | null; lastActivityAt?: string | null; updatedAt?: string | null };
 type AgentListLike = { entries: Array<{ agent: AgentLike }> };
 type AgentUpdateLike = { kind: string; agentId?: string; agent?: AgentLike };
 type AgentObservation = {

@@ -111,19 +111,20 @@ test("an OAuth connector's 401 alone is not a problem: no chip", async () => {
   assert.deepEqual(h.registry.shown(), []);
 });
 
-test("one failing connector: '1 connector failing' with the warning icon", async () => {
+test("one failing connector: '1 broken' with the Plug icon", async () => {
   const h = harness({ health: report([{ name: "supabase", status: "down" }, { name: "linear", status: "ok" }]) });
   h.registry.upsert(agent("a1"));
   await h.settle();
-  assert.deepEqual(last(h, "a1"), { label: "1 connector failing", icon: "TriangleAlert" });
+  assert.deepEqual(last(h, "a1"), { label: "1 broken", icon: "Plug" });
   assert.equal(h.published.at(-1)!.host, "failing");
 });
 
-test("sign-in: '2 connectors need sign-in' with the key icon, only for the chat whose account needs it", async () => {
-  const h = harness({ health: report([{ name: "linear", status: "ok" }]), signIn: [{ name: "jam", providerIds: ["claude"] }, { name: "posthog", providerIds: ["claude", "claude-work"] }] });
+test("sign-in: '2 need sign-in', only for the chat whose account needs it", async () => {
+  // 0.19.2: a sign-in counts for a connector the report lists (one the page shows too).
+  const h = harness({ health: report([{ name: "linear", status: "ok" }, { name: "jam", status: "auth-required" }, { name: "posthog", status: "auth-required" }]), signIn: [{ name: "jam", providerIds: ["claude"] }, { name: "posthog", providerIds: ["claude", "claude-work"] }] });
   h.registry.replaceAll([agent("claude-chat"), agent("codex-chat", "codex")]);
   await h.settle();
-  assert.deepEqual(last(h, "claude-chat"), { label: "2 connectors need sign-in", icon: "KeyRound" });
+  assert.deepEqual(last(h, "claude-chat"), { label: "2 need sign-in", icon: "Plug" });
   assert.deepEqual(h.registry.shown(), ["claude-chat"], "Codex's account needs nothing: no chip there");
   assert.equal(h.published.at(-1)!.host, "sign-in");
 });
@@ -132,7 +133,7 @@ test("failing and sign-in together: both counted, failing first; a failing one i
   const h = harness({ health: report([{ name: "supabase", status: "binary-missing" }]), signIn: [{ name: "jam", providerIds: ["claude"] }, { name: "supabase", providerIds: ["claude"] }] });
   h.registry.upsert(agent("a1"));
   await h.settle();
-  assert.deepEqual(last(h, "a1"), { label: "1 connector failing, 1 needs sign-in", icon: "TriangleAlert" });
+  assert.deepEqual(last(h, "a1"), { label: "1 broken", icon: "Plug" });
 });
 
 test("a failing connector belongs to the chats that load it: its provider's config, or the project the agent works in", async () => {
@@ -145,8 +146,8 @@ test("a failing connector belongs to the chats that load it: its provider's conf
   h.registry.replaceAll([agent("claude-elsewhere"), agent("codex-elsewhere", "codex"), agent("claude-in-project", "claude", `${HOME}/projects/data-glue/src`)]);
   await h.settle();
   assert.deepEqual(h.registry.shown().sort(), ["claude-in-project", "codex-elsewhere"]);
-  assert.deepEqual(last(h, "codex-elsewhere"), { label: "1 connector failing", icon: "TriangleAlert" });
-  assert.deepEqual(last(h, "claude-in-project"), { label: "1 connector failing", icon: "TriangleAlert" });
+  assert.deepEqual(last(h, "codex-elsewhere"), { label: "1 broken", icon: "Plug" });
+  assert.deepEqual(last(h, "claude-in-project"), { label: "1 broken", icon: "Plug" });
   assert.equal(h.published.at(-1)!.host, "failing", "the dot shows for anything on this computer");
 });
 
@@ -162,10 +163,10 @@ test("the chip goes away when the problem is fixed, and changes its words when t
   const h = harness({ health: report([{ name: "a", status: "down" }, { name: "b", status: "down" }]) });
   h.registry.upsert(agent("a1"));
   await h.settle();
-  assert.deepEqual(last(h, "a1"), { label: "2 connectors failing", icon: "TriangleAlert" });
+  assert.deepEqual(last(h, "a1"), { label: "2 broken", icon: "Plug" });
   h.setHealth(report([{ name: "a", status: "down" }, { name: "b", status: "ok" }]));
   await h.tick();
-  assert.deepEqual(last(h, "a1"), { label: "1 connector failing", icon: "TriangleAlert" });
+  assert.deepEqual(last(h, "a1"), { label: "1 broken", icon: "Plug" });
   const updates = h.faces.get("a1")!.length;
   await h.tick();
   assert.equal(h.faces.get("a1")!.length, updates, "the same words are not pushed again");
@@ -224,7 +225,7 @@ test("a snapshot replaces what was known: missing agents lose their chips, new o
   await h.settle();
   assert.deepEqual(h.registry.shown().sort(), ["a2", "a3"]);
   assert.ok(h.removed.includes("a1"));
-  assert.deepEqual(last(h, "a3"), { label: "1 connector failing", icon: "TriangleAlert" });
+  assert.deepEqual(last(h, "a3"), { label: "1 broken", icon: "Plug" });
 });
 
 test("a host that doesn't answer shows nothing new and reads less often (1, 2, 4 … 15 minutes)", async () => {
@@ -262,8 +263,8 @@ test("stop removes every chip and the timer", async () => {
 });
 
 test("which agents can get a chip: not closed or archived ones, nor one without a workspace; the folder comes along", () => {
-  assert.deepEqual(chipAgentFrom({ id: "a", workspaceId: "w", provider: "claude", status: "running", cwd: "/p" }), { id: "a", workspaceId: "w", provider: "claude", cwd: "/p" });
-  assert.deepEqual(chipAgentFrom({ id: "a", workspaceId: "w", provider: "codex", status: "idle" }), { id: "a", workspaceId: "w", provider: "codex", cwd: "" });
+  assert.deepEqual(chipAgentFrom({ id: "a", workspaceId: "w", provider: "claude", status: "running", cwd: "/p" }), { id: "a", workspaceId: "w", provider: "claude", cwd: "/p", status: "running" });
+  assert.deepEqual(chipAgentFrom({ id: "a", workspaceId: "w", provider: "codex", status: "idle" }), { id: "a", workspaceId: "w", provider: "codex", cwd: "", status: "idle" });
   assert.equal(chipAgentFrom({ id: "a", workspaceId: "w", provider: "claude", status: "closed" }), null);
   assert.equal(chipAgentFrom({ id: "a", workspaceId: "w", provider: "claude", status: "idle", archivedAt: "2026-10-04T00:00:00Z" }), null);
   assert.equal(chipAgentFrom({ id: "a", workspaceId: "", provider: "claude", status: "running" }), null);

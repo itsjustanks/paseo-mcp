@@ -1,4 +1,7 @@
 {
   "id": "paseo-mcp",
-  "requirements": { "paseo": ">=0.8.0" }
+  "description": "Connectors for your AI apps: add them from a gallery, keep Claude and Codex in step, see what's broken and sign in.",
+  "requirements": {
+    "paseo": ">=0.9.0"
+  }
 }

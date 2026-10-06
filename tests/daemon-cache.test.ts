@@ -226,11 +226,12 @@ test("a slow daemon (8 s): auth and catalog wait once, then answer without waiti
 
   // Refresh on sign-in re-reads the project list in the background; the read does not wait.
   const refreshed = await timed(() => handleMcpAuth({ refresh: true }, context));
-  assert.ok(refreshed.ms < 50, `auth refresh took ${refreshed.ms.toFixed(1)} ms`);
+  // 1 s, like the reads above (0.19.2): 50 ms failed under heavy load (257 ms), and anything far below the 8 s daemon proves it didn't wait.
+  assert.ok(refreshed.ms < 1_000, `auth refresh took ${refreshed.ms.toFixed(1)} ms (must not wait on the ${SLOW_MS} ms daemon)`);
   assert.equal(daemonCalls.projects, 2);
   // Refresh everything in the gallery re-reads both, in the background.
   const all = await timed(() => handleMcpCatalog({ query: "", refresh: "all" }, context));
-  assert.ok(all.ms < 50, `catalog refresh took ${all.ms.toFixed(1)} ms`);
+  assert.ok(all.ms < 1_000, `catalog refresh took ${all.ms.toFixed(1)} ms (must not wait on the ${SLOW_MS} ms daemon)`);
   assert.deepEqual(daemonCalls, { projects: 2, config: 2 }, "the project list was already being read again: still one call for it");
 
   // Changing Paseo's own tool settings (through a quick daemon) throws the provider settings out:
