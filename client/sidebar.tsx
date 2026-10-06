@@ -29,13 +29,13 @@ export { ADD_SERVER_PARAM };
 /** The row's "+": a quiet icon in the muted colour, with its words for screen readers. */
 function AddServerButton({ color, onPress }: { color: string; onPress(): void }) {
   return (
-    <Pressable testID="mcp-sidebar-add" accessibilityRole="button" accessibilityLabel="Add an MCP server" hitSlop={6} onPress={onPress} style={{ alignItems: "center", justifyContent: "center", paddingHorizontal: SPACE.xs + SPACE.hair }}>
+    <Pressable testID="mcp-sidebar-add" accessibilityRole="button" accessibilityLabel="Add a connector" hitSlop={6} onPress={onPress} style={{ alignItems: "center", justifyContent: "center", paddingHorizontal: SPACE.xs + SPACE.hair }}>
       {HostIcon ? <HostIcon name="Plus" size={16} color={color} /> : <Text style={{ ...TYPE.lead, color }}>+</Text>}
     </Pressable>
   );
 }
 
-/** The MCP row in the app's sidebar, marked active while the MCP screen is open, with "+" to add a server. */
+/** The Connectors row in the app's sidebar, marked active while its screen is open, with "+" to add a connector. */
 export function McpSidebarItem({ currentScreen, openScreen, theme }: SidebarItemProps) {
   if (!SidebarRow) return null;
   const color = theme?.colors?.foregroundMuted ?? "#888888";

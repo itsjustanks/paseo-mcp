@@ -44,14 +44,14 @@ let queue: Promise<unknown> = Promise.resolve();
 let runCodex = async (codexHome: string): Promise<Record<string, AuthState>> => {
   await resolveSearchPath();
   const binary = findOnPath("codex");
-  if (!binary) throw new Error("Codex is not installed on this host, so sign-in state for its servers can only be read from its grant file");
+  if (!binary) throw new Error("Codex is not installed on this host, so sign-in state for its connectors can only be read from its grant file");
   const result = await runFile(binary, ["mcp", "list", "--json"], {
     env: { ...process.env, CODEX_HOME: codexHome },
     timeoutMs: CLI_TIMEOUT_MS,
   });
   noteArg0Warning(codexHome, result.stderr);
   if (result.timedOut) {
-    throw new Error(`Codex took longer than ${CLI_TIMEOUT_MS / 1000} s to list its MCP servers (it asks each one over the network whether it uses OAuth)`);
+    throw new Error(`Codex took longer than ${CLI_TIMEOUT_MS / 1000} s to list its connectors (it asks each one over the network whether it needs a sign-in)`);
   }
   if (result.code !== 0) {
     const last = result.stderr.split("\n").map((line) => line.trim()).filter((line) => line && !/stale arg0 temp dirs/.test(line)).at(-1) ?? "";
@@ -60,7 +60,7 @@ let runCodex = async (codexHome: string): Promise<Record<string, AuthState>> => 
   try {
     return parseCodexMcpList(result.stdout);
   } catch {
-    throw new Error("codex mcp list --json printed something other than a server list; this Codex version may have changed its output");
+    throw new Error("codex mcp list --json printed something other than a list of connectors; this Codex version may have changed its output");
   }
 };
 

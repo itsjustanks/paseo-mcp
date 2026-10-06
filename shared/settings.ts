@@ -12,7 +12,7 @@ export const InjectionProviderSchema = z.enum(INJECTION_PROVIDERS);
  * servers to new agents (keys: `injection.json`, `injectWorkspaceServers`).
  * Not Paseo's "Enable Paseo tools" (`mcp.injectIntoAgents`); see shared/paseo-tools.ts.
  */
-export const ADD_PROJECT_SERVERS = "Add project servers to agents";
+export const ADD_PROJECT_SERVERS = "Add project connectors to agents";
 
 /**
  * Host-scoped settings for adding a workspace's `.mcp.json` servers to every
@@ -26,12 +26,12 @@ export const injectionSettings = defineSettings({
     injectWorkspaceServers: z
       .boolean()
       .default(false)
-      .describe("Add the workspace's .mcp.json servers to every new agent"),
+      .describe("Add the workspace's .mcp.json connectors to every new agent"),
     providers: z.array(InjectionProviderSchema).default(["codex"]).describe("Which providers get them"),
     skipInlineCredentialServers: z
       .boolean()
       .default(true)
-      .describe("Leave out servers whose definition carries inline credentials"),
+      .describe("Leave out connectors that have a key or token written into their settings"),
   }),
 });
 
@@ -62,7 +62,7 @@ export const healthSettings = defineSettings({
     backgroundChecks: z
       .boolean()
       .default(true)
-      .describe("Probe every MCP server on a timer, not only when Refresh is pressed"),
+      .describe("Check every connector on a timer, not only when Refresh is pressed"),
     intervalMinutes: z
       .number()
       .int()
@@ -76,12 +76,12 @@ export const healthSettings = defineSettings({
     showComposerPill: z
       .boolean()
       .default(true)
-      .describe("Show an MCP chip on each agent's composer with the server count and status"),
+      .describe("Show a Connectors chip on each agent's composer with the connector count and status"),
     // 0.14.0, added with a default so version 1 documents still read as valid.
     chatSignInNotices: z
       .boolean()
       .default(true)
-      .describe("Chat notices: sign-in problems. When an MCP tool call in a chat fails for lack of a sign-in, add one card to that chat"),
+      .describe("Chat notices: sign-in problems. When a connector's tool call in a chat fails for lack of a sign-in, add one card to that chat"),
   }),
 });
 
@@ -101,7 +101,7 @@ export const promoSettings = defineSettings({
   scope: "host",
   version: 1,
   schema: z.object({
-    hideAiRouter: z.boolean().default(false).describe("Hide the AI Router card on the MCP Overview"),
+    hideAiRouter: z.boolean().default(false).describe("Hide the AI Router card on the Connectors Overview"),
   }),
 });
 

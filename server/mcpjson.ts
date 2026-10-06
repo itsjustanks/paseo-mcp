@@ -364,7 +364,7 @@ function validate(entry: Entry, name: string, dialect: Dialect, text: string): J
       message:
         spec.format === "toml-mcp"
           ? `'${name}' is not a valid ${spec.label} table name — letters, numbers, - and _ only`
-          : `'${name}' is not a usable server name — letters, numbers, . - and _ only`,
+          : `'${name}' is not a usable connector name — letters, numbers, . - and _ only`,
     });
   }
 
@@ -374,7 +374,7 @@ function validate(entry: Entry, name: string, dialect: Dialect, text: string): J
     issues.push({
       ...at(hasUrl ? "url" : "command"),
       code: "shape",
-      message: hasUrl ? "a server has either a url or a command, not both" : "a server needs a url (HTTP) or a command (stdio)",
+      message: hasUrl ? "a connector has either a url or a command, not both" : "a connector needs a url (on the web) or a command (on this computer)",
     });
   }
   if ("url" in entry && !hasUrl) issues.push({ ...at("url"), code: "shape", message: "url must be a non-empty string" });
@@ -397,7 +397,7 @@ function validate(entry: Entry, name: string, dialect: Dialect, text: string): J
     issues.push({ ...here(), code: "mask-unresolved", message: "a masked value survived — refusing to write ••• into a config" });
   }
   if (text.length > MAX_JSON_BYTES) {
-    issues.push({ ...here(), code: "too-large", message: `that is ${Math.round(text.length / 1024)}KB — far larger than any MCP entry` });
+    issues.push({ ...here(), code: "too-large", message: `that is ${Math.round(text.length / 1024)}KB — far larger than any connector's settings` });
   }
   return issues;
 }
@@ -761,7 +761,7 @@ export async function handleMcpRawPut(
   if (!unwrapped.entry) {
     return {
       ...empty,
-      issues: [{ ...here(), code: "shape" as const, message: "expected an object describing one server" }],
+      issues: [{ ...here(), code: "shape" as const, message: "expected an object describing one connector" }],
       warnings: notes,
       message: "nothing written",
     };
@@ -774,7 +774,7 @@ export async function handleMcpRawPut(
   const issues: JsonIssue[] = resolved.unresolved.map((path) => ({
     ...locate(text, path.split(".").pop() ?? path),
     code: "mask-unresolved" as const,
-    message: `${path} is still masked and there is no stored value here to restore — reveal secrets and paste the real one`,
+    message: `${path} is still masked and there is no stored value here to restore — press Show keys and paste the real one`,
   }));
   issues.push(...validate(resolved.entry, name, dialect, text));
 
@@ -874,7 +874,7 @@ export async function handleMcpImportParse({ blob }: { blob: string }) {
       }
       servers.push(parsedRow(tomlName, tomlToCanonical(def).entry));
     }
-    normalisations.push(`read ${servers.length} server(s) out of a TOML [mcp_servers.…] block`);
+    normalisations.push(`read ${servers.length} connector(s) out of a TOML [mcp_servers.…] block`);
     return { servers, normalisations, issues };
   }
 
@@ -907,9 +907,9 @@ export async function handleMcpImportParse({ blob }: { blob: string }) {
     if (!wrapperName) normalisations.push(`the paste had no name — called it '${name}'`);
     servers.push(parsedRow(name, canonicaliseJson(object)));
   } else if (Object.values(object).some(looksLikeServer)) {
-    fromRecord(object, Object.keys(object).length === 1 ? "took the single top-level key as the server name" : "read a name → server map");
+    fromRecord(object, Object.keys(object).length === 1 ? "took the single top-level key as the connector name" : "read a name → connector map");
   } else {
-    issues.push({ ...here(), code: "shape", message: "could not find a server here — expected mcpServers, a name → server map, or a bare {command…}/{url…}" });
+    issues.push({ ...here(), code: "shape", message: "could not find a connector here — expected mcpServers, a name → connector map, or a bare {command…}/{url…}" });
   }
   return { servers, normalisations, issues };
 }
@@ -945,7 +945,7 @@ export async function handleMcpImportApply(
     }
     const unwrapped = unwrapSingle(parsed, server.name);
     if (!unwrapped.entry) {
-      issues.push({ ...here(), code: "shape", message: `'${server.name}' is not an object describing a server` });
+      issues.push({ ...here(), code: "shape", message: `'${server.name}' is not an object describing a connector` });
       continue;
     }
     const incoming = canonicaliseJson(unwrapped.entry);
@@ -995,7 +995,7 @@ export async function handleMcpImportApply(
     skipped: [...skipped, ...failed],
     issues: [],
     message: [
-      written.length > 0 ? `wrote ${names.length} server(s) to ${written.length} destination(s) (backups saved)` : "nothing written",
+      written.length > 0 ? `wrote ${names.length} connector(s) to ${written.length} place(s) (backups saved)` : "nothing written",
       ...plan.dropped,
     ].join("\n"),
   };
@@ -1059,10 +1059,10 @@ export async function handleMcpExport(
   }
 
   const stamp = new Date().toISOString().slice(0, 10);
-  const header = [`// ${Object.keys(mcpServers).length} MCP server(s) exported by Paseo MCP on ${stamp}`];
+  const header = [`// ${Object.keys(mcpServers).length} connector(s) exported by Paseo MCP on ${stamp}`];
   if (redacted.length > 0) {
     header.push(`// ${redacted.length} secret value(s) redacted: ${redacted.slice(0, 6).join(", ")}${redacted.length > 6 ? ", …" : ""}`);
-    header.push("// Re-export with secrets revealed to include them.");
+    header.push("// Export again with Include keys to include them.");
   } else if (reveal && anySecrets) {
     header.push("// CONTAINS REAL CREDENTIALS IN PLAIN TEXT — treat this file as a secret.");
   }
@@ -1171,7 +1171,7 @@ async function workspaceLoginDirectory(
   const configPath = candidates.map((candidate) => join(candidate, ".mcp.json")).find(existsSync);
   if (!configPath) throw new Error("This workspace has no .mcp.json file.");
   if (!Object.hasOwn(jsonMcpRead(configPath), server)) {
-    throw new Error(`No project MCP server named '${server}' exists in this workspace.`);
+    throw new Error(`No project connector named '${server}' exists in this workspace.`);
   }
   return dirname(configPath);
 }
@@ -1353,7 +1353,7 @@ export async function handleMcpLogin(
   const key = `${provider}|${accountConfig.keyDir}|${workspaceId ?? "user"}|${server}`;
   const existing = logins.get(key);
   if (existing && (existing.session.state === "starting" || existing.session.state === "waiting")) {
-    return { ok: true, session: existing.session, message: "a login for that server is already running" };
+    return { ok: true, session: existing.session, message: "a sign-in for that connector is already running" };
   }
   const previous = logins.get(key);
   if (previous) killLogin(previous.child);

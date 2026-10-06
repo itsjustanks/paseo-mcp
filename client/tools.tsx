@@ -149,10 +149,11 @@ export function ToolRow({ tool, first, control }: { tool: McpTool; first?: boole
 }
 
 /** A server's tool list, or the honest reason there is none. */
-export function ServerTools({ entry, open = false }: { entry: McpServerTools; open?: boolean }) {
+/** `plain` (0.19.0, a connector's page): just the list, no version line and no fold-out of its own; it already sits in one. */
+export function ServerTools({ entry, open = false, plain = false }: { entry: McpServerTools; open?: boolean; plain?: boolean }) {
   const t = useTokens();
   const info = entry.serverInfo ? `${entry.serverInfo.name}${entry.serverInfo.version ? ` ${entry.serverInfo.version}` : ""}` : "";
-  const facts = (
+  const facts = plain ? null : (
     <Facts
       items={[
         info ? { value: info } : null,
@@ -171,7 +172,7 @@ export function ServerTools({ entry, open = false }: { entry: McpServerTools; op
   if (entry.tools.length === 0) {
     return (
       <View style={{ gap: t.space.xs }}>
-        <Text style={t.text.caption}>The server answered and listed no tools.</Text>
+        <Text style={t.text.caption}>The connector answered and listed no tools.</Text>
         {facts}
       </View>
     );
@@ -182,17 +183,25 @@ export function ServerTools({ entry, open = false }: { entry: McpServerTools; op
       {entry.stale ? (
         <Text style={t.text.caption}>
           {entry.stale.restored
-            ? `This list is from ${clockTime(entry.stale.asOf)}, ${entry.stale.reason}. It is replaced once the server answers again.`
-            : `This list is from ${clockTime(entry.stale.asOf)}; the latest ask did not get an answer (${entry.stale.reason}). It is kept until the server answers again.`}
+            ? `This list is from ${clockTime(entry.stale.asOf)}, ${entry.stale.reason}. It is replaced once the connector answers again.`
+            : `This list is from ${clockTime(entry.stale.asOf)}; the latest ask did not get an answer (${entry.stale.reason}). It is kept until the connector answers again.`}
         </Text>
       ) : null}
-      <Disclosure title={toolsWord(entry)} open={open}>
+      {plain ? (
         <Card level={2} padded={false}>
           {entry.tools.map((tool, index) => (
             <ToolRow key={tool.name} tool={tool} first={index === 0} />
           ))}
         </Card>
-      </Disclosure>
+      ) : (
+        <Disclosure title={toolsWord(entry)} open={open}>
+          <Card level={2} padded={false}>
+            {entry.tools.map((tool, index) => (
+              <ToolRow key={tool.name} tool={tool} first={index === 0} />
+            ))}
+          </Card>
+        </Disclosure>
+      )}
     </View>
   );
 }
@@ -200,10 +209,10 @@ export function ServerTools({ entry, open = false }: { entry: McpServerTools; op
 function reasonText(entry: McpServerTools): string {
   switch (entry.kind) {
     case "auth-required":
-      return "This server lists its tools once you've signed in. Connect from this server's sign-in rows below; the list then appears in the AI app.";
+      return "This connector lists its tools once you've signed in. Choose Connect under Sign-in; the list then appears in the AI app.";
     case "stdio":
-      return "This server is a program on this computer that starts only while an assistant uses it, so its tools are listed then. Nothing is listed here rather than guessed.";
+      return "This connector is a program on this computer that starts only while an assistant uses it, so its tools are listed then. Nothing is listed here rather than guessed.";
     default:
-      return `Tools could not be listed: ${entry.note || "the server gave no answer"}.`;
+      return `Tools could not be listed: ${entry.note || "the connector gave no answer"}.`;
   }
 }

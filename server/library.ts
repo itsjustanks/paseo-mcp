@@ -44,7 +44,7 @@ export function catalogFetch(url: string, init?: RequestInit): Promise<Response>
 }
 
 function tooBig(maxBytes: number): Error {
-  return new Error(`answered more than ${maxBytes / (1024 * 1024)} MB, more than a catalogue should be`);
+  return new Error(`answered more than ${maxBytes / (1024 * 1024)} MB, more than a library should be`);
 }
 
 /**
@@ -84,7 +84,7 @@ export async function readCappedBody(response: Response, maxBytes: number): Prom
 export async function readCappedFile(path: string, maxBytes = TEAM_MAX_BYTES): Promise<string> {
   const refuse = (info: { isFile(): boolean; size: number }) => {
     if (!info.isFile()) throw new Error("not a regular file");
-    if (info.size > maxBytes) throw new Error(`the file is ${Math.round(info.size / 1024)} KB; a catalogue should be well under 1 MB`);
+    if (info.size > maxBytes) throw new Error(`the file is ${Math.round(info.size / 1024)} KB; a library should be well under 1 MB`);
   };
   refuse(await stat(path));
   const handle = await open(path, constants.O_RDONLY | constants.O_NONBLOCK);
@@ -97,7 +97,7 @@ export async function readCappedFile(path: string, maxBytes = TEAM_MAX_BYTES): P
       if (bytesRead === 0) break;
       total += bytesRead;
     }
-    if (total > maxBytes) throw new Error("the file is over 1 MB; a catalogue should be well under that");
+    if (total > maxBytes) throw new Error("the file is over 1 MB; a library should be well under that");
     return buffer.subarray(0, total).toString("utf8");
   } finally {
     await handle.close();

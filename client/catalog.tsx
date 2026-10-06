@@ -1,4 +1,4 @@
-/** Add from catalogue: the gallery behind "Add server", its install sheet, and "Copy as catalogue entry". */
+/** Add a connector: the gallery behind "Add connector", its install sheet, and "Copy for a team list". */
 import { useRpc } from "@getpaseo/plugin/client";
 import { useToast } from "@getpaseo/plugin/client/react-native";
 import { useMutation, useQuery } from "@tanstack/react-query";
@@ -28,6 +28,8 @@ import { SETUP_CLIENT_LABELS, byoVendor, claudeRedirectUri, clientShape, isStill
 import { healthPlainWord } from "../shared/servers";
 import { plainError } from "../shared/errors";
 import {
+  Accordion,
+  AccordionItem,
   Button,
   Card,
   CodeBlock,
@@ -39,6 +41,7 @@ import {
   Loading,
   Notice,
   Pills,
+  QuietLine,
   Row,
   Section,
   Segmented,
@@ -82,6 +85,13 @@ function authWord(card: CatalogCard): string {
   return "Needs a key";
 }
 
+/** The maker's line only when it adds something: "GitHub" under "GitHub" is noise (0.19.0). */
+function showPublisher(card: CatalogCard): boolean {
+  const publisher = card.entry.publisher?.trim().toLowerCase();
+  if (!publisher || card.shelf === "registry") return true;
+  return !card.entry.name.toLowerCase().startsWith(publisher);
+}
+
 /** A registry namespace is a claim, shown as plain text, never as a badge. */
 function publisherLine(card: CatalogCard): string {
   if (!card.entry.publisher) return "Unknown publisher";
@@ -103,7 +113,7 @@ function addLabel(card: CatalogCard): string {
   return kind === "byo-oauth" || kind === "per-org" ? "Set up" : "Add";
 }
 
-/** A server that only ships a package the plugin won't start in one click: shown with its docs, added by hand. */
+/** A connector that only ships a package the plugin won't start in one click: shown with its docs, added with a link. */
 function byHandOnly(card: CatalogCard): boolean {
   return card.shelf !== "recommended" && card.entry.transport === "stdio" && !card.installable;
 }
@@ -132,7 +142,9 @@ function ServerCard({ card, have, similar, onAdd, onAddByHand }: { card: Catalog
           <CardIcon url={card.entry.iconUrl} />
           <Text numberOfLines={1} style={[t.text.heading, { flexShrink: 1 }]}>{card.entry.name}</Text>
         </View>
-        <Text numberOfLines={1} style={t.text.caption}>{publisherLine(card)}{card.version ? ` · v${card.version}` : ""}</Text>
+        {showPublisher(card) || card.version ? (
+          <Text numberOfLines={1} style={t.text.caption}>{[showPublisher(card) ? publisherLine(card) : "", card.version ? `v${card.version}` : ""].filter(Boolean).join(" · ")}</Text>
+        ) : null}
         {(card.shelf === "registry" || card.shelf === "library") && card.trust !== "official" ? <Text numberOfLines={2} style={t.text.caption}>{card.trustNote}</Text> : null}
       </View>
       <Text numberOfLines={2} style={[t.text.body, { minHeight: 44 }]}>
@@ -141,7 +153,7 @@ function ServerCard({ card, have, similar, onAdd, onAddByHand }: { card: Catalog
       <View style={{ flexDirection: "row", flexWrap: "wrap", gap: t.space.xs }}>
         {card.added ? <Tag label="Added" tone="ok" /> : have ? <Tag label="You have one" tone="ok" /> : null}
         <Tag label={trust.label} tone={trust.tone} />
-        <Tag label={card.entry.transport === "http" ? "Web" : "On this computer"} />
+        {card.entry.transport === "http" ? null : <Tag label="Runs on this computer" />}
         <Tag label={authWord(card)} />
         {card.entry.setup ? <Tag label={SETUP_BADGE[card.entry.setup.kind]} tone="attention" /> : null}
         {card.shelf !== "recommended" && sourceLabel(card) !== trust.label ? <Tag label={sourceLabel(card)} /> : null}
@@ -152,7 +164,7 @@ function ServerCard({ card, have, similar, onAdd, onAddByHand }: { card: Catalog
       {card.entry.setup ? <Text style={{ ...TYPE.secondary, color: t.color.fg }}>{card.entry.setup.reason}</Text> : !card.installable ? <Text style={{ ...TYPE.secondary, color: t.color.fg }}>{card.blockedReason}</Text> : null}
       <View style={{ flexDirection: "row", flexWrap: "wrap", gap: t.space.sm, alignItems: "center" }}>
         {byHand ? (
-          <Button label="Add by hand" variant="secondary" onPress={() => onAddByHand(card.entry.id)} />
+          <Button label="Add with a link" variant="secondary" onPress={() => onAddByHand(card.entry.id)} />
         ) : card.entry.setup && !card.installable ? null : (
           <Button label={addLabel(card)} variant="secondary" disabled={!card.installable} onPress={onAdd} />
         )}
@@ -170,6 +182,7 @@ export function CatalogGallery({
   owned,
   onClose,
   onAddByHand,
+  onPaste,
   onInstalled,
   onOpenServer,
 }: {
@@ -177,8 +190,10 @@ export function CatalogGallery({
   /** Your servers (0.15.0): a card you already have in any sense is hidden until asked for. */
   owned: readonly OwnedServer[];
   onClose: () => void;
-  /** Opens the add-by-hand form, with the name filled in when one is given. */
+  /** Opens Add with a link, with the name filled in when one is given. */
   onAddByHand: (name?: string) => void;
+  /** Opens Add with a link on "Paste setup instructions" (0.19.0). */
+  onPaste: () => void;
   onInstalled: () => void;
   onOpenServer: (name: string) => void;
 }) {
@@ -270,27 +285,35 @@ export function CatalogGallery({
       </Disclosure>
     ) : null;
 
+  // One heading, one line, the search, then the cards (0.19.0): the count line shows only while searching, and
+  // "Not in the gallery?" sits right under the search instead of a button in a toolbar.
   return (
     <View style={{ gap: t.space.section }}>
-      <Toolbar
-        title="Add a server"
-        subtitle="Pick one to add. Nothing is written until you review the change and press Add."
-        actions={
-          <>
-            <Button label="Add by hand" onPress={() => onAddByHand()} />
-            <Button label="Back to servers" variant="ghost" onPress={onClose} />
-          </>
-        }
-      />
-      <Field value={search} onChangeText={setSearch} placeholder={registries.length > 0 ? "Search the gallery and registries (e.g. jira)" : "Search the gallery (e.g. jira)"} />
-      <Pills options={categories} value={category} onChange={setCategory} />
-      <View style={{ flexDirection: "row", alignItems: "center", gap: t.space.sm }}>
-        <Text style={t.text.caption}>Show ones I already have</Text>
-        <Toggle label="Show ones I already have" value={showAdded} onChange={setShowAdded} />
+      <View style={{ flexDirection: "row" }}>
+        <Button label="← All connectors" variant="ghost" onPress={onClose} />
+      </View>
+      <View style={{ gap: t.space.xs }}>
+        <Text accessibilityRole="header" style={t.text.display}>Add a connector</Text>
+        <Text style={t.text.body}>Pick an app. You'll see exactly what changes before anything is added.</Text>
+      </View>
+      <View style={{ gap: t.space.sm }}>
+        <Field value={search} onChangeText={setSearch} placeholder={registries.length > 0 ? "Search the gallery and registries (e.g. jira)" : "Search the gallery (e.g. jira)"} />
+        <Pills options={categories} value={category} onChange={setCategory} />
+        <QuietLine icon="Link" links={[{ label: "Add with a link", onPress: () => onAddByHand() }, { label: "Paste setup instructions", onPress: onPaste }]}>
+          Not in the gallery?
+        </QuietLine>
+        {hidden > 0 || showAdded ? (
+          <QuietLine
+            icon={showAdded ? "Eye" : "EyeOff"}
+            links={[{ label: showAdded ? "Hide them" : "Show them", onPress: () => setShowAdded((value) => !value) }]}
+          >
+            {showAdded ? "Showing the ones you already have." : `${hidden} you already have ${hidden === 1 ? "is" : "are"} hidden.`}
+          </QuietLine>
+        ) : null}
       </View>
 
-      {catalogQuery.isLoading ? <Loading label="Reading the catalogue…" /> : null}
-      {catalogQuery.error ? <ErrorText>{`Could not read the catalogue: ${plainError(catalogQuery.error)}`}</ErrorText> : null}
+      {catalogQuery.isLoading ? <Loading label="Reading the gallery…" /> : null}
+      {catalogQuery.error ? <ErrorText>{`Could not read the gallery: ${plainError(catalogQuery.error)}`}</ErrorText> : null}
 
       {data && shown.length === 0 && data.registry.state !== "searching" ? (
         <Card>
@@ -300,13 +323,12 @@ export function CatalogGallery({
             action={hidden > 0 ? <Button label="Show ones I already have" onPress={() => setShowAdded(true)} /> : search ? <Button label="Clear search" onPress={() => setSearch("")} /> : undefined}
           />
         </Card>
-      ) : data ? (
+      ) : data && query ? (
         <Text style={t.text.caption}>{summaryLine}</Text>
       ) : null}
 
       {recommended.length > 0 ? (
-        <Section title="Recommended">
-          <Text style={t.text.caption}>Popular apps, each address checked against the maker's own instructions. Your own servers never leave this computer.</Text>
+        <Section title="Popular">
           {grid(recommended)}
         </Section>
       ) : null}
@@ -331,17 +353,17 @@ export function CatalogGallery({
             </Text>
             {library.note ? <Notice tone="attention">{library.note}</Notice> : null}
             {library.state === "searching" ? <Loading label={`Searching ${library.name} for '${query}'…`} /> : null}
-            {fromRegistry(library.id).length > 0 ? grid(fromRegistry(library.id)) : library.state === "ready" ? <Text style={t.text.caption}>{`No ${library.name} server matches '${query}' beyond the ones above.`}</Text> : null}
+            {fromRegistry(library.id).length > 0 ? grid(fromRegistry(library.id)) : library.state === "ready" ? <Text style={t.text.caption}>{`No ${library.name} connector matches '${query}' beyond the ones above.`}</Text> : null}
           </Section>
         ),
       )}
       {registries.length > 0 && search.trim().length === 1 ? <Text style={t.text.caption}>{`Type two letters or more to search ${registries.map((library) => library.name).join(" and ")} too.`}</Text> : null}
 
-      <Card>
-        <Disclosure title={`Libraries (${libraries.filter((library) => library.enabled).length} of ${libraries.length} on)`}>
+      <Accordion>
+        <AccordionItem icon="Library" title="More galleries" summary={`${libraries.filter((library) => library.enabled).length} of ${libraries.length} on · add your team's own list`}>
           <LibrariesPanel states={libraries} refreshing={refreshing} onRefresh={(id) => again({ library: id })} onChanged={() => again({ refresh: "libraries" })} />
-        </Disclosure>
-      </Card>
+        </AccordionItem>
+      </Accordion>
     </View>
   );
 }
@@ -427,13 +449,13 @@ function InstallSheet({
     const tone: Status = result.health ? (result.health.status === "ok" ? "ok" : result.health.status === "auth-required" ? "neutral" : "attention") : "neutral";
     return (
       <View style={{ gap: t.space.section }}>
-        <Toolbar title={`Added ${name.trim()}`} subtitle={result.message} actions={<Button label="Back to catalogue" variant="ghost" onPress={onBack} />} />
+        <Toolbar title={`Added ${name.trim()}`} subtitle={result.message} actions={<Button label="Back to the gallery" variant="ghost" onPress={onBack} />} />
         <Card>
           <Text style={t.text.heading}>Health check</Text>
           {result.health ? (
             <View style={{ flexDirection: "row", gap: t.space.sm, alignItems: "center", flexWrap: "wrap" }}>
               <StatusPill status={tone} label={healthPlainWord(result.health.status as McpHealthStatus)} />
-              <Text style={[t.text.body, { flexShrink: 1 }]}>{result.health.note || "The server answered."}</Text>
+              <Text style={[t.text.body, { flexShrink: 1 }]}>{result.health.note || "It answered."}</Text>
             </View>
           ) : (
             <Text style={t.text.body}>Not checked.</Text>
@@ -459,12 +481,12 @@ function InstallSheet({
             <Text style={t.text.heading}>Sign in</Text>
             <Text style={t.text.body}>
               {scope === "user"
-                ? "This server asks you to sign in with your account. Open it to connect each app."
-                : "This server asks you to sign in with your account. Connect it from the project workspace, in its Workspace connectors (MCP) tab."}
+                ? "It asks you to sign in with your account. Open it and choose Connect for each app."
+                : "It asks you to sign in with your account. Connect it from the project's workspace, in its Workspace connectors tab."}
             </Text>
             {scope === "user" ? (
               <View style={{ flexDirection: "row" }}>
-                <Button label="Open server to connect" variant="primary" onPress={() => onOpenServer(name.trim())} />
+                <Button label="Open it to sign in" variant="primary" onPress={() => onOpenServer(name.trim())} />
               </View>
             ) : null}
           </Card>
@@ -475,7 +497,7 @@ function InstallSheet({
 
   return (
     <View style={{ gap: t.space.section }}>
-      <Toolbar title={`Add ${entry.name}`} subtitle={`${publisherLine(card)} · ${card.trustNote}`} actions={<Button label="Back to catalogue" variant="ghost" onPress={onBack} />} />
+      <Toolbar title={`Add ${entry.name}`} subtitle={`${publisherLine(card)} · ${card.trustNote}`} actions={<Button label="Back to the gallery" variant="ghost" onPress={onBack} />} />
       {card.warning ? <Notice tone="attention">{card.warning}</Notice> : null}
       {byo && setup ? (
         <ByoSetupSteps
@@ -492,7 +514,7 @@ function InstallSheet({
       ) : null}
       {setup && !byo ? <Notice tone="attention">{setup.reason}</Notice> : null}
 
-      <Section title="Where">
+      <Section title="Add it to">
         {projectAllowed ? (
           <Segmented
             value={scope}
@@ -516,8 +538,8 @@ function InstallSheet({
                   selected={on && can.ok}
                   onPress={can.ok ? () => setTargets((list) => (on ? list.filter((id) => id !== dest.id) : [...list, dest.id])) : undefined}
                   title={dest.label}
-                  subtitle={can.ok ? dest.configPath : can.reason}
-                  trailing={!can.ok ? <Tag label="can't take it" tone="attention" /> : added?.editors.includes(dest.id) ? <Tag label="has it" /> : on ? <Tag label="included" tone="ok" /> : <Tag label="skipped" />}
+                  subtitle={can.ok ? undefined : can.reason}
+                  trailing={!can.ok ? <Tag label="Can't use it" tone="attention" /> : added?.editors.includes(dest.id) ? <Tag label="Has it" /> : on ? <Tag label="Included" tone="ok" /> : <Tag label="Skipped" />}
                 />
               );
             })}
@@ -532,15 +554,15 @@ function InstallSheet({
                 selected={project.path === projectPath}
                 onPress={() => setProjectPath(project.path)}
                 title={project.name}
-                subtitle={`${project.path}/.mcp.json · ${project.servers} server${project.servers === 1 ? "" : "s"}`}
-                trailing={project.path === projectPath ? <Tag label="chosen" tone="ok" /> : added?.projects.includes(project.path) ? <Tag label="has it" /> : null}
+                subtitle={`${project.servers} connector${project.servers === 1 ? "" : "s"} · ${project.path}`}
+                trailing={project.path === projectPath ? <Tag label="Chosen" tone="ok" /> : added?.projects.includes(project.path) ? <Tag label="Has it" /> : null}
               />
             ))}
           </Card>
         )}
       </Section>
 
-      <Section title="Details">
+      <Section title="Name and details">
         <Card>
           <Field label="Name" value={name} onChangeText={setName} hint="What your AI apps call it. Letters, numbers, - and _." />
           {inputs.map((input) =>
@@ -567,16 +589,16 @@ function InstallSheet({
           ) : null}
           {setup?.kind === "per-org" ? <Text style={t.text.caption}>{`Only lowercase letters, numbers and -. The rest of the address stays as ${setup.urlTemplate ?? ""}.`}</Text> : null}
           {entry.auth === "oauth" && inputs.length === 0 && !byo ? <Text style={t.text.caption}>No key needed: you sign in with your account after it's added.</Text> : null}
-          {entry.auth === "unknown" && inputs.length === 0 ? <Text style={t.text.caption}>No key is listed for this server. If it asks you to sign in once added, open it and choose Connect.</Text> : null}
+          {entry.auth === "unknown" && inputs.length === 0 ? <Text style={t.text.caption}>No key is listed for this connector. If it asks you to sign in once added, open it and choose Connect.</Text> : null}
         </Card>
       </Section>
 
-      <Section title="The change">
-        {planQuery.isFetching && !plan ? <Loading label="Working out the change…" /> : null}
+      <Section title="Before you add it">
+        {planQuery.isFetching && !plan ? <Loading label="Working out what will change…" /> : null}
         {plan?.clash ? (
           <Notice tone="attention">
             <View style={{ gap: t.space.sm }}>
-              <Text style={t.text.body}>{`A server called '${name.trim()}' is already in ${plan.clash.files.join(", ")}. Nothing is replaced.`}</Text>
+              <Text style={t.text.body}>{`You already have one called '${name.trim()}' (in ${plan.clash.files.join(", ")}). Nothing is replaced.`}</Text>
               <View style={{ flexDirection: "row", gap: t.space.sm }}>
                 <Button label={`Use '${plan.clash.suggestion}'`} onPress={() => setName(plan.clash?.suggestion ?? name)} />
                 <Button label="Skip" variant="ghost" onPress={onBack} />
@@ -597,12 +619,16 @@ function InstallSheet({
             <Text selectable style={[t.text.mono, { color: t.color.fg }]}>{plan.commandLine}</Text>
           </View>
         ) : null}
-        {plan?.previews.map((preview) => (
-          <View key={preview.file} style={{ gap: t.space.xs }}>
-            <Text style={t.text.label}>{`${preview.label} · ${preview.file}`}</Text>
-            <CodeBlock copy={false}>{preview.text.trimEnd()}</CodeBlock>
-          </View>
-        ))}
+        {plan && plan.previews.length > 0 ? (
+          <Disclosure quiet title="See exactly what will be saved" openTitle="Hide what will be saved">
+            {plan.previews.map((preview) => (
+              <View key={preview.file} style={{ gap: t.space.xs }}>
+                <Text style={t.text.label}>{`${preview.label} · ${preview.file}`}</Text>
+                <CodeBlock copy={false}>{preview.text.trimEnd()}</CodeBlock>
+              </View>
+            ))}
+          </Disclosure>
+        ) : null}
         {plan && plan.envToSet.length > 0 ? (
           <Text style={t.text.caption}>{`Set before use: ${plan.envToSet.map((entry) => entry.name).join(", ")}.`}</Text>
         ) : null}
@@ -733,7 +759,7 @@ export function CopyCatalogEntryButton({ name }: { name: string }) {
       if (!result.ok) return toast.error(result.message);
       if (copyToClipboard(result.json)) {
         setFallback("");
-        toast.show(`Copied ${name} as a catalogue entry. ${result.message}`, { variant: "success" });
+        toast.show(`Copied ${name} for a team list. ${result.message}`, { variant: "success" });
       } else {
         setFallback(result.json);
         toast.show("No clipboard here; the entry is shown below to select.", { variant: "warning" });
@@ -743,7 +769,7 @@ export function CopyCatalogEntryButton({ name }: { name: string }) {
   });
   return (
     <>
-      <Button label="Copy as catalogue entry" variant="ghost" loading={copy.isPending} onPress={() => copy.mutate()} />
+      <Button label="Copy for a team list" variant="ghost" loading={copy.isPending} onPress={() => copy.mutate()} />
       {fallback ? (
         <View style={{ width: "100%", gap: t.space.xs, borderLeftWidth: 2, borderLeftColor: alpha(t.color.muted, 0.3), paddingLeft: t.space.sm }}>
           <CodeBlock>{fallback.trimEnd()}</CodeBlock>

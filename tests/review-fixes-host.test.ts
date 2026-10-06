@@ -223,7 +223,7 @@ test("fix 3: the write itself refuses a name the file already has, and Add can't
   setup({ codex: CODEX_INLINE });
   const { destWrite } = await import("../server/handlers");
   const dest = { id: P.codex, label: "Codex", provider: "codex", providerId: "codex", account: "", configPath: P.codex, format: "toml-mcp" } as const;
-  assert.throws(() => destWrite(dest, "foo", { url: "https://other.example/mcp" }, { onlyIfAbsent: true }), /already has a server called foo/);
+  assert.throws(() => destWrite(dest, "foo", { url: "https://other.example/mcp" }, { onlyIfAbsent: true }), /already has a connector called foo/);
   assert.equal(text(P.codex), CODEX_INLINE);
   resetDaemonReads();
   const added = await handleMcpAdd({ name: "foo", kind: "http", url: "https://other.example/mcp", targets: [P.codex] }, context);

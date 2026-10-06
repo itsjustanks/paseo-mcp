@@ -154,7 +154,7 @@ test("registry: packages are shown, not added; what cannot be filled in is not i
   const card = registryCard({ name: "com.supabase/mcp", version: "0.13.0", packages: [{ registryType: "npm", identifier: "@supabase/mcp-server-supabase", version: "0.13.0", transport: { type: "stdio" }, environmentVariables: [{ name: "SUPABASE_ACCESS_TOKEN", isSecret: true, isRequired: true }] }] });
   assert.equal(card.installable, false);
   assert.equal(card.blockedReason, REGISTRY_PACKAGE_REASON);
-  assert.equal(card.warning, "Runs code on this server.");
+  assert.equal(card.warning, "Runs code on this computer.");
   // Named only so "Added" can find it; no env, no inputs to fill.
   assert.equal(card.entry.command, "npx");
   assert.deepEqual(card.entry.args, ["@supabase/mcp-server-supabase"]);
@@ -375,17 +375,17 @@ test("search: words across name, publisher and description; the empty-state line
   assert.equal(cards.filter((card) => cardMatches(card, "", "design")).length, 3);
   assert.equal(
     searchSummary({ query: "jira", recommended: 31, team: 0, registrySearched: true, shown: [] }),
-    "Searched the registry and 31 recommended servers for 'jira': 0 official, 0 community.",
+    "Searched the registry and 31 recommended connectors for 'jira': 0 official, 0 community.",
   );
   const community = registryCard({ name: "io.github.x/jira", remotes: [{ type: "streamable-http", url: "https://jira-x.vercel.app/mcp" }] });
   assert.equal(
     searchSummary({ query: "jira", recommended: 31, team: 4, registrySearched: true, shown: [community, community, community] }),
-    "Searched the registry, 31 recommended servers and 4 team servers for 'jira': 0 official, 0 team, 3 community.",
+    "Searched the registry, 31 recommended connectors and 4 team connectors for 'jira': 0 official, 0 team, 3 community.",
   );
 });
 
 test("budget line names the tier", () => {
-  assert.match(budgetImpact("user", 3, "Claude"), /^Adds 1 server to every workspace for Claude; an agent there would load 3 user-level servers\.$/);
+  assert.match(budgetImpact("user", 3, "Claude"), /^Adds 1 connector to every workspace for Claude; that makes 3 connectors in every workspace\.$/);
   assert.match(budgetImpact("user", 9, "Claude"), /getting heavy/);
   assert.match(budgetImpact("project", 17, "demo's .mcp.json"), /over budget/);
 });

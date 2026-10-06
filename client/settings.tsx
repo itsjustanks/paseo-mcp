@@ -41,10 +41,10 @@ function fromChoice(choice: ProviderChoice): InjectionProvider[] {
 }
 
 export function describeInjection(values: InjectionSettings): string {
-  if (!values.injectWorkspaceServers) return "Off: this plugin adds no project servers to new agents";
+  if (!values.injectWorkspaceServers) return "Off: this plugin adds no project connectors to new agents";
   const who = toChoice(values.providers);
   const target = who === "both" ? "Claude Code and Codex" : who === "claude" ? "Claude Code" : "Codex";
-  return `Adding project servers to new ${target} agents${values.skipInlineCredentialServers ? ", skipping inline-credential servers" : ""}`;
+  return `Adding project connectors to new ${target} agents${values.skipInlineCredentialServers ? ", skipping ones with keys in the file" : ""}`;
 }
 
 function InjectionControls({ settings, theme }: { settings: Ready; theme: PluginSurfaceProps["theme"] }) {
@@ -62,7 +62,7 @@ function InjectionControls({ settings, theme }: { settings: Ready; theme: Plugin
         <SettingsCard>
           <SettingsSwitch
             label={ADD_PROJECT_SERVERS}
-            hint="Add the workspace's .mcp.json servers to every new agent; mainly for Codex, which does not read .mcp.json"
+            hint="Add the workspace's .mcp.json connectors to every new agent; mainly for Codex, which does not read .mcp.json"
             value={values.injectWorkspaceServers}
             disabled={settings.saving}
             onValueChange={(injectWorkspaceServers) => save({ injectWorkspaceServers })}
@@ -76,8 +76,8 @@ function InjectionControls({ settings, theme }: { settings: Ready; theme: Plugin
             onValueChange={(choice) => save({ providers: fromChoice(choice) })}
           />
           <SettingsSwitch
-            label="Skip inline-credential servers"
-            hint="Leave out servers whose .mcp.json entry carries tokens in env, headers, args, or the URL"
+            label="Skip connectors with keys in the file"
+            hint="Leave out connectors whose .mcp.json entry carries tokens in env, headers, args, or the URL"
             value={values.skipInlineCredentialServers}
             disabled={settings.saving || !values.injectWorkspaceServers}
             onValueChange={(skipInlineCredentialServers) => save({ skipInlineCredentialServers })}
@@ -93,12 +93,12 @@ function InjectionControls({ settings, theme }: { settings: Ready; theme: Plugin
         <SettingsRow label="Status" hint={describeInjection(values)} />
         <Text style={muted}>
           When an agent is created, the plugin reads .mcp.json from the agent's working directory or its
-          project root and adds each server to the agent's MCP configuration. Servers the agent already
-          defines are left alone. Nothing is written to disk.
+          project root and adds each connector to that agent. Connectors the agent already has are left
+          alone. Nothing is written to disk.
         </Text>
         <Text style={muted}>
-          Paseo's own tools (mcp__paseo__*, the app's "Enable Paseo tools") are a different switch: MCP → Servers →
-          Paseo tools.
+          Paseo's own tools (mcp__paseo__*, the app's "Enable Paseo tools") are a different switch: Connectors →
+          Built-in tools.
         </Text>
       </SettingsSection>
     </>
@@ -133,8 +133,8 @@ const INTERVAL_OPTIONS = HEALTH_INTERVAL_CHOICES.map((minutes) => ({
 }));
 
 export function describeHealth(values: HealthSettings): string {
-  if (!values.backgroundChecks) return "Background checks are off; servers are probed only when you press Refresh";
-  return `Probing every ${values.intervalMinutes} minutes${values.showComposerPill ? ", with an MCP chip on every agent's composer" : ""}`;
+  if (!values.backgroundChecks) return "Background checks are off; connectors are checked only when you press Refresh";
+  return `Checking every ${values.intervalMinutes} minutes${values.showComposerPill ? ", with a Connectors chip on every agent's composer" : ""}`;
 }
 
 function HealthControls({ settings, theme }: { settings: HealthReady; theme: PluginSurfaceProps["theme"] }) {
@@ -155,15 +155,15 @@ function HealthControls({ settings, theme }: { settings: HealthReady; theme: Plu
       <SettingsSection title="Health checks">
         <SettingsCard>
           <SettingsSwitch
-            label="Check servers in the background"
-            hint="Probe every MCP server on a timer, not only when Refresh is pressed"
+            label="Check connectors in the background"
+            hint="Check every connector on a timer, not only when Refresh is pressed"
             value={values.backgroundChecks}
             disabled={settings.saving}
             onValueChange={(backgroundChecks) => save({ backgroundChecks })}
           />
           <SettingsSelect
             label="Interval"
-            hint="How often the host probes HTTP endpoints and looks for stdio binaries"
+            hint="How often the host checks each connector"
             value={String(values.intervalMinutes)}
             options={intervalOptions}
             disabled={settings.saving || !values.backgroundChecks}
@@ -171,14 +171,14 @@ function HealthControls({ settings, theme }: { settings: HealthReady; theme: Plu
           />
           <SettingsSwitch
             label="Composer chip"
-            hint="Always show an MCP chip on each agent's composer: server count, then issues, sign-ins or what the tool definitions cost; press it to open that agent's MCP panel"
+            hint="Always show a Connectors chip on each agent's composer: the connector count, then issues, sign-ins or what the tool definitions cost; press it to open that agent's Connectors panel"
             value={values.showComposerPill}
             disabled={settings.saving}
             onValueChange={(showComposerPill) => save({ showComposerPill })}
           />
           <SettingsSwitch
             label="Chat notices: sign-in problems"
-            hint="When an MCP tool call in a chat fails for lack of a sign-in, add one card to that chat with a Connect button (at most one per server per chat)"
+            hint="When a connector's tool call in a chat fails for lack of a sign-in, add one card to that chat with a Connect button (at most one per connector per chat)"
             value={values.chatSignInNotices}
             disabled={settings.saving}
             onValueChange={(chatSignInNotices) => save({ chatSignInNotices })}
@@ -193,10 +193,10 @@ function HealthControls({ settings, theme }: { settings: HealthReady; theme: Plu
       <SettingsSection title="How it works">
         <SettingsRow label="Status" hint={describeHealth(values)} />
         <Text style={muted}>
-          The host keeps the most recent result and every panel, pill and the MCP surface reads that cached
-          verdict, so opening ten agents does not probe your servers ten times. Refresh and Check now always
-          run a fresh probe. A server defined in an editor's global config is flagged as a user-level problem;
-          one defined only by a project's .mcp.json is flagged against that project.
+          The host keeps the most recent result, and every panel, chip and the Connectors page read that saved
+          result, so opening ten agents does not check your connectors ten times. Refresh and Check now always
+          run a fresh check. A connector set up in an AI app's own settings is flagged for every workspace;
+          one set up only by a project's .mcp.json is flagged against that project.
         </Text>
       </SettingsSection>
     </>

@@ -165,15 +165,15 @@ export function basisWord(basis: CostBasis): string {
 export type ContextUsage = { usedTokens: number; maxTokens: number };
 
 /**
- * "This chat: 360k of 1M context; MCP definitions ≈38k of that." With tool
+ * "This chat: 360k of 1M context; connector tools ≈38k of that." With tool
  * search on, the definitions are not all in the context, so it says that
  * instead of claiming a share.
  */
 export function usageLine(usage: ContextUsage, meter: Pick<Meter, "tokens" | "deferred"> | null): string {
   const head = `This chat: ${shortTokens(usage.usedTokens)} of ${shortTokens(usage.maxTokens)} context`;
   if (!meter) return `${head}.`;
-  if (meter.deferred) return `${head}; MCP definitions are deferred, so only the ones this chat used are in it.`;
-  return `${head}; MCP definitions ≈${shortTokens(meter.tokens)} of that.`;
+  if (meter.deferred) return `${head}; connector tools are deferred, so only the ones this chat used are in it.`;
+  return `${head}; connector tools ≈${shortTokens(meter.tokens)} of that.`;
 }
 
 /** Usage from an agent snapshot's `lastUsage`, or null when it does not carry both numbers. */

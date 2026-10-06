@@ -233,7 +233,7 @@ export async function handleMcpSetEnabled(
   // A write: the provider settings are read fresh, never from the cached copy.
   const current = await handleMcpAgentServers({ workspaceId, providerId }, context, { fresh: true });
   const server = current.servers.find((entry) => entry.name === name);
-  if (!server) return { ok: false, message: `'${name}' is not a server this agent loads` };
+  if (!server) return { ok: false, message: `'${name}' is not a connector this agent loads` };
   if (!current.scope) return { ok: false, message: "No editor config is wired to this provider" };
   const lever = leverFor(current.scope.provider, server.scope);
   if (lever === "none") return { ok: false, message: server.enabled.reason };

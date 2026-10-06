@@ -57,9 +57,9 @@ export function leverFor(provider: string, scope: LoadScope): Lever {
 
 export function noSwitchReason(provider: string, scope: LoadScope): string {
   if (provider === "codex") {
-    return "Codex reads config.toml on top of what Paseo passes it, so nothing per workspace can turn this off: enabled = false in config.toml turns it off everywhere. Use Servers to remove it, or edit config.toml.";
+    return "Codex reads config.toml on top of what Paseo passes it, so nothing per workspace can turn this off: enabled = false in config.toml turns it off everywhere. Use Connectors to remove it, or edit config.toml.";
   }
-  return `${provider || "This editor"} has no per-workspace switch for an MCP server${scope === "project" ? " it adds from .mcp.json" : ""}.`;
+  return `${provider || "This editor"} has no per-workspace switch for a connector${scope === "project" ? " it adds from .mcp.json" : ""}.`;
 }
 
 // ------------------------------------------------------------------- entry
@@ -142,9 +142,9 @@ export function switchVerdict(
     reason:
       scope === "user"
         ? state === "disabled"
-          ? "Off for this workspace only. The user-level definition is untouched and other workspaces still load it."
-          : "User-level server, loaded in every workspace. Turn it off here to skip it for this workspace only."
-        : "Claude Code's per-directory (local) server for this workspace.",
+          ? "Off for this workspace only. Nothing else changes, and other workspaces still load it."
+          : "Set up for every workspace. Turn it off here to skip it for this workspace only."
+        : "Claude Code's per-directory (local) connector for this workspace.",
   };
 }
 
@@ -258,4 +258,4 @@ export function setInjectionEnabled(store: InjectionDisabledStore, dir: string, 
 }
 
 /** Copy for the panel: what a toggle does and when it takes effect. */
-export const SWITCH_EFFECT_NOTE = "Takes effect when a new agent session starts; a running agent keeps the servers it started with.";
+export const SWITCH_EFFECT_NOTE = "Takes effect when a new agent session starts; a running agent keeps the connectors it started with.";

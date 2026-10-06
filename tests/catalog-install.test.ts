@@ -131,8 +131,8 @@ test("user level: written to each chosen editor with backups, read back, then he
   assert.equal(plan.ok, true, plan.issues.join());
   assert.equal(plan.previews.length, 2);
   assert.match(plan.previews[1]?.text ?? "", /\[mcp_servers\.linear\]\nurl = "https:\/\/mcp\.linear\.app\/mcp"/);
-  assert.match(plan.budget, /Adds 1 server to every workspace/);
-  assert.ok(plan.notes.some((note) => /Connect OAuth/.test(note)));
+  assert.match(plan.budget, /Adds 1 connector to every workspace/);
+  assert.ok(plan.notes.some((note) => /choose Connect/.test(note)));
 
   const result = await planThenInstall(input, context);
   assert.equal(result.ok, true, result.message);

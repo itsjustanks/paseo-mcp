@@ -102,7 +102,7 @@ export function liveSnapshot(): LiveSnapshot {
 
 async function ask(mcpEnabled: boolean): Promise<LiveSnapshot> {
   const at = new Date().toISOString();
-  if (!mcpEnabled) return { tools: null, checkedAt: at, note: "Paseo's MCP server is off, so there is no live list" };
+  if (!mcpEnabled) return { tools: null, checkedAt: at, note: "Paseo's own connector is off, so there is no live list" };
   const endpoint = liveEndpoint(deps.env(), readJsonCached(join(deps.home(), "config.json")), readJsonCached(join(deps.home(), "paseo.pid")));
   if (!endpoint.url) return { tools: null, checkedAt: at, note: endpoint.reason };
   const outcome = await listToolsMcp(endpoint.url, undefined, { fetch: deps.fetch, timeoutMs: LIVE_TIMEOUT_MS });

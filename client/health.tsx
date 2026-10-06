@@ -144,8 +144,8 @@ export function HealthSummary({ directory, names }: { directory: string; names: 
       <View style={{ gap: t.space.sm }}>
         <Text style={t.text.body}>
           {here.length > 0
-            ? `${plural(here.length, "MCP server")} this workspace loads ${here.length === 1 ? "needs" : "need"} attention`
-            : `No MCP problems here · ${plural(away.length, "issue")} elsewhere`}
+            ? `${plural(here.length, "connector")} this workspace loads ${here.length === 1 ? "needs" : "need"} attention`
+            : `No connector problems here · ${plural(away.length, "issue")} elsewhere`}
         </Text>
         {rows(here)}
         {away.length > 0 ? (

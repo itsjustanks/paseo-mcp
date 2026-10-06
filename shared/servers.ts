@@ -151,7 +151,7 @@ export function serverDescription(server: Pick<McpServerRow, "transport" | "deta
   }
   if (server.transport === "http") {
     const host = hostOf(server.detail);
-    return host ? `Your server at ${host}` : "Your own server on the web";
+    return host ? `Your connector at ${host}` : "Your own connector on the web";
   }
   return "Runs on this computer";
 }
@@ -343,7 +343,7 @@ export function removePlan(
     );
   }
   lines.push(
-    "Each file is backed up before it is written. The apps' sign-ins are not touched. There is no undo: Export this server first if you might want it back.",
+    "Each file is backed up before it's changed. The apps' sign-ins aren't touched. There's no undo: save a copy first (under Technical details) if you might want it back.",
   );
   return {
     scope,

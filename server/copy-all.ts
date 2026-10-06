@@ -241,11 +241,11 @@ export async function handleMcpCopyAll(
       if (destNamesAll(dest).has(pick.name)) {
         const there = destReadOne(dest, pick.name);
         const same = there && entry && sameDefinition(there, entry.source.def);
-        result.skipped.push({ label, reason: same ? "it already has it" : `it already has a different server called ${pick.name}; left as it is` });
+        result.skipped.push({ label, reason: same ? "it already has it" : `it already has a different connector called ${pick.name}; left as it is` });
         continue;
       }
       const why = excluded.find((line) => line.name === pick.name)?.reason;
-      result.skipped.push({ label, reason: why ?? "no app has this server any more" });
+      result.skipped.push({ label, reason: why ?? "no app has this connector any more" });
     }
     if (!entry && pick.targets.length === 0) result.skipped.push({ label: pick.name, reason: "every app already has it" });
   }

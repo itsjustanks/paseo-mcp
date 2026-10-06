@@ -479,9 +479,9 @@ export function validateEntry(entry: CatalogEntry, origin: EntryOrigin): string[
   };
 
   if (entry.transport === "http") {
-    if (!entry.url) issues.push("an HTTP server needs a url");
+    if (!entry.url) issues.push("an HTTP connector needs a url");
     if (entry.command || entry.args?.length || (entry.env && Object.keys(entry.env).length)) {
-      issues.push("an HTTP server has a url and headers, not a command, args or env");
+      issues.push("an HTTP connector has a url and headers, not a command, args or env");
     }
     const parsed = entry.url ? parseTemplateUrl(entry.url) : null;
     if (entry.url && !parsed) issues.push("url is not a valid address");
@@ -514,8 +514,8 @@ export function validateEntry(entry: CatalogEntry, origin: EntryOrigin): string[
       checkTemplate(`header ${name}`, value, SECRETISH_NAME.test(name));
     }
   } else {
-    if (!entry.command) issues.push("a command server needs a command");
-    if (entry.url || (entry.headers && Object.keys(entry.headers).length)) issues.push("a command server has a command and env, not a url or headers");
+    if (!entry.command) issues.push("a command connector needs a command");
+    if (entry.url || (entry.headers && Object.keys(entry.headers).length)) issues.push("a command connector has a command and env, not a url or headers");
     if (entry.command && /\s/.test(entry.command)) issues.push("command is the program only; put its arguments in args");
     if (entry.command) checkTemplate("command", entry.command, false);
     (entry.args ?? []).forEach((arg, index) => {
@@ -535,7 +535,7 @@ export function validateEntry(entry: CatalogEntry, origin: EntryOrigin): string[
   for (const id of declared.keys()) if (!used.has(id)) issues.push(`input ${id} is declared but never used`);
   if (entry.auth === "header" && !(entry.headers && Object.keys(entry.headers).length)) issues.push("auth is header but no header is set");
   if (entry.auth === "env" && !(entry.env && Object.keys(entry.env).length)) issues.push("auth is env but no env is set");
-  if ((entry.auth === "oauth" || entry.auth === "header") && entry.transport !== "http") issues.push(`auth ${entry.auth} needs an HTTP server`);
+  if ((entry.auth === "oauth" || entry.auth === "header") && entry.transport !== "http") issues.push(`auth ${entry.auth} needs an HTTP connector`);
   if (entry.docs) {
     const docs = parseTemplateUrl(entry.docs);
     if (!docs || docs.protocol !== "https:") issues.push("docs must be an https link");
@@ -611,7 +611,7 @@ export const TEAM_MAX_ENTRIES = 500;
  * literal secret is refused outright, never shown with the value in it.
  */
 export function parseTeamCatalogue(text: string): TeamParse {
-  if (text.length > TEAM_MAX_BYTES) return { entries: [], refused: [], error: `the file is ${Math.round(text.length / 1024)} KB; a catalogue should be well under 1 MB` };
+  if (text.length > TEAM_MAX_BYTES) return { entries: [], refused: [], error: `the file is ${Math.round(text.length / 1024)} KB; a library should be well under 1 MB` };
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);
@@ -634,7 +634,7 @@ export function parseTeamCatalogue(text: string): TeamParse {
     const result = CatalogEntrySchema.safeParse(raw);
     if (!result.success) {
       const first = result.error.issues[0];
-      refused.push({ id, reason: first ? `${first.path.join(".") || "entry"}: ${first.message}` : "not a catalogue entry" });
+      refused.push({ id, reason: first ? `${first.path.join(".") || "entry"}: ${first.message}` : "not a gallery entry" });
       continue;
     }
     const issues = validateEntry(result.data, "team");
@@ -683,7 +683,7 @@ export function normaliseUrl(url: string): string {
 export type TrustVerdict = { trust: "official" | "community"; note: string; warning: string };
 
 export const RELAY_WARNING = "A third party relays your traffic and any key you give it.";
-export const PACKAGE_WARNING = "Runs code on this server.";
+export const PACKAGE_WARNING = "Runs code on this computer.";
 
 /**
  * Official means every remote address is one the Recommended shelf already
@@ -782,7 +782,7 @@ export function titleFromId(id: string): string {
 }
 
 /** Why a registry server that only ships a package is shown but not added (0.12.0). */
-export const REGISTRY_PACKAGE_REASON = "Packages from the public registry aren't added in one click: check the repository and add it by hand.";
+export const REGISTRY_PACKAGE_REASON = "Packages from the public registry aren't added in one click: check the repository, then add it yourself.";
 
 const INPUTS_MAX = 16;
 const URL_MAX = 2048;
@@ -868,7 +868,7 @@ export function registryCard(server: RegistryServer, knownOfficialUrls: Readonly
       auth: Object.keys(record).length ? "header" : "unknown",
     };
     if (url.length > URL_MAX) blockedReason = `Its address is over ${URL_MAX} characters; see its repository.`;
-    else if (inputs.length > INPUTS_MAX) blockedReason = `It asks for ${inputs.length} values, more than the ${INPUTS_MAX} the plugin fills in; add it by hand.`;
+    else if (inputs.length > INPUTS_MAX) blockedReason = `It asks for ${inputs.length} values, more than the ${INPUTS_MAX} the plugin fills in; add it yourself.`;
     else if (placeholdersIn(url).length > 0) blockedReason = "Its address has parts to fill in that the registry does not describe; see its repository.";
   } else {
     // Shown, never added: the package is only named so "Added" can find it.
@@ -939,7 +939,7 @@ export function teamCard(entry: CatalogEntry, source: string): CatalogCard {
     shelf: "team",
     entry: cleanEntryText(withCredentialSecrets(entry, "team")),
     trust: "team",
-    trustNote: `From your team catalogue (${cleanText(source)}).`,
+    trustNote: `From your team list (${cleanText(source)}).`,
     warning: "",
     installable: blockedReason === "",
     blockedReason: cleanText(blockedReason),
@@ -1076,20 +1076,20 @@ export function similarName(card: Pick<CatalogCard, "added" | "entry">, owned: r
   return owned.find((server) => nameMatches(server.name, card.entry, prefixes))?.name ?? null;
 }
 
-/** "You have your own server called ikit-attio; this is Attio's official one." */
+/** "You have your own connector called ikit-attio; this is Attio's official one." */
 export function similarNameLine(card: Pick<CatalogCard, "entry" | "trust">, name: string): string {
   const vendor = card.entry.name || card.entry.id;
   return card.trust === "official"
-    ? `You have your own server called ${name}; this is ${vendor}'s official one.`
-    : `You have a server called ${name}; this one is from another source.`;
+    ? `You have your own connector called ${name}; this is ${vendor}'s official one.`
+    : `You have a connector called ${name}; this one is from another source.`;
 }
 
-/** On a card shown through "Show ones I already have": "You have a Zapier server already, called ikit-zapier." */
+/** On a card shown through "Show ones I already have": "You have a Zapier connector already, called ikit-zapier." */
 export function alreadyHaveLine(card: Pick<CatalogCard, "entry">, have: { name: string }): string {
   const vendor = card.entry.name || card.entry.id;
   return slug(have.name) === slug(vendor) || slug(have.name) === slug(card.entry.id)
-    ? `You have a ${vendor} server already.`
-    : `You have a ${vendor} server already, called ${have.name}.`;
+    ? `You have a ${vendor} connector already.`
+    : `You have a ${vendor} connector already, called ${have.name}.`;
 }
 
 /** "12 you already have are hidden." — or "" when none are. */
@@ -1101,7 +1101,7 @@ export function hiddenLine(hidden: number): string {
 /**
  * The empty-state line: says what was searched and what came back, so "no
  * results" never reads as "nothing exists". Example: "Searched the registry
- * and 31 recommended servers for 'jira': 0 official, 3 community."
+ * and 31 recommended connectors for 'jira': 0 official, 3 community."
  */
 export function searchSummary(input: {
   query: string;
@@ -1115,9 +1115,9 @@ export function searchSummary(input: {
   const libraryTotal = input.library ?? 0;
   const places: string[] = [];
   if (input.registrySearched) places.push("the registry");
-  places.push(`${input.recommended} recommended server${input.recommended === 1 ? "" : "s"}`);
-  if (libraryTotal > 0) places.push(`${libraryTotal} library server${libraryTotal === 1 ? "" : "s"}`);
-  if (input.team > 0) places.push(`${input.team} team server${input.team === 1 ? "" : "s"}`);
+  places.push(`${input.recommended} recommended connector${input.recommended === 1 ? "" : "s"}`);
+  if (libraryTotal > 0) places.push(`${libraryTotal} library connector${libraryTotal === 1 ? "" : "s"}`);
+  if (input.team > 0) places.push(`${input.team} team connector${input.team === 1 ? "" : "s"}`);
   const joined = places.length > 1 ? `${places.slice(0, -1).join(", ")} and ${places[places.length - 1]}` : places[0];
   const official = input.shown.filter((card) => card.trust === "official").length;
   const team = input.shown.filter((card) => card.trust === "team").length;
@@ -1270,7 +1270,7 @@ export function planInstall(original: CatalogEntry, scope: InstallScope, values:
     if (input.secret && value) secretValues.add(value);
     if (scope === "project" && input.secret) {
       const name = varNames.get(input.id) ?? "";
-      if (reservedEnvName(name)) issues.push(`${name} is a variable Claude Code or a common tool uses itself; add this server at user level instead.`);
+      if (reservedEnvName(name)) issues.push(`${name} is a variable Claude Code or a common tool uses itself; add this connector to My AI apps instead.`);
       envToSet.push({ name, label: input.label });
     }
   }
@@ -1326,7 +1326,7 @@ export function planInstall(original: CatalogEntry, scope: InstallScope, values:
   const definition = build(false);
   const masked = build(true);
   if (org && typeof definition.url === "string" && definition.url && fillOrgTemplate(entry.setup?.urlTemplate ?? "", (values[org] ?? "").trim()).url !== definition.url) {
-    issues.push("That would point the server at another site.");
+    issues.push("That would point the connector at another site.");
   }
 
   if (scope === "project") {
@@ -1602,12 +1602,12 @@ export function addedFor(entry: CatalogEntry, index: AddedIndex, editorCount: nu
 
 // ------------------------------------------------------------------ budget
 
-/** One line on what adding a server does to the load; see shared/budget.ts for the thresholds. */
+/** One line on what adding a connector does to the load; see shared/budget.ts for the thresholds. */
 export function budgetImpact(scope: InstallScope, after: number, where: string): string {
   const tier = budgetTier(after);
   const head = scope === "user"
-    ? `Adds 1 server to every workspace for ${where}; an agent there would load ${after} user-level server${after === 1 ? "" : "s"}.`
-    : `Adds 1 server to ${where}; this workspace's agents would load ${after} server${after === 1 ? "" : "s"}.`;
+    ? `Adds 1 connector to every workspace for ${where}; that makes ${after} connector${after === 1 ? "" : "s"} in every workspace.`
+    : `Adds 1 connector to ${where}; this workspace's agents would load ${after} connector${after === 1 ? "" : "s"}.`;
   if (tier === "problem") return `${head} That is over budget (${BUDGET_PROBLEM}+): expect "Prompt is too long" without tool search.`;
   if (tier === "attention") return `${head} That is getting heavy (${BUDGET_ATTENTION}+).`;
   return head;
@@ -1634,7 +1634,7 @@ export const catalogSettings = defineSettings({
   scope: "host",
   version: 2,
   schema: z.object({
-    libraries: LibrariesSchema.default(DEFAULT_LIBRARIES).describe("Libraries of MCP servers the gallery reads, in order"),
+    libraries: LibrariesSchema.default(DEFAULT_LIBRARIES).describe("Libraries of connectors the gallery reads, in order"),
   }),
   migrate: migrateCatalogValues,
 });

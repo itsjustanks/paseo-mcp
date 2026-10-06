@@ -171,7 +171,7 @@ export function toolSearch(providerId: string, inputs: ToolSearchInputs): ToolSe
   const verdict = (state: ToolSearchState, reason: string): ToolSearchVerdict => ({ state, reason, cli });
   if (!cli) return verdict("unknown", `The plugin does not know which CLI the ${providerId || "unwired"} provider runs`);
   if (cli === "codex") {
-    return verdict("unknown", "Codex defers MCP tools only when its model supports tool search, and the plugin cannot see the model");
+    return verdict("unknown", "Codex defers connector tools only when its model supports tool search, and the plugin cannot see the model");
   }
   if (cli !== "claude") return verdict("off", `${CLI_LABELS[cli] ?? cli} has no documented tool search`);
 

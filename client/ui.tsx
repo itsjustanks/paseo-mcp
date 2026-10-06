@@ -1276,6 +1276,73 @@ export function Disclosure({
   );
 }
 
+/**
+ * A card of fold-out rows (0.19.0): the technical or less-used parts of a page
+ * sit here, each one press away, so the page itself stays plain. Children are
+ * AccordionItems; the card draws the rule between them.
+ */
+export function Accordion({ children }: { children: React.ReactNode }) {
+  const t = useTokens();
+  const items = React.Children.toArray(children).filter(Boolean);
+  if (items.length === 0) return null;
+  return (
+    <View style={{ backgroundColor: t.color.surface1, borderRadius: RADIUS.card, borderWidth: 1, borderColor: t.color.border, overflow: "hidden" }}>
+      {items.map((child, index) => (
+        <View key={index} style={index > 0 ? { borderTopWidth: 1, borderTopColor: t.color.border } : undefined}>
+          {child}
+        </View>
+      ))}
+    </View>
+  );
+}
+
+/** One row of an Accordion: an icon, a title, a short summary and a chevron; its content opens below it. */
+export function AccordionItem({
+  icon: name,
+  title,
+  summary,
+  tone,
+  open: initial = false,
+  children,
+}: {
+  icon?: string;
+  title: string;
+  /** One line under the title, so the row says what's inside before it's opened. */
+  summary?: string;
+  tone?: Status;
+  open?: boolean;
+  children: React.ReactNode;
+}) {
+  const t = useTokens();
+  const [open, setOpen] = useState(initial);
+  const pad = t.compact ? SPACE.md : SPACE.card;
+  return (
+    <View>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={title}
+        accessibilityState={{ expanded: open }}
+        // react-native-web 0.21 ignores accessibilityState; say it the web way too.
+        aria-expanded={open}
+        onPress={() => setOpen((value) => !value)}
+        style={({ pressed }) => ({ flexDirection: "row", alignItems: "center", gap: SPACE.row, paddingHorizontal: pad, paddingVertical: SPACE.row + SPACE.hair, minHeight: 56, opacity: pressed ? 0.7 : 1 })}
+      >
+        {name ? <IconBadge name={name} tone={tone && tone !== "neutral" ? tone : "accent"} size={32} /> : null}
+        <View style={{ flex: 1, gap: SPACE.hair, minWidth: 0 }}>
+          <Text style={[t.text.bodyStrong, tone === "error" ? { color: statusColor(t, "error") } : null]}>{title}</Text>
+          {summary ? <Text style={t.text.caption} numberOfLines={2}>{summary}</Text> : null}
+        </View>
+        {HostIcon ? (
+          <HostIcon name={open ? "ChevronUp" : "ChevronDown"} size={18} color={t.color.muted} />
+        ) : (
+          <Text style={{ ...TYPE.body, color: t.color.muted }}>{open ? "▴" : "▾"}</Text>
+        )}
+      </Pressable>
+      {open ? <View style={{ paddingHorizontal: pad, paddingBottom: pad, gap: SPACE.row }}>{children}</View> : null}
+    </View>
+  );
+}
+
 /** A heading inside a card, for one part of a longer explanation. */
 export function SectionTitle({ icon: name, children }: { icon?: string; children: React.ReactNode }) {
   const t = useTokens();

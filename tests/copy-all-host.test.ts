@@ -137,7 +137,7 @@ test("a name that turned up with a different definition since the preview is ski
   writeFileSync(kimiPath, JSON.stringify({ mcpServers: { linear: { url: "https://linear.internal.example/mcp" }, jam: { url: "https://mcp.jam.dev/mcp" } } }));
   const result = await handleMcpCopyAll({ servers: all }, context);
   const linear = result.results.find((entry) => entry.name === "linear")!;
-  assert.deepEqual(linear.skipped, [{ label: "Kimi", reason: "it already has a different server called linear; left as it is" }]);
+  assert.deepEqual(linear.skipped, [{ label: "Kimi", reason: "it already has a different connector called linear; left as it is" }]);
   assert.deepEqual(linear.written, ["Claude (work@example.com)"]);
   const jam = result.results.find((entry) => entry.name === "jam")!;
   assert.deepEqual(jam.skipped, [{ label: "Kimi", reason: "it already has it" }]);

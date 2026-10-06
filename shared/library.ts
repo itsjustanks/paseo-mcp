@@ -259,7 +259,7 @@ export type LibraryParse = {
 };
 
 /** Why a server that only ships a package the plugin can't start is shown but not added. */
-export const LIBRARY_PACKAGE_REASON = "Only npm and PyPI packages that run over stdio are added in one click; see its docs and add it by hand.";
+export const LIBRARY_PACKAGE_REASON = "Only npm and PyPI packages that run over stdio are added in one click; see its docs, then add it yourself.";
 
 const REGISTRY_NAME = /^[a-zA-Z0-9.-]+\/[a-zA-Z0-9._-]+$/;
 
@@ -431,7 +431,7 @@ export function parseLibrary(text: string): LibraryParse {
     seen.add(result.name);
     items.push(result);
   }
-  if (servers.length > LIBRARY_MAX_SERVERS) refused.push({ id: `#${LIBRARY_MAX_SERVERS + 1}…`, reason: `only the first ${LIBRARY_MAX_SERVERS} servers are read` });
+  if (servers.length > LIBRARY_MAX_SERVERS) refused.push({ id: `#${LIBRARY_MAX_SERVERS + 1}…`, reason: `only the first ${LIBRARY_MAX_SERVERS} connectors are read` });
   return { items, refused: refused.map(({ id, reason }) => ({ id: cutText(cleanText(id), 80), reason: cutText(cleanText(reason), 300) })), error: "" };
 }
 
@@ -466,7 +466,7 @@ export function libraryCard(item: LibraryItem, library: LibraryRef): CatalogCard
     entry: cleanEntryText(item.entry),
     trust: team ? "team" : "library",
     trustNote: team
-      ? `From your team catalogue (${source}).`
+      ? `From your team list (${source}).`
       : `From the ${cleanText(library.name)} library (${source}); whoever can change that library can change this entry.`,
     warning: "",
     installable: item.blockedReason === "",

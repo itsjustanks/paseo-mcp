@@ -88,7 +88,7 @@ test("2: a registry server that only ships a package is Community, runs code, an
     const card = registryCard({ name: "io.github.x/p", repository: { url: "https://github.com/x/p" }, packages: [{ registryType: "npm", identifier, version, transport: { type: "stdio" } }] });
     assert.equal(card.installable, false, identifier);
     assert.equal(card.trust, "community");
-    assert.equal(card.warning, "Runs code on this server.");
+    assert.equal(card.warning, "Runs code on this computer.");
     assert.equal(card.blockedReason, REGISTRY_PACKAGE_REASON);
     assert.equal(card.entry.docs, "https://github.com/x/p", "the repository is linked");
     assert.ok(!text(card.entry).includes("evil"), text(card.entry));

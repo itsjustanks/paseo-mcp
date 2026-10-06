@@ -2,7 +2,7 @@
 
 Manage MCP servers, project connections, credentials, and OAuth from Paseo.
 
-In the app it is called **Connectors (MCP)**: the sidebar row, its page, and the workspace and agent panels.
+In the app it is called **Connectors** (connectors are MCP servers): the sidebar row, its page, and the workspace and agent panels. Since 0.19.0 everything you read says "connector" where it said "server".
 
 ## Install
 
@@ -272,10 +272,26 @@ Settings live on the host at `$PASEO_HOME/plugin-settings/paseo-mcp/injection.js
 (`~/.paseo` by default; the file and its keys kept their 0.10 names). The hook reads that file
 directly; if it is missing or invalid, the setting stays off.
 
-## The MCP surface
+## The Connectors page
 
-Five sections: **Overview**, **Servers**, **Projects**, **Import & Export**, **Guide & Setup**. The
-words are for people who have never heard of MCP: plain English, and any term explained where it appears.
+Four tabs: **Overview**, **Connectors**, **Projects** and **Help** (0.19.0). The words are for people
+who have never heard of MCP: plain English, "connector" for what used to be called a server, and any
+term explained where it appears.
+
+0.19.0 made it calmer at the user's request ("it just needs to work for dummies"):
+- No intro block under the tab bar: each tab starts with its own content.
+- **Connectors**: Add connector, search, filters, the cards (a whole card opens it), then one card of
+  fold-outs: **Back up your connectors**, **Built-in tools**, **Totals and last check**.
+- **Add a connector**: one heading, the search, "Not in the gallery? Add with a link · Paste setup
+  instructions" right under it, then the cards. Adding with a link (the old Import & Export tab) opens
+  from there and from Help. The install sheet folds the exact files it will write behind "See exactly
+  what will be saved".
+- **A connector's page**: its status, kind and apps, the one or two things to do, its sign-in when it
+  has one, then fold-outs: **What it can do**, **Your AI apps**, **Rename**, **Technical details** (its
+  address, Show keys, Save a copy, Copy for a team list, and what each app has saved) and **Remove**.
+- **Help**: common questions, each folded (Needs sign-in, a sign-in page that won't load, Not working,
+  missing from an app, project connectors, backups), then the guide.
+- Fold-outs are `Accordion` / `AccordionItem` in `client/ui.tsx`.
 
 Since 0.17.0 it looks and reads like AI Router, the shared design standard of our Paseo plugins: one
 type scale (15 px sentences, nothing below 13; `TYPE` in `client/ui.tsx`), a header with the plug icon,
@@ -308,9 +324,9 @@ setting or a `${VAR}` the other app wouldn't fill in is skipped with the reason.
 and per app, so a file that failed shows. Paseo's own server and project `.mcp.json` servers are left
 out, and no sign-in is copied. Project trust isn't touched: Sync accounts copies that, and only where the
 other account doesn't have it yet. It is on Overview, in the next step when servers are missing from some
-apps, and on the Servers tab's **Missing from some apps** filter.
+apps, and on the Connectors tab's **Missing from some apps** filter.
 
-**Servers** is a gallery of the servers you have, in the same style as the Add gallery (0.15.0). Search
+**Connectors** is a gallery of the connectors you have, in the same style as the Add gallery (0.15.0). Search
 reads each server's name and description; the pills are **All**, **Needs attention** (health),
 **Needs sign-in** and **Missing from some apps**, each with its count. A card shows:
 
@@ -347,7 +363,7 @@ The result is reported per target, so a partial failure is visible.
 
 ## Per-workspace switches
 
-The **Workspace connectors (MCP)** panel and each agent's **Connectors (MCP)** panel list the servers an agent there
+The **Workspace connectors** panel and each agent's **Connectors** panel list the servers an agent there
 loads, each tagged with its origin (user-level, this project's `.mcp.json`, local) and with a switch
 where the editor has one. A switch takes effect when a new agent session starts; a running agent keeps
 the servers it started with. State is read from the config on every refresh, so a `/mcp disable` done in
@@ -421,7 +437,7 @@ and refreshes it in the background when it is older than 15 s; one call is in fl
 call keeps the last good copy and isn't retried from a read for 15 s. Only the very first read, or one
 that needs a project registered since (adding a server to a project Paseo just learned about), waits.
 Refresh in the Add gallery or on sign-in re-reads both in the background, and changing Paseo's tool
-settings from the Servers tab marks the provider settings out of date.
+settings from the Connectors tab marks the provider settings out of date.
 
 | Status | Meaning | Needs attention |
 | --- | --- | --- |
@@ -485,7 +501,7 @@ control can be added alongside it later.
 Every Paseo daemon runs its own MCP server, `paseo`, and with `daemon.mcp.injectIntoAgents` on it
 adds that server to every agent it starts. It hands each agent 39 tools for agents, terminals,
 schedules, heartbeats and workspaces, plus 22 `browser_*` tools when browser tools are on: 61 in all
-(Paseo 0.9.1). The **Paseo tools** card at the top of **Servers** shows and changes what agents get:
+(Paseo 0.9.1). The **Built-in tools** fold-out at the bottom of **Connectors** shows and changes what agents get:
 
 | Control | Daemon setting | Default |
 | --- | --- | --- |
@@ -539,7 +555,7 @@ is what the editor actually runs.
 
 ## Workspace context
 
-The **Workspace connectors (MCP)** tab and each agent's **Connectors (MCP)** tab lead with what an agent started in that
+The **Workspace connectors** tab and each agent's **Connectors** tab lead with what an agent started in that
 workspace actually loads, counted from the same files the CLI reads:
 
 - the workspace's `.mcp.json` (read natively by Claude Code, or added by **Add project servers to agents** for the chosen

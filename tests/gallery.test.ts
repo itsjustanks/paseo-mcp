@@ -97,12 +97,12 @@ test("description: the catalogue's line when the endpoint is a known one, else w
   // A package at another version is still the same package.
   assert.equal(serverDescription(row("pw", "npx @playwright/mcp@0.0.41", []), known), playwright.description);
   // Unknown: a remote says its host, a command says it runs here.
-  assert.equal(serverDescription(row("acme", "https://www.tools.acme.example/mcp?key=…", []), known), "Your server at tools.acme.example");
+  assert.equal(serverDescription(row("acme", "https://www.tools.acme.example/mcp?key=…", []), known), "Your connector at tools.acme.example");
   assert.equal(serverDescription(row("mine", "node ./server.js", []), known), "Runs on this computer");
   assert.equal(serverDescription(row("mine", "npx -y @supabase/mcp-server", []), known), "Runs on this computer");
-  assert.equal(serverDescription({ transport: "http", detail: "not a url" }, known), "Your own server on the web");
+  assert.equal(serverDescription({ transport: "http", detail: "not a url" }, known), "Your own connector on the web");
   assert.equal(serverDescription({ transport: "unknown", detail: "" }, known), "Runs on this computer");
-  assert.equal(serverDescription(row("linear", "https://mcp.linear.app/mcp", []), []), "Your server at mcp.linear.app", "no catalogue, no match");
+  assert.equal(serverDescription(row("linear", "https://mcp.linear.app/mcp", []), []), "Your connector at mcp.linear.app", "no catalogue, no match");
 });
 
 test("apps line: which apps have it and which don't, by app, with accounts when an app has several", () => {
@@ -160,9 +160,9 @@ test("Add gallery: the toggle shows them again, with their Added state, and hide
 
 test("words: the explainer and Copy say it plainly", () => {
   assert.ok(MCP_EXPLAINER.split(". ").length <= 3, "two or three sentences");
-  assert.deepEqual(MCP_LEARN_MORE.map((item) => item.title), ["What a server is", "On the web, or on this computer", "Signing in", "Why fewer is faster"]);
+  assert.deepEqual(MCP_LEARN_MORE.map((item) => item.title), ["What a connector is", "On the web, or on this computer", "Signing in", "Why fewer is faster"]);
   assert.equal(COPY_ALL_LABEL, "Copy to all my AI apps");
-  assert.equal(COPY_ALL_EXPLAINER, "Add a server once, and this copies it to every AI app and account on this computer that doesn't have it yet. Nothing is removed or replaced. A server that only one app understands is left for you to copy by hand. Sign-ins aren't copied: each app signs in on its own.");
+  assert.equal(COPY_ALL_EXPLAINER, "Add a connector once, and this copies it to every AI app and account on this computer that doesn't have it yet. Nothing is removed or replaced. A connector that only one app understands is left for you to copy by hand. Sign-ins aren't copied: each app signs in on its own.");
   for (const text of [MCP_EXPLAINER, COPY_ALL_EXPLAINER, COPY_ALL_LABEL, ...MCP_LEARN_MORE.map((item) => item.body)]) {
     assert.doesNotMatch(text, /\b(OAuth|stdio|HTTP|JSON|definition|slot|AgentLink|grant|editor|provider|endpoint)s?\b/i, text);
   }
@@ -202,7 +202,7 @@ test("a server named after the card is NOT hidden (0.15.1): it gets a note inste
   const attio = [{ name: "ikit-attio", url: "https://attio-mcp-server.selfhosted.example/mcp" }, { name: "ikit-n8n", url: "https://n8n.selfhosted.example/mcp" }];
   assert.equal(have("attio", attio), null, "a name alone doesn't make it the same service");
   assert.equal(similar("attio", attio), "ikit-attio");
-  assert.equal(similarNameLine(card("attio"), "ikit-attio"), "You have your own server called ikit-attio; this is Attio's official one.");
+  assert.equal(similarNameLine(card("attio"), "ikit-attio"), "You have your own connector called ikit-attio; this is Attio's official one.");
   assert.equal(similar("notion", [{ name: "ikit-notion", url: "https://notion-proxy.internal.example/mcp" }, ikitOther]), "ikit-notion");
   assert.equal(similar("notion", [{ name: "ikit-notion", url: "https://notion-proxy.internal.example/mcp" }]), null, "a prefix only one server has isn't one you use");
   assert.equal(similar("notion", [{ name: "Notion", command: "node", args: ["notion.js"] }]), "Notion");
@@ -234,7 +234,7 @@ test("already have: hidden by default, counted, and the toggle shows each with a
   assert.equal(hiddenView.hidden, 2);
   assert.equal(hiddenLine(hiddenView.hidden), "2 you already have are hidden.");
   assert.equal(hideAdded(cards, true, owns).shown.length, 5);
-  assert.equal(alreadyHaveLine(card("zapier"), { name: "automations" }), "You have a Zapier server already, called automations.");
-  assert.equal(alreadyHaveLine(card("linear"), { name: "linear" }), "You have a Linear server already.");
-  assert.equal(alreadyHaveLine(card("notion"), { name: "ikit-notion" }), "You have a Notion server already, called ikit-notion.");
+  assert.equal(alreadyHaveLine(card("zapier"), { name: "automations" }), "You have a Zapier connector already, called automations.");
+  assert.equal(alreadyHaveLine(card("linear"), { name: "linear" }), "You have a Linear connector already.");
+  assert.equal(alreadyHaveLine(card("notion"), { name: "ikit-notion" }), "You have a Notion connector already, called ikit-notion.");
 });

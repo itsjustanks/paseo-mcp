@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.19.0 — 2026-10-06
+
+The page is plainer and calmer, at the user's request: "It needs better panels and accordions… too technical… it just needs to work for dummies."
+
+### Changed
+- **It's called Connectors**, without "(MCP)". Overview and the guide say what a connector is: "Connectors are MCP servers: small add-ons that let your AI apps use your other apps".
+- **Every word you read says "connector"**, where it said "server": the page, the gallery, the install sheet, sign-in, the panels, the composer chip ("7 connectors · ~24k tokens"), settings, toasts and messages. Security text keeps its meaning exactly; only the noun changed.
+- **Four tabs: Overview, Connectors, Projects, Help.**
+  - The intro block under the tab bar is gone (its icon, second title and "What you can do here").
+  - Import & Export folds into Add: "Add with a link" and "Paste setup instructions" sit right under the gallery's search.
+  - The backup moves to a fold-out at the bottom of Connectors.
+- **A connector's page** leads with its status, where it lives and which apps have it, plus the one or two things to do, then its sign-in.
+  - The rest is in fold-outs: What it can do, Your AI apps, Rename, Technical details and Remove.
+  - Technical details holds its address, Show keys, Save a copy, Copy for a team list, and what each app has saved, which used to be raw JSON on every app's row.
+- **Help** is common questions, each folded, then the guide. The questions: Needs sign-in, a sign-in page that won't load ("localhost"), Not working or Not installed, missing from an app, project connectors, backups.
+- **Plain words**:
+  - "Add by hand" is "Add with a link"; "Paste setup text" is "Paste setup instructions".
+  - "Reveal secrets" is "Show keys"; "Copy as catalogue entry" is "Copy for a team list".
+  - "Connect OAuth" is "Connect"; "Revoke this grant" is "Yes, sign out"; "Callback return URL" is "The page's address after you sign in".
+  - "The change" is "Before you add it", with the exact files folded behind "See exactly what will be saved".
+  - The add-to list no longer shows file paths.
+- **Gallery cards** drop the maker's line when it only repeats the name ("GitHub / GitHub"), and the "Web" chip; "Runs on this computer" still shows.
+- **A whole connector card opens it**, not only its small settings button.
+- "Add your first connector" on Overview opens the gallery (it used to open the paste screen).
+
+### Added
+- `Accordion` and `AccordionItem` in `client/ui.tsx`: a card of fold-out rows, each with an icon, a title, a one-line summary and a chevron.
+- Tests: four tabs and no intro block; Help questions are short, plain, and never say "server" on its own; the guide and glossary say "connector".
+
 ## 0.18.4 — 2026-10-05
 
 ### Changed

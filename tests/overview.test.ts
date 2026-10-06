@@ -8,7 +8,7 @@ const calm: OverviewFacts = { state: "ready", staleAt: null, hostLabel: "paseo",
 test("a calm host: the pill says all working and the next step is All set", () => {
   assert.deepEqual(overviewVerdict(calm), { status: "ok", label: "All working" });
   const step = overviewNextStep(calm);
-  assert.equal(step.title, "All set: your servers are working");
+  assert.equal(step.title, "All set: your connectors are working");
   assert.deepEqual(step.target, { section: "servers", filter: "all" });
 });
 
@@ -16,8 +16,8 @@ test("the pill and the next step name the same problem, most urgent first", () =
   // The fixture that looked wrong before 0.9.0: a server down, two need sign-in, three gaps.
   const busy: OverviewFacts = { ...calm, broken: 1, signIn: 2, gaps: 3, warnings: 1 };
   assert.deepEqual(overviewVerdict(busy), { status: "error", label: "1 not working" });
-  assert.equal(overviewNextStep(busy).title, "Fix the server that isn't working");
-  assert.equal(overviewNextStep(busy).detail, "Open it to see what's wrong. Your other servers keep working.");
+  assert.equal(overviewNextStep(busy).title, "Fix the connector that isn't working");
+  assert.equal(overviewNextStep(busy).detail, "Open it to see what's wrong. Your other connectors keep working.");
   assert.deepEqual(overviewNextStep(busy).target, { section: "servers", filter: "issues" });
 
   const signIn = { ...busy, broken: 0 };
@@ -26,7 +26,7 @@ test("the pill and the next step name the same problem, most urgent first", () =
 
   const gaps = { ...signIn, signIn: 0 };
   assert.deepEqual(overviewVerdict(gaps), { status: "attention", label: "3 missing from some apps" });
-  assert.equal(overviewNextStep(gaps).title, "Copy 3 servers to the apps missing them");
+  assert.equal(overviewNextStep(gaps).title, "Copy 3 connectors to the apps missing them");
   // 0.15.0: the gaps step opens "Copy to all my AI apps" directly.
   assert.equal(overviewNextStep(gaps).label, "Copy to all my AI apps");
   assert.deepEqual(overviewNextStep(gaps).target, { section: "copy" });
@@ -38,9 +38,9 @@ test("the pill and the next step name the same problem, most urgent first", () =
 
 test("counts read naturally in the singular and the plural", () => {
   assert.equal(overviewVerdict({ ...calm, broken: 2 }).label, "2 not working");
-  assert.equal(overviewNextStep({ ...calm, broken: 2 }).title, "Fix 2 servers that aren't working");
+  assert.equal(overviewNextStep({ ...calm, broken: 2 }).title, "Fix 2 connectors that aren't working");
   assert.equal(overviewVerdict({ ...calm, gaps: 1 }).label, "1 missing from some apps");
-  assert.equal(overviewNextStep({ ...calm, signIn: 1 }).title, "Sign in to 1 server");
+  assert.equal(overviewNextStep({ ...calm, signIn: 1 }).title, "Sign in to 1 connector");
 });
 
 test("before there is data: connecting, unavailable, or a stale read says so", () => {
@@ -59,10 +59,11 @@ test("before there is data: connecting, unavailable, or a stale read says so", (
   assert.deepEqual(overviewNextStep(stale).target, { section: "copy" });
 });
 
-test("no servers yet: the next step opens the import pane", () => {
+test("no connectors yet: the next step opens the gallery (0.19.0; it was the paste pane)", () => {
   const empty = { ...calm, servers: 0 };
-  assert.deepEqual(overviewVerdict(empty), { status: "neutral", label: "No servers yet" });
-  assert.deepEqual(overviewNextStep(empty).target, { section: "transfer", mode: "import" });
+  assert.deepEqual(overviewVerdict(empty), { status: "neutral", label: "No connectors yet" });
+  assert.deepEqual(overviewNextStep(empty).target, { section: "add" });
+  assert.equal(overviewNextStep(empty).label, "Add a connector");
 });
 
 test("plain words: no next step or pill uses the jargon a newcomer wouldn't know", () => {

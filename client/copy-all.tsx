@@ -59,12 +59,12 @@ export function CopyAllPanel({ onClose, onCopied }: { onClose: () => void; onCop
       {planQuery.error ? <ErrorText>{`Couldn't work out what to copy: ${plainError(planQuery.error)}`}</ErrorText> : null}
       {plan && plan.servers.length === 0 ? (
         <Card>
-          <EmptyState title="Nothing to copy" body="Every AI app and account on this computer already has every server." action={<Button label="Back" onPress={onClose} />} />
+          <EmptyState title="Nothing to copy" body="Every AI app and account on this computer already has every connector." action={<Button label="Back" onPress={onClose} />} />
         </Card>
       ) : null}
       {plan && plan.servers.length > 0 ? (
         <>
-          <Text style={t.text.caption}>{`Tick the servers to copy. ${plan.servers.length} ${plan.servers.length === 1 ? "is" : "are"} missing from at least one app.`}</Text>
+          <Text style={t.text.caption}>{`Tick the connectors to copy. ${plan.servers.length} ${plan.servers.length === 1 ? "is" : "are"} missing from at least one app.`}</Text>
           <Card padded={false}>
             {plan.servers.map((entry, index) => {
               const on = !left.includes(entry.name);
@@ -104,7 +104,7 @@ export function CopyAllPanel({ onClose, onCopied }: { onClose: () => void; onCop
           ) : null}
           <View style={{ flexDirection: "row", flexWrap: "wrap", gap: t.space.sm }}>
             <Button
-              label={`Copy ${chosen.length} server${chosen.length === 1 ? "" : "s"}`}
+              label={`Copy ${chosen.length} connector${chosen.length === 1 ? "" : "s"}`}
               variant="primary"
               loading={copy.isPending}
               disabled={chosen.length === 0}

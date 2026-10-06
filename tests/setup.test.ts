@@ -242,7 +242,7 @@ test("byo-oauth: only a vendor this plugin ships, at its own MCP host, with ever
   // The same rule for curated and team entries.
   const team = parseLibrary(JSON.stringify([{ id: "gmail", name: "Gmail", publisher: "Google", description: "Mail.", category: "productivity", transport: "http", url: "https://gmail-mcp.evil.example/mcp/v1", auth: "oauth", docs: GUIDE, setup: gmailSetup }]));
   assert.equal(team.items.length, 0);
-  assert.match(team.refused[0]?.reason ?? "", /vendor's own server/);
+  assert.match(team.refused[0]?.reason ?? "", /vendor's own connector/);
 });
 
 test("per-org: a shared hosting domain can't stand in for the vendor's", () => {
@@ -298,7 +298,7 @@ test("the sheet tells an empty box from a real problem: only real problems are r
   for (const issue of ["Paste the client ID.", "Paste the client secret.", "Pick at least one app.", "Pick one of the registered projects.", "Your Zendesk subdomain is required"]) {
     assert.equal(isStillToFill(issue), true, issue);
   }
-  for (const issue of ["The client ID holds a space or a character a client ID never has.", "The client secret must be one line with no spaces.", "That would point the server at another site.", "None of the apps you picked can take a sign-in app you registered. Claude Code can."]) {
+  for (const issue of ["The client ID holds a space or a character a client ID never has.", "The client secret must be one line with no spaces.", "That would point the connector at another site.", "None of the apps you picked can take a sign-in app you registered. Claude Code can."]) {
     assert.equal(isStillToFill(issue), false, issue);
   }
 });

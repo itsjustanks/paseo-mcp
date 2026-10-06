@@ -58,7 +58,7 @@ export type ChipDeps = {
 };
 
 /** A chip before its first label arrives. */
-export const CHIP_FIRST_FACE: ChipFace = { label: "MCP", icon: "Plug" };
+export const CHIP_FIRST_FACE: ChipFace = { label: "Connectors", icon: "Plug" };
 
 /** The chip's face for a label and tone: the icon carries the tone, so colour is never the only channel. */
 export function chipFace(label: string, tone: "calm" | "attention"): ChipFace {

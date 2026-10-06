@@ -126,8 +126,8 @@ export function setupProblems(setup: CatalogSetup, entry: Pick<CatalogEntry, "ur
   const texts = [setup.reason, ...(setup.steps ?? []), setup.redirectHint ?? "", setup.label ?? ""];
   if (!setup.reason.trim()) issues.push("setup needs a reason");
   if (!httpsLink(setup.guideUrl)) issues.push("setup guideUrl must be an https link");
-  if (texts.some(hasEnvReference)) issues.push("setup text holds a ${…} reference");
-  if (texts.some((text) => looksLikeCredentialValue(text.replace(/https:\/\/\S+/g, " ")))) issues.push("setup text holds what looks like a key");
+  if (texts.some(hasEnvReference)) issues.push("setup instructions hold a ${…} reference");
+  if (texts.some((text) => looksLikeCredentialValue(text.replace(/https:\/\/\S+/g, " ")))) issues.push("setup instructions hold what looks like a key");
   const only = (field: keyof CatalogSetup, kinds: SetupKind[]) => {
     if (setup[field] !== undefined && !kinds.includes(setup.kind)) issues.push(`setup ${field} is only for ${kinds.join(" or ")}`);
   };
@@ -141,7 +141,7 @@ export function setupProblems(setup: CatalogSetup, entry: Pick<CatalogEntry, "ur
   if (setup.kind === "byo-oauth") {
     if (entry.transport !== "http" || !entry.url) issues.push("a byo-oauth setup needs a web address");
     const vendor = entry.url ? byoVendor(entry.url) : null;
-    if (!vendor) issues.push(`a byo-oauth setup is only for a vendor's own server this plugin knows (${BYO_OAUTH_VENDORS.map((known) => known.vendor).join(", ")})`);
+    if (!vendor) issues.push(`a byo-oauth setup is only for a vendor's own connector this plugin knows (${BYO_OAUTH_VENDORS.map((known) => known.vendor).join(", ")})`);
     else {
       // Every link on the card and the sheet: the guide, the docs, and any address in the text (any case, http too).
       const texts = [setup.reason, setup.redirectHint ?? "", ...(setup.steps ?? [])];
@@ -157,7 +157,7 @@ export function setupProblems(setup: CatalogSetup, entry: Pick<CatalogEntry, "ur
     else {
       const problem = orgTemplateProblem(setup.urlTemplate);
       if (problem) issues.push(`setup urlTemplate ${problem}`);
-      else if ((entry.url ?? "").trim() !== setup.urlTemplate) issues.push("setup urlTemplate must be the server's own address");
+      else if ((entry.url ?? "").trim() !== setup.urlTemplate) issues.push("setup urlTemplate must be the connector's own address");
     }
     if (!setup.label?.trim()) issues.push("a per-org setup needs a label");
   }
@@ -276,9 +276,9 @@ export function fillOrgTemplate(template: string, value: string): { url: string;
   }
   const expectedHost = parts.inHost ? `${value}.${parts.base}` : parts.base;
   if (parsed.protocol !== "https:" || parsed.hostname !== expectedHost || parsed.port || parsed.username || parsed.password) {
-    return { url: "", problem: "That would point the server at another site." };
+    return { url: "", problem: "That would point the connector at another site." };
   }
-  if (registrableDomain(parsed.hostname) !== registrableDomain(parts.base)) return { url: "", problem: "That would point the server at another site." };
+  if (registrableDomain(parsed.hostname) !== registrableDomain(parts.base)) return { url: "", problem: "That would point the connector at another site." };
   return { url, problem: "" };
 }
 
@@ -429,7 +429,7 @@ export function planByoOauth(entry: Pick<CatalogEntry, "url" | "setup" | "name">
   const setup = entry.setup;
   const redirectUri = claudeRedirectUri();
   const issues: string[] = [];
-  if (setup?.kind !== "byo-oauth") issues.push("This server isn't set up with your own sign-in app.");
+  if (setup?.kind !== "byo-oauth") issues.push("This connector isn't set up with your own sign-in app.");
   const shape = clientShape(entry);
   issues.push(...oauthClientProblems(client, shape));
   const supported: SetupTarget[] = [];
@@ -446,7 +446,7 @@ export function planByoOauth(entry: Pick<CatalogEntry, "url" | "setup" | "name">
     `Register exactly ${redirectUri} as the redirect address; Claude Code listens there when you sign in.`,
     shape.secretless
       ? `No client secret: ${byoVendor(entry.url ?? "")?.vendor ?? "this vendor"}'s sign-in doesn't use one, so only the ${shape.idName} is written.`
-      : "The client secret is not written into any file: Claude Code keeps it in its secure store (the macOS Keychain, or ~/.claude/.credentials.json elsewhere). To change it later, remove the server and add it again.",
+      : "The client secret is not written into any file: Claude Code keeps it in its secure store (the macOS Keychain, or ~/.claude/.credentials.json elsewhere). To change it later, remove the connector and add it again.",
     ...skipped.map((entry) => `Skipped ${entry.label}: ${entry.reason}`),
     "After adding, sign in with Connect.",
   ];

@@ -43,9 +43,9 @@ function plural(count: number, word: string): string {
   return `${count} ${word}${count === 1 ? "" : "s"}`;
 }
 
-/** "14 servers · ≈38k tokens of tool definitions", or deferred. */
+/** "14 connectors · ≈38k tokens of tool definitions", or deferred. */
 export function meterHeadline(meter: AgentMeter): string {
-  const head = plural(meter.servers, "server");
+  const head = plural(meter.servers, "connector");
   return meter.deferred
     ? `${head} · definitions deferred (tool search is on; ≈${shortTokens(meter.tokens)} if all loaded)`
     : `${head} · ≈${shortTokens(meter.tokens)} tokens of tool definitions`;
@@ -61,7 +61,7 @@ export function meterHeadline(meter: AgentMeter): string {
 export function turnOffBlocker(read: { chat: { complete: boolean } | null; stale: boolean }): string | null {
   if (read.stale) return read.chat ? "The last read of this chat failed, so these numbers may be out of date and nothing is offered to turn off." : "Couldn't read this chat's history, so nothing is offered to turn off.";
   if (!read.chat) return null;
-  if (!read.chat.complete) return "This chat is too long to be sure which servers it used, so nothing is offered to turn off.";
+  if (!read.chat.complete) return "This chat is too long to be sure which connectors it used, so nothing is offered to turn off.";
   return null;
 }
 
@@ -103,7 +103,7 @@ export function ContextSection({ workspaceId, agentId, providerId }: { workspace
   if (!provider) return null;
   if (!data) {
     if (read.isError) return null;
-    return <Loading label="Estimating what this agent's MCP servers cost…" />;
+    return <Loading label="Estimating what this agent's connectors cost…" />;
   }
 
   const blocker = turnOffBlocker(data);
@@ -136,13 +136,13 @@ export function ContextSection({ workspaceId, agentId, providerId }: { workspace
         )}
         {meter && meter.defaults > 0 ? (
           <Text style={t.text.caption}>
-            {`Estimates: listed servers are measured from their tool lists (JSON ÷ 4). ${plural(meter.defaults, "server")} could not be listed and count at a ${shortTokens(UNLISTED_SERVER_TOKENS)} default.`}
+            {`Estimates: listed connectors are measured from their tool lists (JSON ÷ 4). ${plural(meter.defaults, "connector")} could not be listed and count at a ${shortTokens(UNLISTED_SERVER_TOKENS)} default.`}
           </Text>
         ) : meter ? (
-          <Text style={t.text.caption}>Estimates: measured from each server's tool list (JSON ÷ 4).</Text>
+          <Text style={t.text.caption}>Estimates: measured from each connector's tool list (JSON ÷ 4).</Text>
         ) : null}
         {meter && meter.costs.length > 0 ? (
-          <Disclosure title="Heaviest servers" open>
+          <Disclosure title="Heaviest connectors" open>
             <Card padded={false}>
               {meter.costs.map((entry, index) => (
                 <Row
@@ -158,7 +158,7 @@ export function ContextSection({ workspaceId, agentId, providerId }: { workspace
         ) : null}
         {chat && split ? (
           <View style={{ gap: t.space.xs }}>
-            <Text style={t.text.body}>{split.used.length ? `Used in this chat: ${usedLine(split.used)}` : "Used in this chat: no MCP tool calls yet"}</Text>
+            <Text style={t.text.body}>{split.used.length ? `Used in this chat: ${usedLine(split.used)}` : "Used in this chat: no connector tool calls yet"}</Text>
             <Text style={t.text.body}>{`Loaded but unused: ${split.unused.length}`}</Text>
             {split.unused.length > 0 ? <Text style={t.text.caption}>{split.unused.join(", ")}</Text> : null}
             {chat.truncated ? <Text style={t.text.caption}>{`Read the last ${chat.scanned.toLocaleString()} timeline items; older calls are not counted.`}</Text> : null}
@@ -175,7 +175,7 @@ export function ContextSection({ workspaceId, agentId, providerId }: { workspace
         {plan && armed && !blocker ? (
           <Notice tone="attention">
             <View style={{ gap: t.space.sm }}>
-              <Text style={t.text.bodyStrong}>{`Turn off ${plural(plan.off.length, "server")} for this workspace?`}</Text>
+              <Text style={t.text.bodyStrong}>{`Turn off ${plural(plan.off.length, "connector")} for this workspace?`}</Text>
               <Text style={t.text.body}>{plan.off.join(", ")}</Text>
               {plan.kept.length > 0 ? (
                 <Text style={t.text.caption}>{`Left as they are, with no switch for this provider: ${plan.kept.map((entry) => entry.name).join(", ")}.`}</Text>

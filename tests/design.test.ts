@@ -1,30 +1,54 @@
 /**
- * The shared design standard (0.17.0): every tab opens with a plain intro and
- * "What you can do here", the Overview's guide is plain English, the type
- * scale has nothing below 13 px, and the newer Paseo features are used only
- * where the app has them, so a 0.9.1 app behaves as before.
+ * The shared design standard (0.17.0), as the user reshaped it in 0.19.0: four
+ * tabs with no intro block under the bar, plain words that say "connector",
+ * Help as plain questions, the type scale has nothing below 13 px, and the
+ * newer Paseo features are used only where the app has them, so a 0.9.1 app
+ * behaves as before.
  */
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
 import test from "node:test";
-import { ADDED_TO_ONE_APP, FEWER_IS_FASTER, HOW_IT_WORKS, HOW_TO_USE, TAB_INTROS, TAB_ORDER, WHAT_IS, WORDS } from "../shared/guide";
+import { ADDED_TO_ONE_APP, FEWER_IS_FASTER, HELP_QUESTIONS, HOW_IT_WORKS, HOW_TO_USE, PROJECTS_LINE, TABS_META, TAB_ORDER, WHAT_CONNECTORS_ARE, WHAT_IS, WORDS } from "../shared/guide";
 import { externalUrlOpener, supportsNativeScreens } from "../shared/host-features";
 
 const jargon = /\b(editor|definition|command|provider|stdio|HTTP|OAuth|endpoint|host|daemon|grant|gap|JSON|config)s?\b|\.mcp\.json/i;
 const sentences = (text: string) => text.split(/(?<=[.!?])\s+/).filter(Boolean).length;
 
-test("every tab has an intro: a title, one or two plain sentences, and two to four things you can do", () => {
-  assert.deepEqual([...TAB_ORDER].sort(), Object.keys(TAB_INTROS).sort());
-  for (const id of TAB_ORDER) {
-    const tab = TAB_INTROS[id];
-    assert.ok(tab.title && tab.label && tab.icon, id);
-    assert.ok(sentences(tab.summary) <= 2, `${id}: ${tab.summary}`);
-    assert.ok(tab.canDo.length >= 2 && tab.canDo.length <= 4, id);
-    for (const text of [tab.title, tab.summary, ...tab.canDo]) assert.doesNotMatch(text, jargon, text);
+/** "server" on its own; "MCP server(s)" is allowed where a connector is explained. */
+const loneServer = /(?<!MCP )\bservers?\b/i;
+/** Help answers name the computer with {host}; it isn't the word "host". */
+const filled = (text: string) => text.split("{host}").join("this computer");
+
+test("four tabs, each a label and an icon, and no intro block under the bar (0.19.0)", () => {
+  assert.deepEqual([...TAB_ORDER], ["overview", "servers", "projects", "guide"]);
+  assert.deepEqual(TAB_ORDER.map((id) => TABS_META[id].label), ["Overview", "Connectors", "Projects", "Help"]);
+  for (const id of Object.keys(TABS_META) as Array<keyof typeof TABS_META>) assert.ok(TABS_META[id].label && TABS_META[id].icon, id);
+  const root = decodeURIComponent(new URL("../", import.meta.url).pathname);
+  assert.doesNotMatch(readFileSync(`${root}client/navigation.tsx`, "utf8"), /export function TabIntro/, "the stacked intro block is gone");
+  assert.doesNotMatch(readFileSync(`${root}client/mcp.tsx`, "utf8"), /<TabIntro\b/);
+});
+
+test("Help is plain questions: each folded answer is short, plain and says connector", () => {
+  assert.ok(HELP_QUESTIONS.length >= 5 && HELP_QUESTIONS.length <= 9);
+  assert.equal(new Set(HELP_QUESTIONS.map((item) => item.question)).size, HELP_QUESTIONS.length, "no question twice");
+  for (const item of HELP_QUESTIONS) {
+    assert.ok(item.answer.length >= 1 && item.answer.length <= 3, item.question);
+    for (const text of [item.question, ...item.answer.map(filled), item.action?.label ?? ""]) {
+      assert.doesNotMatch(text, jargon, text);
+      assert.doesNotMatch(text, loneServer, text);
+    }
+    for (const line of item.answer) assert.ok(sentences(line) <= 3, line);
   }
 });
 
-test("the Overview's guide says it plainly: what it is, four steps, how to use it, and the words", () => {
+test("the words say connector: the explainer, the tabs, the guide and the glossary", () => {
+  assert.match(WHAT_CONNECTORS_ARE, /^Connectors are MCP servers/);
+  for (const text of [WHAT_CONNECTORS_ARE, PROJECTS_LINE, ...WHAT_IS, ...HOW_IT_WORKS.flatMap((step) => [step.title, step.text]), ...HOW_TO_USE, FEWER_IS_FASTER.text, ADDED_TO_ONE_APP.title, ADDED_TO_ONE_APP.text, ...WORDS.flatMap((word) => [word.term, word.text])]) {
+    assert.doesNotMatch(text, loneServer, text);
+  }
+});
+
+test("the guide says it plainly: what it is, four steps, how to use it, and the words", () => {
   assert.ok(WHAT_IS.length >= 1 && WHAT_IS.reduce((count, line) => count + sentences(line), 0) <= 3, "two or three sentences");
   assert.equal(HOW_IT_WORKS.length, 4);
   assert.ok(HOW_TO_USE.length >= 3 && HOW_TO_USE.length <= 5);
@@ -91,15 +115,15 @@ test("the sidebar '+' opens the MCP page on Add a server, and a second press ope
   assert.equal(addServerRequest({ add: "something-else" }), null);
 });
 
-test("the app calls the plugin Connectors (MCP): the sidebar row, the page and its panels all use the one name (0.18.4)", async () => {
+test("the app calls the plugin Connectors: the sidebar row, the page and its panels all use the one name (0.19.0)", async () => {
   const { MCP_NAME, MCP_NAME_LOWER } = await import("../shared/guide");
-  assert.equal(MCP_NAME, "Connectors (MCP)");
-  assert.equal(MCP_NAME_LOWER, "connectors (MCP)");
+  assert.equal(MCP_NAME, "Connectors");
+  assert.equal(MCP_NAME_LOWER, "connectors");
   const root = decodeURIComponent(new URL("../", import.meta.url).pathname);
   const entry = readFileSync(`${root}index.client.tsx`, "utf8");
   assert.doesNotMatch(entry, /title: "MCP( servers| connections)?"/, "a title still says MCP on its own");
   assert.match(readFileSync(`${root}client/sidebar.tsx`, "utf8"), /label=\{MCP_NAME\}/);
   for (const file of ["client/mcp.tsx", "client/catalog.tsx", "client/budget.tsx", "server/catalog.ts"]) {
-    assert.doesNotMatch(readFileSync(`${root}${file}`, "utf8"), /MCP connections|Open MCP management|title="MCP servers"/, file);
+    assert.doesNotMatch(readFileSync(`${root}${file}`, "utf8"), /MCP connections|Open MCP management|title="MCP servers"|Connectors \(MCP\)|"Add by hand"|Import & Export|Guide & Setup/, file);
   }
 });

@@ -175,7 +175,7 @@ function startChat(entry: Entry, input: MeterInput, context: PluginHandlerContex
   const run = async () => {
     if (!entry.meter) await startMeter(entry, input, context);
     // Without the server list every call would count against nobody: no verdict at all.
-    if (!entry.meter) throw new Error("the agent's servers could not be read");
+    if (!entry.meter) throw new Error("the agent's connectors could not be read");
     const read = await readTimeline(context.paseo, input.agentId);
     const known = entry.loaded;
     entry.chat = { scanned: read.items.length, truncated: read.truncated, complete: read.complete, calls: countCalls(read.items, known), loaded: known, asOf: new Date().toISOString() };
@@ -229,9 +229,9 @@ export async function handleMcpAgentChat(
 // ---------------------------------------------------------- turn off unused
 
 export const TURN_OFF_CHANGED = "The chat changed since you reviewed this list; review again.";
-export const TURN_OFF_TOO_LONG = "This chat is too long to be sure which servers it used, so nothing was switched off.";
+export const TURN_OFF_TOO_LONG = "This chat is too long to be sure which connectors it used, so nothing was switched off.";
 export const TURN_OFF_UNREADABLE = "Couldn't read this chat's history, so nothing was switched off.";
-export const TURN_OFF_NO_SERVERS = "Couldn't read this agent's servers, so nothing was switched off.";
+export const TURN_OFF_NO_SERVERS = "Couldn't read this agent's connectors, so nothing was switched off.";
 
 type TurnOffResult = {
   ok: boolean;

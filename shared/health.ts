@@ -76,7 +76,7 @@ export function classifyProbe(outcome: ProbeOutcome): ProbeVerdict {
   if (outcome.kind === "timeout") return { status: "down", note: `timeout after ${PROBE_TIMEOUT_MS / 1000}s` };
   if (outcome.kind === "error") return { status: "down", note: describeError(outcome.code, outcome.message) };
   const { code } = outcome;
-  if (code === 401 || code === 403) return { status: "auth-required", note: `HTTP ${code} — OAuth server; sign in through your editor` };
+  if (code === 401 || code === 403) return { status: "auth-required", note: `HTTP ${code} — needs a sign-in; sign in from your AI app` };
   if (code >= 200 && code < 300) {
     const rpc = readJsonRpc(outcome.body);
     if (rpc === "result") return { status: "ok", note: "MCP initialize answered" };
@@ -87,7 +87,7 @@ export function classifyProbe(outcome: ProbeOutcome): ProbeVerdict {
   if (isRedirect(code)) return { status: "ok", note: `reachable (HTTP ${code} redirect)` };
   if (code === 404) return { status: "warn", note: "HTTP 404 — endpoint not found; check the URL path" };
   if (code >= 400 && code < 500) return { status: "ok", note: `reachable (HTTP ${code})` };
-  if (code >= 500) return { status: "warn", note: `HTTP ${code} — server error` };
+  if (code >= 500) return { status: "warn", note: `HTTP ${code} — error on the connector's side` };
   return { status: "warn", note: `HTTP ${code}` };
 }
 

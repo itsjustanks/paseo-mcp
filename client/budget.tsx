@@ -63,18 +63,18 @@ function ContextBudget({ load, providerId }: { load: WorkspaceLoad; providerId?:
   const who = providerId ? "This agent" : load.label ? `A ${load.label.split(" · ")[0]} agent here` : "An agent here";
   if (cost.tier === "ok") return null;
   const severe = cost.tier === "problem";
-  const loads = `${who} loads ${plural(cost.total, "MCP server")}`;
+  const loads = `${who} loads ${plural(cost.total, "connector")}`;
   // Tool search on: definitions are deferred, so only the server count raised the tier.
   const heading = cost.deferred
-    ? `${loads} — tool definitions wait until needed, but each server still starts with every session`
+    ? `${loads} — tool definitions wait until needed, but each connector still starts with every session`
     : severe
       ? `${loads}${cost.builtIn ? ` and about ${cost.tools} tools` : ""} — enough to exhaust its context before it starts`
       : `${loads}${cost.builtIn ? ` and about ${cost.tools} tools` : ""} — a real share of its context goes to tool definitions`;
   const why = cost.deferred && load.toolSearch
-    ? `${toolSearchOnLine(load.toolSearch)} The count still matters: each server on this computer starts a program for every agent session, and each server is a connection, so past ${BUDGET_ATTENTION} servers the cost shows and past ${BUDGET_PROBLEM} it is heavy.`
+    ? `${toolSearchOnLine(load.toolSearch)} The count still matters: each connector on this computer starts a program for every agent session, and each connector is a connection, so past ${BUDGET_ATTENTION} connectors the cost shows and past ${BUDGET_PROBLEM} it is heavy.`
     : load.toolSearch
-      ? `${toolSearchLine(load.toolSearch, cost.tools)} Cursor stops at 40 tools. Past ${BUDGET_ATTENTION} servers the cost shows, past ${BUDGET_PROBLEM} agents can fail with "Prompt is too long" before their first tool call.`
-      : `Every server's tool definitions are sent with the first prompt. Claude Code defers them past 10% of the window; Cursor stops at 40 tools. Past ${BUDGET_ATTENTION} servers the cost shows, past ${BUDGET_PROBLEM} agents can fail with "Prompt is too long" before their first tool call.`;
+      ? `${toolSearchLine(load.toolSearch, cost.tools)} Cursor stops at 40 tools. Past ${BUDGET_ATTENTION} connectors the cost shows, past ${BUDGET_PROBLEM} agents can fail with "Prompt is too long" before their first tool call.`
+      : `Every connector's tool definitions are sent with the first prompt. Claude Code defers them past 10% of the window; Cursor stops at 40 tools. Past ${BUDGET_ATTENTION} connectors the cost shows, past ${BUDGET_PROBLEM} agents can fail with "Prompt is too long" before their first tool call.`;
   return (
     <Notice tone={severe ? "error" : "attention"}>
       <View style={{ gap: t.space.sm }}>
@@ -82,14 +82,14 @@ function ContextBudget({ load, providerId }: { load: WorkspaceLoad; providerId?:
         <Text style={t.text.body}>{why}</Text>
         {cost.builtIn && !cost.deferred ? (
           <Text style={t.text.body}>
-            {`${cost.paseoTools} of those tools are Paseo's own (counted exactly; other servers at five each). ${cost.paseoTools >= BUDGET_TOOLS_ATTENTION ? `That alone reaches the ${BUDGET_TOOLS_ATTENTION}-tool line. ` : ""}Groups agents here do not use can be turned off under Servers → Paseo tools (browser is the largest); that applies to every workspace.`}
+            {`${cost.paseoTools} of those tools are Paseo's own (counted exactly; other connectors at five each). ${cost.paseoTools >= BUDGET_TOOLS_ATTENTION ? `That alone reaches the ${BUDGET_TOOLS_ATTENTION}-tool line. ` : ""}Groups agents here do not use can be turned off under Connectors → Paseo tools (browser is the largest); that applies to every workspace.`}
           </Text>
         ) : null}
         {userNames.length > 0 ? (
           <>
             <Text style={t.text.body}>
-              {plural(userNames.length, "server")} come from user-level config and load in every workspace. Move the ones
-              only this project needs into its .mcp.json, or remove them from the editor config.
+              {plural(userNames.length, "connector")} come from your AI apps' own settings and load in every workspace. Move
+              the ones only this project needs into its .mcp.json, or remove them from the AI app's settings.
             </Text>
             <View style={{ flexDirection: "row", flexWrap: "wrap", gap: t.space.xs }}>
               {userNames.map((name) => <Tag key={name} label={name} />)}
@@ -122,7 +122,7 @@ function RunningNow({ processes }: { processes: NonNullable<WorkspaceData["proce
       <Facts
         items={[
           { value: `${plural(observed.agents, "agent")} running here` },
-          { value: `${observed.processes} MCP ${observed.processes === 1 ? "process" : "processes"}` },
+          { value: `${observed.processes} connector ${observed.processes === 1 ? "process" : "processes"}` },
           { value: `${formatMemory(observed.rssKb)} resident` },
         ]}
       />
@@ -173,14 +173,14 @@ export function WorkspaceContext({
       <Card tone={cost.total > 0 ? tierStatus(cost.tier) : undefined}>
         <View style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: t.space.sm }}>
           <Text style={t.text.heading}>
-            {plural(cost.total, "MCP server")} for {who}
+            {plural(cost.total, "connector")} for {who}
           </Text>
           {cost.total > 0 ? <Tag label={cost.tier === "ok" ? "within budget" : cost.tier === "attention" ? "getting heavy" : "over budget"} tone={tierStatus(cost.tier)} /> : null}
         </View>
         <Facts
           items={[
             { value: `${cost.project} from this project's .mcp.json${scope}` },
-            { value: `${cost.user} from user-level config` },
+            { value: `${cost.user} from your AI apps' own settings` },
             cost.builtIn ? { value: `${PASEO_TOOLS_LABEL}: ${cost.paseoTools} tools` } : null,
             cost.added ? { value: `${cost.added} added when created` } : null,
             attention

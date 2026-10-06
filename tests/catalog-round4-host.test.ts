@@ -133,7 +133,7 @@ test("6b: an install is refused when the entry or the plan changed after the pre
   await read("", "team");
   const stale = await handleMcpCatalogInstall({ ...input, planHash: plan.planHash }, context);
   assert.equal(stale.ok, false);
-  assert.equal(stale.message, "The server's details changed since you reviewed them; review again.");
+  assert.equal(stale.message, "The connector's details changed since you reviewed them; review again.");
   assert.equal(readFileSync(claude, "utf8"), before, "nothing was written");
 
   // Reviewed again: written, at the address the user saw.

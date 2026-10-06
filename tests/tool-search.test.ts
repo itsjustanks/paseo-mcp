@@ -377,7 +377,7 @@ const scope = (count: number, providerId = "claude"): ProfileScope => ({
 const profileOf = (s: ProfileScope): WorkspaceProfile => ({ project: [], projectConfigPath: "", scopes: [s] });
 const ON: ToolSearchVerdict = { state: "on", reason: "Claude Code's default", cli: "claude" };
 const OFF: ToolSearchVerdict = { state: "off", reason: AI_ROUTER_REASON, cli: "claude" };
-const UNKNOWN: ToolSearchVerdict = { state: "unknown", reason: "Codex defers MCP tools only when its model supports tool search, and the plugin cannot see the model", cli: "codex" };
+const UNKNOWN: ToolSearchVerdict = { state: "unknown", reason: "Codex defers connector tools only when its model supports tool search, and the plugin cannot see the model", cli: "codex" };
 
 test("tool search on: 61 Paseo tools no longer raise the tier; the server count still does", () => {
   const s = scope(3);

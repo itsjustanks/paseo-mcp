@@ -306,7 +306,7 @@ export function paseoToolCount(
 
 export function blockerText(blocker: PaseoToolsBlocker): string {
   if (blocker === "mcp-off") {
-    return "Paseo's MCP server is off on this host (daemon.mcp.enabled is false, or the daemon runs with --no-mcp), so no agent gets Paseo tools. That setting is only in config.json and the launch flags; this switch cannot change it.";
+    return "Paseo's own connector is off on this host (daemon.mcp.enabled is false, or the daemon runs with --no-mcp), so no agent gets Paseo tools. That setting is only in config.json and the launch flags; this switch cannot change it.";
   }
   if (blocker === "inject-off") return "Not added to agents: \"Enable Paseo tools\" is off for this host.";
   return "";

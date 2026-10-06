@@ -4,11 +4,10 @@ import { ADDED_TO_ONE_APP, FEWER_IS_FASTER, HOW_IT_WORKS, HOW_TO_USE, WHAT_IS, W
 import { Card, Disclosure, Divider, HostIcon, IconBadge, RADIUS, SPACE, SectionTitle, Tag, TYPE, alpha, useTokens } from "./ui";
 
 /**
- * The Overview's guide, as AI Router 0.15.0 has it (the calm standard): one
- * "New to MCP servers? How it works" fold-out holding a single card, its parts
- * split by dividers: what MCP servers are, how it works, how to use it, and
- * the words you'll see. Open until the first server is added, folded after.
- * The words live in shared/guide.ts.
+ * The guide: one card, its parts split by dividers: what connectors are, how
+ * they work, how to use them, and the words you'll see. Overview folds it
+ * behind "New to connectors? How they work" (open until the first connector is
+ * added); Help shows it open (0.19.0). The words live in shared/guide.ts.
  */
 
 /** Below this width the "How it works" steps stack top to bottom instead of left to right. */
@@ -45,11 +44,11 @@ function Part({ title, icon, children }: { title: string; icon: string; children
   );
 }
 
-/** "What are MCP servers?", with the AI apps found on this computer. */
+/** "What are connectors?", with the AI apps found on this computer. */
 function WhatIs({ apps }: { apps: readonly string[] }) {
   const t = useTokens();
   return (
-    <Part title="What are MCP servers?" icon="Plug">
+    <Part title="What are connectors?" icon="Plug">
       {WHAT_IS.map((line) => (
         <Text key={line} style={t.text.body}>{line}</Text>
       ))}
@@ -135,7 +134,7 @@ function Numbered({ n, children }: { n: number; children: React.ReactNode }) {
   );
 }
 
-/** Numbered steps for a first server, then the way to put every server in every app. */
+/** Numbered steps for a first connector, then the way to put every connector in every app. */
 function HowToUse({ onAdd, onCopy }: { onAdd: () => void; onCopy: () => void }) {
   const t = useTokens();
   return (
@@ -143,7 +142,7 @@ function HowToUse({ onAdd, onCopy }: { onAdd: () => void; onCopy: () => void }) 
       {HOW_TO_USE.map((line, index) => (
         <Numbered key={line} n={index + 1}>
           <Text style={t.text.body}>{line}</Text>
-          {index === 0 ? <TextLink label="Open Servers" onPress={onAdd} /> : null}
+          {index === 0 ? <TextLink label="Add a connector" onPress={onAdd} /> : null}
         </Numbered>
       ))}
       <View style={{ gap: SPACE.xs, padding: SPACE.md, borderRadius: RADIUS.control, borderWidth: 1, borderColor: t.color.border, backgroundColor: t.color.surface0 }}>
@@ -175,19 +174,26 @@ function Glossary() {
   );
 }
 
-/** "New to MCP servers? How it works": one fold-out, one card. Open while there is nothing set up yet. */
+/** The whole guide in one card: what connectors are, how they work, how to use them, and the words. */
+export function GuideCard({ apps, onAdd, onCopy }: { apps: readonly string[]; onAdd: () => void; onCopy: () => void }) {
+  return (
+    <Card>
+      <WhatIs apps={apps} />
+      <Divider />
+      <HowItWorks />
+      <Divider />
+      <HowToUse onAdd={onAdd} onCopy={onCopy} />
+      <Divider />
+      <Glossary />
+    </Card>
+  );
+}
+
+/** "New to connectors? How they work": one fold-out, one card. Open while there is nothing set up yet. */
 export function OverviewGuide({ apps, onAdd, onCopy, open }: { apps: readonly string[]; onAdd: () => void; onCopy: () => void; open: boolean }) {
   return (
-    <Disclosure key={open ? "open" : "closed"} flush title="New to MCP servers? How it works" openTitle="Hide how MCP servers work" open={open}>
-      <Card>
-        <WhatIs apps={apps} />
-        <Divider />
-        <HowItWorks />
-        <Divider />
-        <HowToUse onAdd={onAdd} onCopy={onCopy} />
-        <Divider />
-        <Glossary />
-      </Card>
+    <Disclosure key={open ? "open" : "closed"} flush title="New to connectors? How they work" openTitle="Hide how connectors work" open={open}>
+      <GuideCard apps={apps} onAdd={onAdd} onCopy={onCopy} />
     </Disclosure>
   );
 }

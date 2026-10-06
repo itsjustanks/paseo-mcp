@@ -69,7 +69,7 @@ export default function contribute(client: PluginClientContext) {
   });
   client.addSettingsScreen({
     id: "injection",
-    title: "Project servers",
+    title: "Project connectors",
     icon: "Syringe",
     Component: InjectionSettingsScreen,
   });
@@ -91,9 +91,9 @@ export default function contribute(client: PluginClientContext) {
   });
   client.addCommandCenterItem({
     id: "configure-injection",
-    title: "Add project servers to agents",
+    title: "Add project connectors to agents",
     icon: "Syringe",
-    keywords: ["mcp", "inject", "injection", "agents", "settings", "project servers", "workspace servers", ".mcp.json"],
+    keywords: ["mcp", "connectors", "inject", "injection", "agents", "settings", "project servers", "project connectors", "workspace servers", ".mcp.json"],
     context: "global",
     onSelect({ openSettings }) {
       openSettings("injection");
@@ -103,7 +103,7 @@ export default function contribute(client: PluginClientContext) {
     id: "open-agent-mcp",
     title: `${MCP_NAME} for this agent`,
     icon: "Plug",
-    keywords: ["mcp", "agent", "inject", "servers"],
+    keywords: ["mcp", "connectors", "agent", "inject", "servers"],
     context: "agent",
     onSelect({ openPanel }) {
       openPanel("mcp-agent");
@@ -113,7 +113,7 @@ export default function contribute(client: PluginClientContext) {
     id: "open-mcp",
     title: `Open ${MCP_NAME}`,
     icon: "Plug",
-    keywords: ["mcp", "servers", "oauth", "add", "sync"],
+    keywords: ["mcp", "connectors", "servers", "oauth", "add", "sync"],
     context: "global",
     onSelect(context) {
       openMain(context as typeof context & { openScreen?: OpenScreen });
@@ -126,7 +126,7 @@ export default function contribute(client: PluginClientContext) {
   // provider's, so this one is what `/mcp` runs in an agent's composer.
   client.addSlashCommand({
     name: "mcp",
-    description: "Open this agent's MCP panel: servers, context cost, sign-in",
+    description: "Open this agent's connectors: what it loads, what it costs, sign-in",
     argumentHint: "",
     context: "agent",
     onSubmit({ workspace, agent }) {

@@ -160,7 +160,7 @@ export function PaseoToolsAgentRow({ info, providerLabel, first }: { info: { too
   const t = useTokens();
   const on = info.tools > 0;
   const reason = on
-    ? `Paseo's own MCP server, added by the daemon to every ${providerLabel} agent. Switch it or its tools under Servers → Paseo tools; that changes every workspace.`
+    ? `Paseo's own connector, added by the daemon to every ${providerLabel} agent. Switch it or its tools under Connectors → Built-in tools; that changes every workspace.`
     : info.blocker
       ? blockerText(info.blocker)
       : `Off for ${providerLabel} agents on this host.`;
@@ -261,11 +261,11 @@ export function PaseoToolsCard({ hostLabel }: { hostLabel: string }) {
     <Card>
       <Header state={state} onRefresh={() => refresh.mutate()} refreshing={refresh.isPending || query.isFetching} />
       <Text style={t.text.body}>
-        {`Paseo's own MCP server. The daemon adds it to agents it starts, with ${plural(state.tools.length, "tool")} for agents, terminals, schedules, workspaces and the browser. ${toolListOrigin(state)}`}
+        {`Paseo's own connector. The daemon adds it to agents it starts, with ${plural(state.tools.length, "tool")} for agents, terminals, schedules, workspaces and the browser. ${toolListOrigin(state)}`}
       </Text>
       {catalogueDriftLine(state) ? <Notice tone="attention">{catalogueDriftLine(state)}</Notice> : null}
       <Text style={t.text.caption}>
-        {`Servers from a project's .mcp.json are a different setting: Settings → Plugins → Paseo MCP → ${ADD_PROJECT_SERVERS}.`}
+        {`Connectors from a project's .mcp.json are a different setting: Settings → Plugins → Paseo MCP → ${ADD_PROJECT_SERVERS}.`}
       </Text>
 
       <Row
@@ -290,8 +290,8 @@ export function PaseoToolsCard({ hostLabel }: { hostLabel: string }) {
             </Text>
             <Text style={t.text.body}>
               {armed
-                ? `Every agent started on this host, in every workspace and for every provider switched on below, gets Paseo's server and up to ${plural(state.tools.length, "tool")} in its context.`
-                : "Every agent started on this host, in every workspace, starts without Paseo's server: no create_agent, terminals, schedules, heartbeats or browser tools. Orchestration from inside an agent stops working for new agents."}
+                ? `Every agent started on this host, in every workspace and for every provider switched on below, gets Paseo's connector and up to ${plural(state.tools.length, "tool")} in its context.`
+                : "Every agent started on this host, in every workspace, starts without Paseo's connector: no create_agent, terminals, schedules, heartbeats or browser tools. Orchestration from inside an agent stops working for new agents."}
               {` ${APPLIES_NOTE}`}
             </Text>
             <View style={{ flexDirection: "row", flexWrap: "wrap", gap: t.space.sm }}>
@@ -403,7 +403,7 @@ function Header({ state, onRefresh, refreshing }: { state: PaseoToolsStateReport
     ? null
     : state.injected
       ? { status: "ok", label: `on for ${state.providers.filter((entry) => entry.tools > 0).length} of ${plural(state.providers.length, "provider")}` }
-      : { status: "neutral", label: state.blocker === "mcp-off" ? "MCP server off" : "not added to agents" };
+      : { status: "neutral", label: state.blocker === "mcp-off" ? "off on this computer" : "not added to agents" };
   return (
     <View style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: t.space.sm }}>
       <Text style={t.text.heading}>Paseo tools</Text>

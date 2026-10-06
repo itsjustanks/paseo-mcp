@@ -558,11 +558,13 @@ export const mcpToolsCached = defineRpc({
 });
 
 /**
- * The always-on composer chip's text: the enabled server count, then the one
+ * The always-on composer chip's text: the enabled connector count, then the one
  * thing worth knowing about them. A problem wins over a sign-in count, and a
  * sign-in count wins over the tool total, so the chip reads as a status line
  * and not a badge that never changes.
  */
+const connectorCount = (count: number): string => `${count} ${count === 1 ? "connector" : "connectors"}`;
+
 export function chipLabel(
   health: McpHealthReport | null | undefined,
   tools: McpToolsReport | null | undefined,
@@ -579,13 +581,13 @@ export function chipLabel(
   const results = health?.results ?? [];
   const tail = meter ? (meter.deferred ? "deferred" : `~${shortTokens(meter.tokens)} tokens`) : "";
   if (results.length === 0) {
-    if (meter) return { label: `${meter.servers} MCP · ${tail}`, tone: "calm" };
+    if (meter) return { label: `${connectorCount(meter.servers)} · ${tail}`, tone: "calm" };
     const count = (tools?.servers.length ?? 0) + builtIn;
-    return { label: count ? `${count} MCP` : "MCP", tone: "calm" };
+    return { label: count ? connectorCount(count) : "Connectors", tone: "calm" };
   }
   const issues = results.filter((entry) => healthNeedsAttention(entry.status)).length;
   const signIn = results.filter((entry) => healthIsSignIn(entry.status)).length;
-  const head = `${meter ? meter.servers : results.length + builtIn} MCP`;
+  const head = connectorCount(meter ? meter.servers : results.length + builtIn);
   if (issues > 0) return { label: `${head} · ${issues} ${issues === 1 ? "issue" : "issues"}`, tone: "attention" };
   if (signIn > 0) return { label: `${head} · ${signIn} need sign-in`, tone: "calm" };
   if (meter) return { label: `${head} · ${tail}`, tone: "calm" };

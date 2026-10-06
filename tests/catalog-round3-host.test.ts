@@ -106,7 +106,7 @@ test("2: a project plan says when a variable it asks for is already set on this 
   process.env.MCP_HEROUI_PRO_HEROUI_PERSONAL_TOKEN = "already-there-value-0123";
   const plan = await handleMcpCatalogPlan({ key: "recommended:heroui-pro", scope: "project", targets: [], projectPath: project, name: "heroui-pro", values: {} }, context);
   assert.ok(
-    plan.notes.includes("MCP_HEROUI_PRO_HEROUI_PERSONAL_TOKEN is already set on this host: this server would receive that value."),
+    plan.notes.includes("MCP_HEROUI_PRO_HEROUI_PERSONAL_TOKEN is already set on this host: this connector would receive that value."),
     plan.notes.join("\n"),
   );
   assert.ok(!JSON.stringify(plan).includes("already-there-value"));

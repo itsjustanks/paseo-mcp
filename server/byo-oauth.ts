@@ -114,7 +114,7 @@ function undoPartialAdd(dest: Destination, name: string, definition: Record<stri
   forgetFile(dest.configPath);
   const read = jsonMcpRead(dest.configPath)[name];
   if (!read) return "Nothing was written.";
-  if (!sameDefinition(read, definition)) return `A server called '${name}' is in the file now but isn't the one planned; open it to check.`;
+  if (!sameDefinition(read, definition)) return `A connector called '${name}' is in the file now but isn't the one planned; open it to check.`;
   try {
     destWrite(dest, name, null);
     return "The entry it had already written was taken out again (backup saved), so you can add it again.";
@@ -160,7 +160,7 @@ async function addNow(dest: Destination, name: string, definition: Record<string
   if (!secret && !secretless) return { ok: false, message: "No client secret was given, so nothing was written." };
   const plain = (text: string) => scrubSecret(text, secret).replace(/\u001b\[[0-9;]*[A-Za-z]/g, "").trim().split("\n").slice(-2).join(" ").slice(0, 300);
   const binary = cliPath("claude");
-  if (!binary) return { ok: false, message: "Claude Code isn't on this computer's PATH, and only Claude Code can store the client secret. Install it, or add the server in a terminal with claude mcp add-json." };
+  if (!binary) return { ok: false, message: "Claude Code isn't on this computer's PATH, and only Claude Code can store the client secret. Install it, or add the connector in a terminal with claude mcp add-json." };
   if (basename(dest.configPath) !== ".claude.json") return { ok: false, message: `${dest.configPath} isn't a Claude Code config file.` };
   if (destReadOne(dest, name)) return { ok: false, message: `'${name}' is already there; nothing was replaced.` };
   try {
@@ -186,7 +186,7 @@ async function addNow(dest: Destination, name: string, definition: Record<string
   if (failure && !result.killed && /already exists/i.test(result.output)) return { ok: false, message: `'${name}' is already there; nothing was replaced.` };
   if (failure) return { ok: false, message: `${failure} ${undoPartialAdd(dest, name, definition)}` };
   const read = jsonMcpRead(dest.configPath)[name];
-  if (!read) return { ok: false, message: "Claude Code said it added the server, but it isn't in the file; open the server to check." };
-  if (!sameDefinition(read, definition)) return { ok: false, message: "written, but it did not read back as planned; open the server to check it" };
+  if (!read) return { ok: false, message: "Claude Code said it added the connector, but it isn't in the file; open the connector to check." };
+  if (!sameDefinition(read, definition)) return { ok: false, message: "written, but it did not read back as planned; open the connector to check it" };
   return { ok: true, message: "" };
 }

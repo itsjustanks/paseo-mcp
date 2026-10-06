@@ -60,7 +60,7 @@ test("remove plan for one editor names the file, counts one, and says who keeps 
   assert.equal(plan.title, "Remove jam from Codex · demo@example.com (primary)?");
   assert.equal(plan.lines[0], "It will be deleted from Codex · demo@example.com (primary).");
   assert.equal(plan.lines[1], "The other 2 apps keep jam.");
-  assert.match(plan.lines.at(-1)!, /no undo.*Export/i);
+  assert.match(plan.lines.at(-1)!, /no undo.*save a copy/i);
   assert.equal(plan.credentialCount, 0);
   assert.equal(plan.confirmLabel, "Remove from this app");
 });

@@ -1,14 +1,18 @@
 import React, { useState } from "react";
 import { Pressable, ScrollView, Text, View, type LayoutChangeEvent } from "react-native";
-import { MCP_NAME, TAB_INTROS, TAB_ORDER, type TabId } from "../shared/guide";
-import { Bullets, Disclosure, HostIcon, IconBadge, SPACE, TYPE, useTokens } from "./ui";
+import { MCP_NAME, TABS_META, TAB_ORDER, type TabId } from "../shared/guide";
+import { HostIcon, SPACE, TYPE, useTokens } from "./ui";
 
 /**
- * Five sections, one job each, in one row: the same underline tabs, intros
- * and type as AI Router (the shared design standard). Icons are Lucide names
- * drawn by the Paseo app; the words live in shared/guide.ts.
+ * Four tabs, one job each, in one row: Overview, Connectors, Projects and Help
+ * (0.19.0). Icons are Lucide names drawn by the Paseo app; the words live in
+ * shared/guide.ts. No intro block under the bar: the user found the stacked
+ * headers messy, so each tab starts with its own content.
  */
-export const TABS = TAB_ORDER.map((id) => ({ id, ...TAB_INTROS[id] }));
+export const TABS = TAB_ORDER.map((id) => ({ id, ...TABS_META[id] }));
+
+/** The tab that stays lit for a section that isn't in the bar (adding with a link lives under Connectors). */
+const TAB_FOR: Partial<Record<TabId, TabId>> = { transfer: "servers" };
 
 export type SectionId = TabId;
 
@@ -30,8 +34,9 @@ export function TabBar({ active, onSelect }: { active: SectionId; onSelect: (id:
     const next = Math.round(event.nativeEvent.layout.width);
     if (next !== width) setWidth(next);
   };
+  const lit = TAB_FOR[active] ?? active;
   const items = TABS.map((tab) => {
-    const selected = tab.id === active;
+    const selected = tab.id === lit;
     const color = selected ? t.color.accent : t.color.muted;
     return (
       <Pressable
@@ -79,36 +84,6 @@ export function TabBar({ active, onSelect }: { active: SectionId; onSelect: (id:
   return (
     <View accessibilityRole="tablist" accessibilityLabel={`${MCP_NAME} sections`} onLayout={onLayout} style={bar}>
       {items}
-    </View>
-  );
-}
-
-/** The intro's icon, so the fold-out below lines up with the text beside it. */
-const INTRO_ICON = 40;
-
-/**
- * The top of each tab except Overview (its status card is its introduction):
- * the tab's icon, a clear title and one or two plain sentences. "What you can
- * do here" folds away behind a small, muted link on every width (the calm
- * standard), so the tab's own content starts near the top.
- */
-export function TabIntro({ section }: { section: SectionId }) {
-  const t = useTokens();
-  const tab = TAB_INTROS[section];
-  return (
-    <View style={{ gap: SPACE.sm }}>
-      <View style={{ flexDirection: "row", alignItems: "flex-start", gap: SPACE.row }}>
-        <IconBadge name={tab.icon} size={INTRO_ICON} />
-        <View style={{ flex: 1, gap: SPACE.xs, minWidth: 0 }}>
-          <Text accessibilityRole="header" style={t.text.display}>{tab.title}</Text>
-          <Text style={t.text.lead}>{tab.summary}</Text>
-        </View>
-      </View>
-      <View style={{ paddingLeft: t.compact || !HostIcon ? 0 : INTRO_ICON + SPACE.row }}>
-        <Disclosure key={section} quiet title="What you can do here" openTitle="Hide what you can do here">
-          <Bullets items={tab.canDo} columns={!t.compact} />
-        </Disclosure>
-      </View>
     </View>
   );
 }

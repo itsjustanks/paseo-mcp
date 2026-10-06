@@ -14,7 +14,7 @@ import { providerName } from "./servers";
 export const COPY_ALL_LABEL = "Copy to all my AI apps";
 
 export const COPY_ALL_EXPLAINER =
-  "Add a server once, and this copies it to every AI app and account on this computer that doesn't have it yet. Nothing is removed or replaced. A server that only one app understands is left for you to copy by hand. Sign-ins aren't copied: each app signs in on its own.";
+  "Add a connector once, and this copies it to every AI app and account on this computer that doesn't have it yet. Nothing is removed or replaced. A connector that only one app understands is left for you to copy by hand. Sign-ins aren't copied: each app signs in on its own.";
 
 const PlaceSchema = z.object({ id: z.string(), label: z.string() });
 
@@ -101,12 +101,12 @@ export function sameDefinition(a: Comparable | null | undefined, b: Comparable |
   );
 }
 
-/** The line under the result: "Copied 3 servers to 5 places. 1 was skipped." */
+/** The line under the result: "Copied 3 connectors to 5 places. 1 was skipped." */
 export function copySummary(results: readonly CopyResult[]): string {
   const places = results.reduce((sum, entry) => sum + entry.written.length, 0);
   const copied = results.filter((entry) => entry.written.length > 0).length;
   const skipped = results.reduce((sum, entry) => sum + entry.skipped.length, 0);
-  if (results.length === 0) return "Nothing to copy: every app already has every server.";
-  const head = places > 0 ? `Copied ${copied} server${copied === 1 ? "" : "s"} to ${places} place${places === 1 ? "" : "s"}.` : "Nothing was copied.";
+  if (results.length === 0) return "Nothing to copy: every app already has every connector.";
+  const head = places > 0 ? `Copied ${copied} connector${copied === 1 ? "" : "s"} to ${places} place${places === 1 ? "" : "s"}.` : "Nothing was copied.";
   return skipped > 0 ? `${head} ${skipped} ${skipped === 1 ? "was" : "were"} skipped; see why below.` : head;
 }

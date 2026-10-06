@@ -268,7 +268,7 @@ function libraryState(read: LibraryRead, droppedCards: DroppedCard[]): LibrarySt
       const fallback = document.items.length
         ? " Showing the last good copy."
         : library.id === GALLERY_LIBRARY_ID
-          ? " The recommended servers shipped with the plugin are shown instead."
+          ? " The recommended connectors that come with the plugin are shown instead."
           : "";
       notes.push(`Could not read the ${library.name} library: ${document.error}.${fallback}`);
     }
@@ -502,8 +502,8 @@ async function prepare(input: InstallInput, paseo: PluginHandlerContext["paseo"]
   result.issues.push(...plan.issues);
   result.definition = plan.definition;
   result.envToSet = plan.envToSet;
-  if (card.entry.auth === "oauth") result.notes.push("After adding, sign in with Connect OAuth.");
-  if (card.entry.auth === "unknown") result.notes.push("If it asks you to sign in after adding, use Connect OAuth on its card.");
+  if (card.entry.auth === "oauth") result.notes.push("After adding, open it and choose Connect to sign in.");
+  if (card.entry.auth === "unknown") result.notes.push("If it asks you to sign in after adding, open it and choose Connect.");
   if (card.warning) result.notes.push(card.warning);
 
   if (input.scope === "user") {
@@ -519,7 +519,7 @@ async function prepare(input: InstallInput, paseo: PluginHandlerContext["paseo"]
       return support.ok;
     });
     if (picked.length === 0) result.issues.push("Pick at least one app.");
-    else if (chosen.length === 0) result.issues.push("None of the apps you picked can use this server.");
+    else if (chosen.length === 0) result.issues.push("None of the apps you picked can use this connector.");
     result.destinations = chosen;
     const taken = new Set<string>();
     const clashFiles: string[] = [];
@@ -534,7 +534,7 @@ async function prepare(input: InstallInput, paseo: PluginHandlerContext["paseo"]
     if (clashFiles.length > 0) result.clash = { files: clashFiles, suggestion: nameClash(name, taken).suggestion };
     if (chosen.length > 0) result.budget = budgetImpact("user", heaviest + 1, describeTargets(chosen.map((dest) => dest.label)));
   } else if (card.entry.setup?.kind === "approved-clients" && !card.entry.setup.clients?.includes("claude")) {
-    result.issues.push("A project's .mcp.json is read by Claude Code, which isn't on this server's approved list.");
+    result.issues.push("A project's .mcp.json is read by Claude Code, which isn't on this connector's approved list.");
   } else {
     // A project registered since the last copy is looked for again, waiting for the daemon this once.
     const cached = await discoverProjects(paseo);
@@ -553,18 +553,18 @@ async function prepare(input: InstallInput, paseo: PluginHandlerContext["paseo"]
       const destinations = await buildDestinations(paseo);
       const userLevel = Math.max(0, ...destinations.filter((dest) => dest.providerId).map((dest) => destNames(dest).length));
       result.budget = budgetImpact("project", Object.keys(servers).length + 1 + userLevel, `${project.name}'s .mcp.json`);
-      result.notes.push(".mcp.json is usually in git: the change shows in git status, and everyone who pulls it gets this server.");
+      result.notes.push(".mcp.json is usually in git: the change shows in git status, and everyone who pulls it gets this connector.");
       for (const { name: variable } of plan.envToSet) {
         // Name only, never the value: the daemon already holds it, and Claude Code started from here would send it.
-        if (process.env[variable] !== undefined) result.notes.push(`${variable} is already set on this host: this server would receive that value.`);
+        if (process.env[variable] !== undefined) result.notes.push(`${variable} is already set on this host: this connector would receive that value.`);
       }
       if (plan.envToSet.length > 0) {
         result.notes.push(
           `The key is not written into the file. It says \${${plan.envToSet[0]?.name}} instead, which Claude Code fills in from its environment when it loads the file. Set ${plan.envToSet.map((entry) => entry.name).join(", ")} where Claude Code starts: for Paseo agents, the daemon's environment or the provider's env in Paseo's settings.`,
         );
-        result.notes.push("Codex does not read .mcp.json; Add project servers to agents passes the file on as written (no ${…} expansion) and skips servers with credentials unless told otherwise.");
+        result.notes.push("Codex does not read .mcp.json; Add project connectors to agents passes the file on as written (no ${…} expansion) and skips connectors with credentials unless told otherwise.");
       }
-      result.notes.push("Claude Code asks once before it uses a new project server; approve it at launch or in the Workspace connectors (MCP) tab.");
+      result.notes.push("Claude Code asks once before it uses a new project connector; approve it at launch or in the Workspace connectors tab.");
     }
   }
   if (typeof plan.masked.command === "string") result.commandLine = commandLine(plan.masked.command, Array.isArray(plan.masked.args) ? (plan.masked.args as string[]) : []);
@@ -585,7 +585,7 @@ async function prepareByo(input: InstallInput, card: CatalogCard, name: string, 
   // The plan has no secret, only hasSecret; the install must have the secret itself.
   const typed = options.install ? (input.oauthClient?.clientSecret ?? "") : undefined;
   const client = { clientId: input.oauthClient?.clientId ?? "", ...(typed === undefined ? { hasSecret: input.oauthClient?.hasSecret === true } : { clientSecret: typed }) };
-  if (input.scope !== "user") result.issues.push("This server is added to your own apps only: its client secret can't go in a project's file.");
+  if (input.scope !== "user") result.issues.push("This connector is added to your own apps only: its client secret can't go in a project's file.");
   // Written through Claude Code on install, so the install reads the apps fresh, as every write does.
   const destinations = await buildDestinations(paseo, options);
   const picked = (input.targets ?? []).map((id) => destinations.find((dest) => dest.id === id)).filter((dest): dest is Destination => Boolean(dest));
@@ -649,7 +649,7 @@ export function addToProjectFile(path: string, name: string, definition: Record<
       servers[name] = definition;
       return true;
     },
-    check: (servers) => (JSON.stringify(servers[name]) === JSON.stringify(definition) ? "" : "written file does not hold the server as planned"),
+    check: (servers) => (JSON.stringify(servers[name]) === JSON.stringify(definition) ? "" : "written file does not hold the connector as planned"),
   });
 }
 
@@ -668,13 +668,13 @@ async function healthOf(definition: Record<string, unknown>, scope: InstallScope
   }
   if (typeof definition.command === "string") {
     return binaryOnPath(definition.command)
-      ? { status: "ok", note: `${definition.command} is on this host's PATH; the server starts when an agent does.` }
+      ? { status: "ok", note: `${definition.command} is on this host's PATH; the connector starts when an agent does.` }
       : { status: "binary-missing", note: `${definition.command} is not on this host's PATH.` };
   }
   return null;
 }
 
-export const PLAN_CHANGED = "The server's details changed since you reviewed them; review again.";
+export const PLAN_CHANGED = "The connector's details changed since you reviewed them; review again.";
 
 export async function handleMcpCatalogInstall(input: InstallInput, context: PluginHandlerContext) {
   const prepared = await prepare(input, context.paseo, { fresh: true, install: true });
@@ -683,7 +683,7 @@ export async function handleMcpCatalogInstall(input: InstallInput, context: Plug
     return {
       ...base,
       ok: false,
-      message: `A server called '${input.name.trim()}' is already in ${prepared.clash.files.join(", ")}. Nothing was written. Use '${prepared.clash.suggestion}' instead, or skip it.`,
+      message: `A connector called '${input.name.trim()}' is already in ${prepared.clash.files.join(", ")}. Nothing was written. Use '${prepared.clash.suggestion}' instead, or skip it.`,
     };
   }
   if (!prepared.ok || !prepared.card) return { ...base, ok: false, message: prepared.issues[0] ?? "Refused." };
@@ -710,7 +710,7 @@ export async function handleMcpCatalogInstall(input: InstallInput, context: Plug
     for (const dest of prepared.destinations) {
       if (!(result.written as string[]).includes(dest.label)) continue;
       if (sameServer(destReadOne(dest, name), prepared.definition)) written.push(dest.label);
-      else skipped.push(`${dest.label}: written, but it did not read back as planned; open the server to check it`);
+      else skipped.push(`${dest.label}: written, but it did not read back as planned; open the connector to check it`);
     }
   } else {
     try {
@@ -755,7 +755,7 @@ export async function handleMcpCatalogEntry({ name }: { name: string }, { paseo 
   const json = `${JSON.stringify(entry, null, 2)}\n`;
   const notes = [
     "No stored value is in this text: every header, env and query value is a {PLACEHOLDER}.",
-    ...(entry.auth === "oauth" ? ["auth says oauth because no key is stored; set it to none if the server needs no sign-in."] : []),
+    ...(entry.auth === "oauth" ? ["auth says oauth because no key is stored; set it to none if the connector needs no sign-in."] : []),
     ...(issues.length > 0 ? [`Fix before sharing: ${issues[0]}.`] : []),
     "Add a description, a category and a docs link, then paste it into your team file.",
   ];

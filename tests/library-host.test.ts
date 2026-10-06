@@ -68,7 +68,7 @@ test("the default library: a 404 is said plainly and the Recommended list stands
   assert.ok(!sent.some((request) => request.url.startsWith("https://registry.modelcontextprotocol.io/")), "the official registry is off by default");
   const gallery = missing.libraries.find((library) => library.id === "mcp-gallery");
   assert.equal(gallery?.state, "error");
-  assert.match(gallery?.note ?? "", /HTTP 404: nothing is published at that address \(yet\)\. The recommended servers shipped with the plugin are shown instead\./);
+  assert.match(gallery?.note ?? "", /HTTP 404: nothing is published at that address \(yet\)\. The recommended connectors that come with the plugin are shown instead\./);
   assert.ok(missing.cards.some((card) => card.key === "recommended:notion"));
   assert.equal(missing.libraries.find((library) => library.id === "mcp-registry")?.state, "off");
   assert.ok(mcpCatalog.output.safeParse(missing).success);

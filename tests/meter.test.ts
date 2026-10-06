@@ -93,7 +93,7 @@ test("numbers read short and say they are estimates", () => {
   assert.equal(shortTokens(1_250_000), "1.3M");
   assert.equal(meterChipTail({ tokens: 38_400, deferred: false }), "~38k tokens");
   assert.equal(meterChipTail({ tokens: 38_400, deferred: true }), "deferred");
-  assert.equal(usageLine({ usedTokens: 360_000, maxTokens: 1_000_000 }, { tokens: 38_000, deferred: false }), "This chat: 360k of 1M context; MCP definitions ≈38k of that.");
+  assert.equal(usageLine({ usedTokens: 360_000, maxTokens: 1_000_000 }, { tokens: 38_000, deferred: false }), "This chat: 360k of 1M context; connector tools ≈38k of that.");
   assert.match(usageLine({ usedTokens: 360_000, maxTokens: 1_000_000 }, { tokens: 38_000, deferred: true }), /deferred/);
   assert.equal(usageLine({ usedTokens: 5000, maxTokens: 200_000 }, null), "This chat: 5k of 200k context.");
 });
@@ -116,16 +116,16 @@ const tools: McpToolsReport = { checkedAt, servers: [] };
 const meter = { servers: 14, tokens: 38_200, deferred: false };
 
 test("the chip shows this agent's cost once its meter is in; issues and sign-ins still win", () => {
-  assert.deepEqual(chipLabel(health(["ok", "ok"]), tools, 61, meter), { label: "14 MCP · ~38k tokens", tone: "calm" });
-  assert.deepEqual(chipLabel(health(["ok"]), tools, 61, { ...meter, deferred: true }), { label: "14 MCP · deferred", tone: "calm" });
-  assert.deepEqual(chipLabel(health(["down", "warn", "ok"]), tools, 0, meter), { label: "14 MCP · 2 issues", tone: "attention" }, "issues win");
-  assert.deepEqual(chipLabel(health(["auth-required", "ok"]), tools, 0, meter), { label: "14 MCP · 1 need sign-in", tone: "calm" }, "sign-in wins over the cost");
-  assert.deepEqual(chipLabel(null, tools, 0, meter), { label: "14 MCP · ~38k tokens", tone: "calm" }, "before the first health pass");
+  assert.deepEqual(chipLabel(health(["ok", "ok"]), tools, 61, meter), { label: "14 connectors · ~38k tokens", tone: "calm" });
+  assert.deepEqual(chipLabel(health(["ok"]), tools, 61, { ...meter, deferred: true }), { label: "14 connectors · deferred", tone: "calm" });
+  assert.deepEqual(chipLabel(health(["down", "warn", "ok"]), tools, 0, meter), { label: "14 connectors · 2 issues", tone: "attention" }, "issues win");
+  assert.deepEqual(chipLabel(health(["auth-required", "ok"]), tools, 0, meter), { label: "14 connectors · 1 need sign-in", tone: "calm" }, "sign-in wins over the cost");
+  assert.deepEqual(chipLabel(null, tools, 0, meter), { label: "14 connectors · ~38k tokens", tone: "calm" }, "before the first health pass");
 });
 
 test("without a meter (loading, or a host older than 0.14.0) the chip reads as before", () => {
   const listed: McpToolsReport = { checkedAt, servers: [{ name: "a", transport: "http", kind: "listed", note: "", tools: [{ name: "t", title: "", description: "", takesArguments: false, arguments: [], required: [] }], serverInfo: null, protocolVersion: "" }] };
-  assert.deepEqual(chipLabel(health(["ok"]), listed, 0), { label: "1 MCP · 1 tools", tone: "calm" });
-  assert.deepEqual(chipLabel(health(["ok"]), listed, 0, null), { label: "1 MCP · 1 tools", tone: "calm" });
-  assert.deepEqual(chipLabel(null, listed, 0, null), { label: "1 MCP", tone: "calm" });
+  assert.deepEqual(chipLabel(health(["ok"]), listed, 0), { label: "1 connector · 1 tools", tone: "calm" });
+  assert.deepEqual(chipLabel(health(["ok"]), listed, 0, null), { label: "1 connector · 1 tools", tone: "calm" });
+  assert.deepEqual(chipLabel(null, listed, 0, null), { label: "1 connector", tone: "calm" });
 });

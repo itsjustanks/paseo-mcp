@@ -100,7 +100,7 @@ test("buttons: a chip appears with a first face, then its label from health, too
   const faces = h.faces.get("a1")!;
   assert.deepEqual(faces[0], CHIP_FIRST_FACE);
   // 3 servers checked, 1 needs attention; the meter says this agent loads 7.
-  assert.deepEqual(faces.at(-1), chipFace("7 MCP · 1 issue", "attention"));
+  assert.deepEqual(faces.at(-1), chipFace("7 connectors · 1 issue", "attention"));
   assert.equal(faces.at(-1)!.icon, "TriangleAlert", "the icon carries the tone");
   assert.equal(h.meterCalls(), 1);
 });
@@ -110,9 +110,9 @@ test("a calm host reads the meter's cost; an agent with no provider gets no mete
   h.registry.upsert(agent("a1"));
   h.registry.upsert({ id: "a2", workspaceId: "ws-1", provider: "", active: true });
   await h.settle();
-  assert.deepEqual(h.faces.get("a1")!.at(-1), { label: "7 MCP · ~24k tokens", icon: "Plug" });
+  assert.deepEqual(h.faces.get("a1")!.at(-1), { label: "7 connectors · ~24k tokens", icon: "Plug" });
   assert.equal(h.meterCalls(), 1, "only the agent with a provider");
-  assert.deepEqual(h.faces.get("a2")!.at(-1), { label: "2 MCP · healthy", icon: "Plug" });
+  assert.deepEqual(h.faces.get("a2")!.at(-1), { label: "2 connectors · healthy", icon: "Plug" });
 });
 
 test("the old component shape: chips are added and removed, and no label is read or pushed", async () => {
@@ -193,7 +193,7 @@ test("an idle agent's chip is labelled without its meter: one read per running a
   await h.settle();
   assert.deepEqual(h.registry.shown().sort(), ["idle-1", "idle-2", "run"]);
   assert.equal(h.meterCalls(), 1, "only the running agent");
-  assert.deepEqual(h.faces.get("idle-1")!.at(-1), { label: "1 MCP · healthy", icon: "Plug" });
+  assert.deepEqual(h.faces.get("idle-1")!.at(-1), { label: "1 connector · healthy", icon: "Plug" });
 });
 
 test("a meter that fails (a workspace that's gone) isn't asked again for 10 minutes", async () => {

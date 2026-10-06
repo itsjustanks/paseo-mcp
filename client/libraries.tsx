@@ -118,7 +118,7 @@ function AddLibrary({ libraries, onAdd, saving }: { libraries: LibrarySource[]; 
         value={source}
         onChangeText={setSource}
         placeholder="https://raw.githubusercontent.com/you/mcp-library/main/servers.json"
-        hint="A JSON file in the MCP Registry's shape (or a team catalogue), a registry address, or a file on this host. https only; plain http only on this machine."
+        hint="A list in the MCP Registry's shape (or your team's list), a registry address, or a file on this computer. https only; plain http only on this machine."
       />
       <Segmented
         value={format}
@@ -193,7 +193,7 @@ export function LibrariesPanel({ states, onChanged, onRefresh, refreshing }: { s
                   <View style={{ flexDirection: "row", flexWrap: "wrap", gap: t.space.xs }}>
                     <Tag label={pill.label} tone={pill.tone} />
                     <Tag label={KIND[location.kind]} />
-                    {library.enabled && state && state.state !== "idle" && state.state !== "off" ? <Tag label={`${state.count} server${state.count === 1 ? "" : "s"}`} /> : null}
+                    {library.enabled && state && state.state !== "idle" && state.state !== "off" ? <Tag label={`${state.count} connector${state.count === 1 ? "" : "s"}`} /> : null}
                     {library.id === TEAM_LIBRARY_ID ? <Tag label="Team" tone="busy" /> : null}
                   </View>
                   {library.enabled && state?.note ? <Text style={[t.text.caption, { color: t.color.warning }]}>{state.note}</Text> : null}

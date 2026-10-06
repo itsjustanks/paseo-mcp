@@ -214,10 +214,10 @@ function fromHttp(reply: Extract<RpcReply, { kind: "http" | "timeout" | "error" 
   // One real host has an HTTP server whose URL lands on a web page: a 200 with
   // HTML is a wrong URL path, not an MCP endpoint that declined.
   if (reply.code >= 200 && reply.code < 300 && /text\/html/i.test(reply.contentType)) {
-    return unavailable("unavailable", `answered a web page, not MCP (HTTP ${reply.code}); check the URL path`);
+    return unavailable("unavailable", `answered a web page, not a connector (HTTP ${reply.code}); check the URL path`);
   }
   if (reply.code >= 300 && reply.code < 400) {
-    return unavailable("unavailable", `redirects to another address (HTTP ${reply.code}); not followed, so this server's headers stay with it`);
+    return unavailable("unavailable", `redirects to another address (HTTP ${reply.code}); not followed, so this connector's headers stay with it`);
   }
   const verdict = classifyProbe({ kind: "response", code: reply.code, body: reply.body, contentType: reply.contentType });
   return unavailable("unavailable", verdict.status === "ok" ? `reachable, but did not answer JSON-RPC (HTTP ${reply.code})` : verdict.note);
@@ -253,7 +253,7 @@ async function exchange(fetchImpl: FetchLike, url: string, headers: Record<strin
   const protocolVersion = cleanText((init.result as { protocolVersion?: unknown } | null)?.protocolVersion, 20);
   const capabilities = (init.result as { capabilities?: { tools?: unknown } } | null)?.capabilities;
   if (capabilities && typeof capabilities === "object" && !("tools" in capabilities)) {
-    return { kind: "listed", note: "server declares no tools", tools: [], serverInfo, protocolVersion };
+    return { kind: "listed", note: "the connector lists no tools", tools: [], serverInfo, protocolVersion };
   }
   const listed = await post(fetchImpl, url, headers, init.sessionId, TOOLS_LIST_REQUEST, signal);
   if (listed.kind !== "rpc") return { ...fromHttp(listed), serverInfo, protocolVersion };
@@ -275,7 +275,7 @@ export function stdioOutcome(command: string | undefined): ListOutcome {
     "stdio",
     command
       ? `'${cleanText(command.split("/").pop(), 40)}' runs as a child process of the agent; its tools are only listed while it runs`
-      : "command server; tools are only listed while it runs",
+      : "runs on this computer; tools are only listed while it runs",
   );
 }
 

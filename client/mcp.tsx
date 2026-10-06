@@ -1,10 +1,10 @@
-/** MCP definitions, health and OAuth grants, kept together by server. */
+/** Connectors (MCP servers): their settings, health and sign-ins, kept together per connector. */
 import type { PluginSurfaceProps, PluginWorkspacePanelProps } from "@getpaseo/plugin/client";
 import { useRpc, useWorkspace } from "@getpaseo/plugin/client";
 import { useToast } from "@getpaseo/plugin/client/react-native";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Text, View } from "react-native";
+import { Pressable, Text, View } from "react-native";
 import { z } from "zod";
 import {
   healthNeedsAttention,
@@ -36,7 +36,7 @@ import { CURATED_CATALOG } from "../shared/catalog-curated";
 import { SERVER_FILTERS, healthPlainNote, healthPlainWord, projectFilesFor, providerName, removePlan, serverGallery, signInState, type RemovePlan, type RemoveScope, type ServerCardModel, type ServerFilter } from "../shared/servers";
 import { COPY_ALL_EXPLAINER, COPY_ALL_LABEL } from "../shared/copy-all";
 import { overviewNextStep, overviewVerdict, type OverviewTarget } from "../shared/overview";
-import { MCP_NAME, MCP_NAME_LOWER } from "../shared/guide";
+import { HELP_QUESTIONS, MCP_NAME, MCP_NAME_LOWER, PROJECTS_LINE, WHAT_CONNECTORS_ARE, type HelpTarget } from "../shared/guide";
 import { addServerRequest } from "../shared/screen-params";
 import { summarizeTools } from "../shared/tools";
 import {
@@ -62,13 +62,15 @@ import { CopyAllPanel } from "./copy-all";
 import { HealthSummary, ServerHealthTag, healthCheckedLabel, healthStatus, healthWord, splitIssues, useHealth } from "./health";
 import { setSignInFocus, useSignInFocus } from "./focus";
 import { canOpenMcp, openMcp, takePendingServer } from "./navigate";
-import { OverviewGuide } from "./guide";
+import { GuideCard, OverviewGuide } from "./guide";
 import { useOpenLink } from "./links";
-import { TabBar, TabIntro, type SectionId } from "./navigation";
-import { PaseoToolsAgentRow, PaseoToolsDisclosure, PaseoToolsLine } from "./paseo-tools";
+import { TabBar, type SectionId } from "./navigation";
+import { PaseoToolsAgentRow, PaseoToolsCard, PaseoToolsLine, paseoToolsTitle, usePaseoTools } from "./paseo-tools";
 import { AiRouterCard } from "./promo";
 import { ServerTools, toolsStatus, toolsWord, useTools } from "./tools";
 import {
+  Accordion,
+  AccordionItem,
   Button,
   Card,
   CodeBlock,
@@ -90,6 +92,7 @@ import {
   Row,
   Screen,
   Section,
+  SectionTitle,
   Segmented,
   StaleNote,
   StatusLine,
@@ -112,6 +115,14 @@ type Mode = "add" | "import";
 type Kind = "stdio" | "http";
 
 // -------------------------------------------------------------------- helpers
+
+/** A sign-in's progress, in words. */
+function sessionWord(state: LoginSession["state"]): string {
+  if (state === "done") return "Done";
+  if (state === "failed") return "Failed";
+  if (state === "waiting") return "Waiting for you";
+  return "Starting";
+}
 
 function sessionStatus(state: LoginSession["state"]): Status {
   if (state === "done") return "ok";
@@ -161,8 +172,8 @@ function codexCheckLine(account: McpAuthAccount): string {
   if (account.checking) return " · checking with Codex…";
   if (account.statusNote) {
     return account.statusAsOf
-      ? ` · as of ${clockTime(account.statusAsOf)}; the latest check did not finish: ${account.statusNote}`
-      : ` · from the grant file only; Codex could not be asked: ${account.statusNote}`;
+      ? ` · as of ${clockTime(account.statusAsOf)}; the latest check didn't finish: ${account.statusNote}`
+      : ` · Codex couldn't be asked: ${account.statusNote}`;
   }
   return account.statusAsOf ? ` · checked ${clockTime(account.statusAsOf)}` : "";
 }
@@ -221,7 +232,7 @@ function Targets({
   const t = useTokens();
   return (
     <Section
-      title={`${title} — ${selected.length} of ${destinations.length}`}
+      title={`${title} · ${selected.length} of ${destinations.length}`}
       trailing={
         <View style={{ flexDirection: "row", gap: t.space.sm }}>
           <Button label="All" variant="ghost" onPress={onAll} />
@@ -242,8 +253,7 @@ function Targets({
               selected={on}
               onPress={() => onToggle(dest.id)}
               title={dest.label}
-              subtitle={dest.configPath}
-              trailing={on ? <Tag label="included" tone="ok" /> : <Tag label="skipped" />}
+              trailing={on ? <Tag label="Included" tone="ok" /> : <Tag label="Skipped" />}
             />
           );
         })}
@@ -314,7 +324,7 @@ function FieldsEditor({
         multiline
         mono
         placeholder={kind === "http" ? "Authorization=Bearer …" : "API_KEY=…"}
-        hint="One KEY=value per line. A masked ••• value keeps this destination's stored secret."
+        hint="One KEY=value per line. A hidden ••• value keeps the key this app already has."
       />
       <View style={{ flexDirection: "row", gap: t.space.sm }}>
         <Button
@@ -597,36 +607,37 @@ function AuthRows({
                     ? "attention"
                     : "neutral";
           const statusLabel = connected
-            ? "connected"
+            ? "Signed in"
             : unsupported
-              ? "OAuth unsupported"
+              ? "Can't sign in from here"
               : live
-                ? "connecting"
+                ? "Signing in…"
                 : failed
-                  ? "connection failed"
+                  ? "Sign-in failed"
                 : auth === "not-connected"
-                  ? "connect required"
-                  : "not checked";
+                  ? "Needs sign-in"
+                  : "Not checked yet";
+          const app = account.provider === "claude" ? "Claude" : "Codex";
           return (
             <Row
               key={`${account.provider}-${account.dir}`}
               first={index === 0}
-              title={bare ? "Account connection" : account.email}
+              title={bare ? "Sign-in" : account.email}
               subtitle={
                 (bare
-                  ? `${account.email} · ${account.isPrimary ? "primary" : "routed"} ${account.provider === "claude" ? "Claude" : "Codex"}`
-                  : `${account.isPrimary ? "primary" : "routed"} ${account.provider === "claude" ? "Claude" : "Codex"} account`) +
+                  ? `${account.email} · ${app}${account.isPrimary ? "" : " (extra account)"}`
+                  : `${app}${account.isPrimary ? "" : " (extra account)"}`) +
                 codexCheckLine(account)
               }
               trailing={
                 connected ? (
                   <>
-                    <Button label="Reconnect" onPress={() => onAuthorise(account)} />
-                    <ConfirmButton label="Sign out" confirmLabel="Revoke this grant" onConfirm={() => onSignOut(account)} />
+                    <Button label="Sign in again" onPress={() => onAuthorise(account)} />
+                    <ConfirmButton label="Sign out" confirmLabel="Yes, sign out" onConfirm={() => onSignOut(account)} />
                   </>
                 ) : !unsupported && daemonIsLocal ? (
                   <Button
-                    label="Connect OAuth"
+                    label="Connect"
                     loading={pendingAccount === `${account.provider}|${account.email}`}
                     disabled={live}
                     onPress={() => onAuthorise(account)}
@@ -640,32 +651,27 @@ function AuthRows({
                     {remote ? (
                       <>
                         <Text style={t.text.caption}>
-                          Sign-in runs on {daemonHostname || "the daemon machine"}. Approve in any browser, then paste
-                          the return address below if it does not finish on its own.
+                          {`Sign-in runs on ${daemonHostname || "the computer running Paseo"}. Approve it in any browser. If it doesn't finish by itself, paste the page's address below.`}
                         </Text>
-                        <CodeBlock>{loginCommand(account, server, workspaceDirectory)}</CodeBlock>
+                        <Disclosure quiet title="Sign in from a terminal instead">
+                          <CodeBlock>{loginCommand(account, server, workspaceDirectory)}</CodeBlock>
+                        </Disclosure>
                       </>
                     ) : null}
                     {!remote && !session ? (
                       <Text style={t.text.caption}>
-                        Connect starts this server's own browser sign-in. Approve it in any browser, then paste the return address below if it does not finish on its own.
+                        Connect opens this connector's sign-in page in your browser. If it doesn't finish by itself, paste the page's address below.
                       </Text>
                     ) : null}
                     {session ? (
                       <>
                         <View style={{ flexDirection: "row", alignItems: "center", gap: t.space.sm }}>
-                          <StatusPill status={sessionStatus(session.state)} label={session.state} />
+                          <StatusPill status={sessionStatus(session.state)} label={sessionWord(session.state)} />
                           <Text style={[t.text.caption, { flex: 1, minWidth: 0 }]} numberOfLines={2}>
                             {session.message}
                           </Text>
                         </View>
                         {session.url ? <CodeBlock>{session.url}</CodeBlock> : null}
-                        {session.callbackUrl ? (
-                          <View style={{ gap: t.space.xs }}>
-                            <Text style={t.text.caption}>Callback returns to</Text>
-                            <CodeBlock>{session.callbackUrl}</CodeBlock>
-                          </View>
-                        ) : null}
                         <View style={{ flexDirection: "row", gap: t.space.sm }}>
                           {session.url ? (
                             <>
@@ -678,11 +684,11 @@ function AuthRows({
                         {live && session.expectsRedirect && session.url ? (
                           <View style={{ gap: t.space.sm }}>
                             <Field
-                              label="Callback return URL"
+                              label="The page's address after you sign in"
                               value={redirects[session.key] ?? ""}
                               onChangeText={(value) => setRedirects((previous) => ({ ...previous, [session.key]: value }))}
-                              placeholder={session.callbackUrl || "Paste the full URL after sign-in"}
-                              hint="Approve in your browser. If it lands on a localhost page that won't load, copy that page's full address from the address bar and paste it here."
+                              placeholder={session.callbackUrl || "Paste the full address here"}
+                              hint="If your browser ends on a page that won't load (its address starts with localhost), copy that page's full address and paste it here."
                             />
                             <Button
                               label="Finish connection"
@@ -702,7 +708,7 @@ function AuthRows({
         });
   if (bare) return <View style={{ gap: t.space.xs }}>{content}</View>;
   return (
-    <Section title="Account connections">
+    <Section title="Sign-in">
       <Card padded={false}>{content}</Card>
     </Section>
   );
@@ -749,13 +755,13 @@ function AgentServers({
   const offCount = data.servers.filter((entry) => entry.enabled.state === "disabled").length;
   return (
     <Section
-      title={`Servers for a ${providerLabel} agent here`}
-      trailing={canOpenMcp() ? <Button label="Manage all servers" variant="ghost" onPress={() => openMcp()} /> : undefined}
+      title={`Connectors for a ${providerLabel} agent here`}
+      trailing={canOpenMcp() ? <Button label="All connectors" variant="ghost" onPress={() => openMcp()} /> : undefined}
     >
       <View style={{ gap: t.space.sm }}>
         <Facts
           items={[
-            { value: plural(data.servers.length + (data.paseoTools && data.paseoTools.tools > 0 ? 1 : 0) + (data.pluginServers?.length ?? 0), "server") },
+            { value: plural(data.servers.length + (data.paseoTools && data.paseoTools.tools > 0 ? 1 : 0) + (data.pluginServers?.length ?? 0), "connector") },
             offCount > 0 ? { value: `${offCount} off for this workspace`, tone: "attention" } : null,
             data.scope ? { value: data.scope.label } : { value: "no settings found for this agent's app" },
           ]}
@@ -764,12 +770,12 @@ function AgentServers({
           {anySwitch
             ? `A switch changes what an agent started in ${data.directory} loads. ${SWITCH_EFFECT_NOTE}`
             : data.scope?.provider === "codex"
-              ? "Codex always loads the servers in its own settings, so only this project's own servers can be switched off here. To stop Codex loading one of its servers, remove it under Servers."
-              : "This app can't switch servers off for one workspace; each shows whether it's on."}
+              ? "Codex always loads the connectors in its own settings, so only this project's own connectors can be switched off here. To stop Codex loading one, remove it under Connectors."
+              : "This app can't switch connectors off for one workspace; each shows whether it's on."}
         </Text>
         {!data.projectIncluded && data.projectNote ? <Text style={t.text.caption}>{data.projectNote}.</Text> : null}
         <Card padded={false}>
-          {data.servers.length === 0 && !data.paseoTools && !data.pluginServers?.length ? <EmptyState title="Nothing loads here" body="This agent's app has no servers for this workspace." /> : null}
+          {data.servers.length === 0 && !data.paseoTools && !data.pluginServers?.length ? <EmptyState title="Nothing loads here" body="This agent's app has no connectors for this workspace." /> : null}
           {data.paseoTools ? <PaseoToolsAgentRow info={data.paseoTools} providerLabel={providerLabel} first /> : null}
           {data.servers.map((entry, index) => {
             const tools = toolsByName?.get(entry.name);
@@ -844,7 +850,7 @@ function PluginServerRow({ entry, first }: { entry: PluginServer; first: boolean
       }
       meta={
         <Text style={t.text.caption}>
-          {`${entry.tools !== undefined ? "" : `${entry.note.charAt(0).toUpperCase()}${entry.note.slice(1)}. `}Not in any AI app's settings now: it was added when this agent was started, by a plugin (or this plugin's "Add project servers" setting at the time) or by whoever started the agent. A new agent gets whatever those add then.`}
+          {`${entry.tools !== undefined ? "" : `${entry.note.charAt(0).toUpperCase()}${entry.note.slice(1)}. `}Not in any AI app's settings now: it was added when this agent was started, by a plugin (or this plugin's "Add project connectors" setting at the time) or by whoever started the agent. A new agent gets whatever those add then.`}
         </Text>
       }
       trailing={<Tag label="on" tone="ok" />}
@@ -888,11 +894,13 @@ function RemovePanel({
   return (
     <View style={{ gap: t.space.sm }}>
       {!armed ? (
-        <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: t.space.sm }}>
-          <Text style={t.text.label}>Remove from</Text>
-          {present.length > 0 ? <Button label="this app…" variant="danger" disabled={pending} onPress={() => onArm({ scope: "one" })} /> : null}
-          {present.length > 1 ? <Button label={`all ${plural(present.length, "app")}`} variant="danger" disabled={pending} onPress={() => onArm({ scope: "all" })} /> : null}
-          <Button label={`everywhere (${everywhereCount})`} variant="danger" disabled={pending} onPress={() => onArm({ scope: "everywhere" })} />
+        <View style={{ gap: t.space.sm }}>
+          <Text style={t.text.body}>You'll see exactly what's removed before anything changes.</Text>
+          <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: t.space.sm }}>
+            {present.length > 1 ? <Button label="From one app…" variant="danger" disabled={pending} onPress={() => onArm({ scope: "one" })} /> : null}
+            {present.length > 0 ? <Button label={present.length > 1 ? `From all ${plural(present.length, "app")}` : "From this app"} variant="danger" disabled={pending} onPress={() => onArm({ scope: present.length > 1 ? "all" : "one" })} /> : null}
+            {projectFiles.length > 0 ? <Button label={`Everywhere, projects too (${everywhereCount})`} variant="danger" disabled={pending} onPress={() => onArm({ scope: "everywhere" })} /> : null}
+          </View>
         </View>
       ) : null}
       {armed?.scope === "one" && present.length > 1 ? (
@@ -912,12 +920,12 @@ function RemovePanel({
           </View>
         </Notice>
       ) : armed ? (
-        <Text style={t.text.caption}>Nothing to remove for that scope.</Text>
+        <Text style={t.text.caption}>Nothing to remove there.</Text>
       ) : null}
       {result && result.skipped.length > 0 ? (
         <Notice tone={result.ok ? "attention" : "error"}>
           <View style={{ gap: t.space.xs }}>
-            <Text style={t.text.bodyStrong}>{result.ok ? `Removed from ${result.removed.length}; ${plural(result.skipped.length, "target")} skipped` : "Nothing removed"}</Text>
+            <Text style={t.text.bodyStrong}>{result.ok ? `Removed from ${result.removed.length}; ${plural(result.skipped.length, "place")} skipped` : "Nothing removed"}</Text>
             <Lines items={result.skipped} />
           </View>
         </Notice>
@@ -938,14 +946,6 @@ function RemovePanel({
 // client/navigation.tsx.
 type Filter = ServerFilter;
 
-const GUIDE_STEPS: { title: string; detail: string; label: string; section: SectionId; filter?: Filter }[] = [
-  { title: "Add servers", detail: "Pick one from the gallery under Servers, type its web address, or paste the setup text from a server's instructions.", label: "Open Import & Export", section: "transfer" },
-  { title: "Copy them to every AI app", detail: "Copy to all my AI apps puts each server into every AI app and account that doesn't have it yet. Each app's own file format is handled for you.", label: "Review servers", section: "servers" },
-  { title: "See what each server can do", detail: "Open a server with its card's settings button to see its tools. Servers you sign in to list them once you've signed in; ones that run on this computer only while an assistant is using them.", label: "Browse servers", section: "servers" },
-  { title: "Sign in, once per account", detail: "Some servers ask you to sign in, once for each AI app and account. A server's own page shows who's signed in; Connect opens its sign-in page in your browser.", label: "Show servers that need sign-in", section: "servers", filter: "sign-in" },
-  { title: "Project servers", detail: "A project can bring its own servers, listed in a file called .mcp.json. They're shown under Projects; sign in from that project's workspace.", label: "See projects", section: "projects" },
-];
-
 function plural(count: number, word: string, many?: string): string {
   return `${count} ${count === 1 ? word : many ?? `${word}s`}`;
 }
@@ -957,32 +957,33 @@ const FILTER_WORDS: Record<Filter, string> = {
   "sign-in": "needs you to sign in",
 };
 
-/** "Checked 6 servers: none has "jam" in its name or description and needs you to sign in." — what an empty list was checked for. */
+/** "Checked 6 connectors: none has "jam" in its name or description and needs you to sign in." — what an empty list was checked for. */
 function noMatchLine(count: number, search: string, filter: Filter): string {
   const parts = [search.trim() ? `has "${search.trim()}" in its name or description` : "", FILTER_WORDS[filter]].filter(Boolean);
-  return `Checked ${plural(count, "server")}: none ${parts.join(" and ")}.`;
+  return `Checked ${plural(count, "connector")}: none ${parts.join(" and ")}.`;
 }
 
 /** What the plugin knows about well-known servers, for the cards' one-line descriptions. */
 const KNOWN_SERVERS = CURATED_CATALOG.map((entry) => ({ url: entry.url, command: entry.command, args: entry.args, description: entry.description }));
 
 /**
- * One server in the Servers gallery (0.15.0): what it is, whether it works,
- * which apps have it, and its sign-in state. Its tools, sign-in rows and
- * Remove are on its own page, behind the settings button.
+ * One connector on the Connectors tab: what it is, whether it works, which
+ * apps have it, and its sign-in state. The whole card opens its own page
+ * (0.19.0; before, only the small settings button did).
  */
 function ServerGalleryCard({ card, checking, onOpen }: { card: ServerCardModel; checking: boolean; onOpen: () => void }) {
   const t = useTokens();
   const attention = Boolean(card.health && healthNeedsAttention(card.health));
   const waiting = checking && !card.health;
   return (
+    <Pressable accessibilityRole="button" accessibilityLabel={`Open ${card.name}`} onPress={onOpen} style={({ pressed }) => ({ flexGrow: 1, opacity: pressed ? 0.85 : 1 })}>
     <Card grow tone={attention && card.health ? healthStatus(card.health) : undefined}>
       <View style={{ flexDirection: "row", alignItems: "flex-start", gap: t.space.sm }}>
         <View style={{ flex: 1, minWidth: 0, gap: t.space.hair }}>
           <Text numberOfLines={1} style={t.text.heading}>{card.name}</Text>
           <Text numberOfLines={2} style={[t.text.body, { minHeight: 44 }]}>{card.description}</Text>
         </View>
-        <IconButton icon="Settings" label={`Settings for ${card.name}`} onPress={onOpen} />
+        <IconButton icon="ChevronRight" label={`Open ${card.name}`} onPress={onOpen} />
       </View>
       <View style={{ gap: t.space.xs }}>
         <StatusPill status={waiting ? "busy" : card.health ? healthStatus(card.health) : "neutral"} label={waiting ? "Checking…" : card.healthWord} />
@@ -990,6 +991,7 @@ function ServerGalleryCard({ card, checking, onOpen }: { card: ServerCardModel; 
         <Text numberOfLines={1} style={{ ...TYPE.secondary, color: card.signIn === "needs" ? t.color.warning : t.color.fg }}>{card.signInText}</Text>
       </View>
     </Card>
+    </Pressable>
   );
 }
 
@@ -1000,7 +1002,7 @@ function firstLine(text: string, fallback: string): string {
   return text.trim().includes("\n") ? `${line} …` : line;
 }
 
-/** "Claude · Codex ×2 · Kimi" — which editors hold a server, provider by provider. */
+/** "Claude · Codex ×2 · Kimi" — which AI apps have a connector, app by app. */
 function editorFacts(presentIn: string[], destinations: Destination[]): string[] {
   const counts = new Map<string, number>();
   for (const dest of destinations) {
@@ -1022,13 +1024,13 @@ function heroFor(status: Status, target: OverviewTarget, facts: { state: string;
   if (facts.state === "loading") return { tone: "neutral", icon: "Loader", action: "RefreshCw" };
   if (facts.staleAt) return { tone: "attention", icon: "Clock", action: "RefreshCw" };
   if (facts.servers === 0) return { tone: "neutral", icon: "Plus", action: "Plus" };
-  if (status === "ok") return { tone: "ok", icon: "CircleCheck", action: "Server" };
+  if (status === "ok") return { tone: "ok", icon: "CircleCheck", action: "Plug" };
   if (target.section === "copy") return { tone: "attention", icon: "Copy", action: "Copy" };
   if (status === "error") return { tone: "error", icon: "CircleAlert", action: "Search" };
   return { tone: "attention", icon: facts.signIn > 0 && target.section === "servers" && target.filter === "sign-in" ? "KeyRound" : "TriangleAlert", action: "Search" };
 }
 
-/** `params` (Paseo 0.11 screens): `add=server` opens on Add a server, from the sidebar row's "+". */
+/** `params` (Paseo 0.11 screens): `add=server` opens on Add a connector, from the sidebar row's "+". */
 export function McpSurface({ theme, layout, host, params }: PluginSurfaceProps & { params?: Record<string, string> }) {
   const t = useUi(theme, layout.compact);
   return (
@@ -1075,6 +1077,8 @@ function McpBody({ layout, host, addRequest }: PluginSurfaceProps & { addRequest
   const [renameTo, setRenameTo] = useState("");
   // 0.15.0: "Copy to all my AI apps" opens its preview in place of the section.
   const [copyOpen, setCopyOpen] = useState(false);
+  // 0.19.0: Help's "Save a backup" opens the backup fold-out at the bottom of the Connectors tab.
+  const [extraOpen, setExtraOpen] = useState<"backup" | null>(null);
   // 0.12.0: "Add server" opens the catalogue gallery in place of the list.
   const [catalogOpen, setCatalogOpen] = useState(addRequest !== null);
   // The sidebar "+" (0.11): each press carries a new `at`, so the gallery opens again even while the page is open.
@@ -1113,9 +1117,10 @@ function McpBody({ layout, host, addRequest }: PluginSurfaceProps & { addRequest
     () => healthQuery.data ? new Map(healthQuery.data.results.map((entry) => [entry.name, entry])) : null,
     [healthQuery.data],
   );
-  // Tool lists are cached on the host the same way; the Tools section and the
-  // server pane read them, Refresh there asks every server again.
+  // Tool lists are cached on the host the same way; the connector page reads
+  // them, and Refresh there asks every connector again.
   const toolsQuery = useTools();
+  const paseoToolsQuery = usePaseoTools();
   const toolsByName = useMemo(
     () => toolsQuery.data ? new Map(toolsQuery.data.servers.map((entry) => [entry.name, entry])) : null,
     [toolsQuery.data],
@@ -1444,7 +1449,7 @@ function McpBody({ layout, host, addRequest }: PluginSurfaceProps & { addRequest
 
   // The pill and the Overview's next step come from one decision table
   // (shared/overview.ts), so they always name the same problem. Sign-in counts
-  // the servers the "Need sign-in" filter shows, so the two numbers match.
+  // the connectors the "Needs sign-in" filter shows, so the two numbers match.
   const overviewFacts = {
     state: matrixQuery.data ? ("ready" as const) : matrixQuery.isError ? ("error" as const) : ("loading" as const),
     staleAt: matrixStale ? readAt(matrixQuery.dataUpdatedAt) : null,
@@ -1461,10 +1466,11 @@ function McpBody({ layout, host, addRequest }: PluginSurfaceProps & { addRequest
     if (target.section === "refresh") refreshAll();
     else if (target.section === "copy") setCopyOpen(true);
     else if (target.section === "transfer") go("transfer", { mode: target.mode });
+    else if (target.section === "add") { go("servers", { server: null }); setCatalogOpen(true); }
     else go("servers", { server: null, filter: target.filter });
   };
 
-  // One row per server that needs a look, with every reason it is listed.
+  // One row per connector that needs a look, with every reason it is listed.
   const attentionByServer = new Map<string, { label: string; detail: string; tone: Status }[]>();
   const noteAttention = (name: string, item: { label: string; detail: string; tone: Status }) =>
     attentionByServer.set(name, [...(attentionByServer.get(name) ?? []), item]);
@@ -1485,7 +1491,7 @@ function McpBody({ layout, host, addRequest }: PluginSurfaceProps & { addRequest
 
   const toServers = (filter: Filter) => () => go("servers", { server: null, filter });
 
-  // "a, b, c and 2 more": which servers a line is about, without a wall of names.
+  // "a, b, c and 2 more": which connectors a line is about, without a wall of names.
   const nameList = (list: McpServerRow[]) => {
     const head = list.slice(0, 3).map((entry) => entry.name).join(", ");
     return list.length > 3 ? `${head} and ${list.length - 3} more` : head;
@@ -1505,7 +1511,7 @@ function McpBody({ layout, host, addRequest }: PluginSurfaceProps & { addRequest
           : brokenServers.length > 0
             ? { value: `${brokenServers.length} not working`, status: "error" as Status, hint: nameList(brokenServers), action: { label: "Show", onPress: toServers("issues") } }
             : issueServers.length > 0
-              ? { value: `${plural(issueServers.length, "server")} with a warning`, status: "attention" as Status, hint: nameList(issueServers), action: { label: "Show", onPress: toServers("issues") } }
+              ? { value: `${plural(issueServers.length, "connector")} with a warning`, status: "attention" as Status, hint: nameList(issueServers), action: { label: "Show", onPress: toServers("issues") } }
               : { value: "all working", status: "ok" as Status, hint: healthQuery.data ? healthCheckedLabel(healthQuery.data) : null })}
       />
       <StatusLine
@@ -1513,10 +1519,10 @@ function McpBody({ layout, host, addRequest }: PluginSurfaceProps & { addRequest
         {...(!ready
           ? { value: "reading", status: "neutral" as Status }
           : servers.length === 0
-            ? { value: "no servers yet", status: "neutral" as Status, hint: `${plural(destinations.length, "AI app and account", "AI apps and accounts")} found on ${host.label}` }
+            ? { value: "no connectors yet", status: "neutral" as Status, hint: `${plural(destinations.length, "AI app and account", "AI apps and accounts")} found on ${host.label}` }
             : gapServers.length > 0
-              ? { value: `${plural(gapServers.length, "server")} missing from some apps`, status: "attention" as Status, action: { label: "Show", onPress: toServers("gaps") } }
-              : { value: "every app has every server", status: "ok" as Status, hint: `${plural(servers.length, "server")} in ${plural(destinations.length, "AI app and account", "AI apps and accounts")}`, action: { label: "Servers", onPress: toServers("all") } })}
+              ? { value: `${plural(gapServers.length, "connector")} missing from some apps`, status: "attention" as Status, action: { label: "Show", onPress: toServers("gaps") } }
+              : { value: "every app has every connector", status: "ok" as Status, hint: `${plural(servers.length, "connector")} in ${plural(destinations.length, "AI app and account", "AI apps and accounts")}`, action: { label: "Connectors", onPress: toServers("all") } })}
       />
       <StatusLine
         label="Sign-in"
@@ -1525,20 +1531,20 @@ function McpBody({ layout, host, addRequest }: PluginSurfaceProps & { addRequest
           : signInServers.length > 0
             ? { value: `${signInServers.length} need sign-in`, status: "attention" as Status, hint: nameList(signInServers), action: { label: "Show", onPress: toServers("sign-in") } }
             : connectedCount > 0
-              ? { value: "all signed in", status: "ok" as Status, hint: `${plural(connectedCount, "server")} you sign in to, across ${plural(accounts.length, "account")}` }
-              : { value: "none needed", status: "neutral" as Status, hint: "No server here asks you to sign in" })}
+              ? { value: "all signed in", status: "ok" as Status, hint: `${plural(connectedCount, "connector")} you sign in to, across ${plural(accounts.length, "account")}` }
+              : { value: "none needed", status: "neutral" as Status, hint: "No connector here asks you to sign in" })}
       />
     </View>
   );
 
-  // The hero says the state in words, then three rows, one muted line and at most two buttons. The per-server
-  // detail folds behind a quiet link; teaching folds into one "New to MCP servers?" link; AI Router is one line.
+  // The hero says the state in words, then three rows, one muted line and at most two buttons. The per-connector
+  // detail folds behind a quiet link; teaching folds into one "New to connectors?" link; AI Router is one line.
   const hero = heroFor(headerPill.status, nextStep.target, overviewFacts);
   const checkedLine = healthQuery.data ? healthCheckedLabel(healthQuery.data) : null;
   const secondary =
-    servers.length > 0 && nextStep.label !== "Browse servers"
-      ? { label: "Browse servers", icon: "Server", onPress: toServers("all") }
-      : { label: "Add a server", icon: "Plus", onPress: () => { go("servers", { server: null }); setCatalogOpen(true); } };
+    servers.length > 0 && nextStep.label !== "See your connectors"
+      ? { label: "See your connectors", icon: "Plug", onPress: toServers("all") }
+      : { label: "Add a connector", icon: "Plus", onPress: () => { go("servers", { server: null }); setCatalogOpen(true); } };
   const overview = (
     <View style={{ gap: t.space.section }}>
       <HeroCard tone={hero.tone} icon={hero.icon} title={nextStep.title} lead={nextStep.detail}>
@@ -1546,7 +1552,7 @@ function McpBody({ layout, host, addRequest }: PluginSurfaceProps & { addRequest
         {glance}
         {checkedLine ? <Text style={t.text.caption}>{`Health ${checkedLine}`}</Text> : null}
         {attention.length > 0 ? (
-          <Disclosure quiet title={`See which servers need a look (${attention.length})`} openTitle="Hide which servers need a look">
+          <Disclosure quiet title={`See which connectors need a look (${attention.length})`} openTitle="Hide which connectors need a look">
             <Card padded={false} level={2}>
               {attention.map(([name, items], index) => (
                 <Row
@@ -1581,15 +1587,18 @@ function McpBody({ layout, host, addRequest }: PluginSurfaceProps & { addRequest
           <Button label={secondary.label} icon={secondary.icon} onPress={secondary.onPress} />
         </View>
       </HeroCard>
-      <OverviewGuide apps={appNames(destinations)} open={ready && servers.length === 0} onAdd={() => go("servers", { server: null })} onCopy={() => setCopyOpen(true)} />
+      <View style={{ gap: t.space.sm }}>
+        <QuietLine icon="Info">{WHAT_CONNECTORS_ARE}</QuietLine>
+        <OverviewGuide apps={appNames(destinations)} open={ready && servers.length === 0} onAdd={() => go("servers", { server: null })} onCopy={() => setCopyOpen(true)} />
+      </View>
       <AiRouterCard />
     </View>
   );
 
-  // Search and the filter pills, each pill with how many servers it would show.
+  // Search and the filter pills, each pill with how many connectors it would show.
   const filters = (
     <View style={{ gap: t.space.sm }}>
-      <Field value={search} onChangeText={setSearch} placeholder="Search your servers" />
+      <Field value={search} onChangeText={setSearch} placeholder="Search your connectors" />
       <Pills
         value={filter}
         onChange={setFilter}
@@ -1602,8 +1611,8 @@ function McpBody({ layout, host, addRequest }: PluginSurfaceProps & { addRequest
   const summaryStrip = (
     <Facts
       items={[
-        { value: `${plural(servers.length, "server")} across ${plural(destinations.length, "app account")}` },
-        toolTotals ? { value: `${toolTotals.tools} tools listed by ${toolTotals.listed} of ${toolTotals.servers}`, tone: toolTotals.tools > 0 ? "ok" : undefined } : { value: "tools not listed yet" },
+        { value: `${plural(servers.length, "connector")} across ${plural(destinations.length, "app account")}` },
+        toolTotals ? { value: `${toolTotals.tools} tools from ${toolTotals.listed} of ${plural(toolTotals.servers, "connector")}`, tone: toolTotals.tools > 0 ? "ok" : undefined } : { value: "tools not listed yet" },
         authQuery.data ? { value: `${signInServers.length} need sign-in`, tone: signInServers.length > 0 ? "attention" : undefined } : null,
         health ? { value: `${issueServers.length} need${issueServers.length === 1 ? "s" : ""} attention`, tone: issueServers.length > 0 ? "attention" : "ok" } : null,
         { value: `${gapServers.length} missing from some apps` },
@@ -1642,15 +1651,15 @@ function McpBody({ layout, host, addRequest }: PluginSurfaceProps & { addRequest
         <Card>
           {servers.length === 0 ? (
             <EmptyState
-              title="No servers yet"
-              body={`None of your AI apps on ${host.label} has a server yet. Add one from the gallery and it shows here.`}
-              action={<Button label="Add a server" variant="primary" onPress={() => setCatalogOpen(true)} />}
+              title="No connectors yet"
+              body={`None of your AI apps on ${host.label} has a connector yet. Add one from the gallery and it shows here.`}
+              action={<Button label="Add a connector" variant="primary" onPress={() => setCatalogOpen(true)} />}
             />
           ) : (
             <EmptyState
-              title="No server matches"
+              title="No connector matches"
               body={noMatchLine(servers.length, search, filter)}
-              action={<Button label="Show all servers" onPress={() => { setSearch(""); setFilter("all"); }} />}
+              action={<Button label="Show all connectors" onPress={() => { setSearch(""); setFilter("all"); }} />}
             />
           )}
         </Card>
@@ -1669,7 +1678,7 @@ function McpBody({ layout, host, addRequest }: PluginSurfaceProps & { addRequest
 
   const back = (
     <View style={{ flexDirection: "row" }}>
-      <Button label="← All servers" variant="ghost" onPress={() => selectServer(null)} />
+      <Button label="← All connectors" variant="ghost" onPress={() => selectServer(null)} />
     </View>
   );
 
@@ -1713,6 +1722,14 @@ function McpBody({ layout, host, addRequest }: PluginSurfaceProps & { addRequest
     />
   );
 
+  // A connector's own page (0.19.0): what it is and whether it works, the one or two things to do, its
+  // sign-in when it has one, then fold-outs for its tools, its AI apps, renaming, the technical details and removal.
+  const kindWord = server ? (server.transport === "http" ? "On the web" : server.transport === "stdio" ? "Runs on this computer" : "Kind unknown") : "";
+  const appsWord = server
+    ? server.presentIn.length === destinations.length
+      ? `In all ${plural(destinations.length, "AI app")}`
+      : `In ${server.presentIn.length} of ${plural(destinations.length, "AI app")}`
+    : "";
   const serverPane = server ? (
     <View style={{ gap: t.space.section }}>
       {back}
@@ -1721,23 +1738,11 @@ function McpBody({ layout, host, addRequest }: PluginSurfaceProps & { addRequest
           <Text style={[t.text.display, { flexShrink: 1 }]} numberOfLines={1}>
             {server.name}
           </Text>
-          <Tag label={server.transport === "http" ? "On the web" : server.transport === "stdio" ? "On this computer" : "Kind unknown"} />
-          {inlineCredentialCount > 0 ? <Tag label={`Key saved in ${plural(inlineCredentialCount, "app")}`} /> : null}
-          {oauthDestinations.length > 0 ? <Tag label={`Sign-in in ${plural(oauthDestinations.length, "app")}`} /> : null}
           {serverHealth ? (
             <StatusPill status={healthStatus(serverHealth.status)} label={healthWord(serverHealth.status)} />
           ) : null}
-          {serverTools ? <Tag label={toolsWord(serverTools)} tone={toolsStatus(serverTools.kind)} /> : null}
         </View>
-        <Facts
-          items={[
-            { value: `In ${server.presentIn.length} of ${plural(destinations.length, "AI app")}` },
-            ...editorFacts(server.presentIn, destinations).map((value) => ({ value })),
-            projectFilesFor(server.name, projectServers).length > 0 ? { value: `In ${plural(projectFilesFor(server.name, projectServers).length, "project")}` } : null,
-            server.detail ? { value: server.detail } : null,
-            healthQuery.data ? { value: healthCheckedLabel(healthQuery.data, (iso) => new Date(iso).toLocaleString()) } : null,
-          ]}
-        />
+        <Text style={t.text.body}>{`${kindWord} · ${appsWord}`}</Text>
         {serverHealth && serverHealth.status !== "ok" && serverHealth.note ? (
           <Text style={t.text.body}>{serverHealth.note}</Text>
         ) : null}
@@ -1751,49 +1756,12 @@ function McpBody({ layout, host, addRequest }: PluginSurfaceProps & { addRequest
             />
           ) : null}
           <Button
-            label={revealed ? "Hide secrets" : "Reveal secrets"}
-            onPress={() => setRevealed((value) => !value)}
-          />
-          <Button
             label="Check now"
             loading={healthQuery.isFetching}
             onPress={() => { void healthQuery.refetch(); }}
           />
-          {/* A panel cannot download, so an export is written next to the
-              user's other files and the path is reported back. */}
-          <Button
-            label="Export"
-            loading={exportMutation.isPending}
-            onPress={() => exportMutation.mutate({ scope: "one", name: server.name, reveal: revealed })}
-          />
-          <CopyCatalogEntryButton name={server.name} />
         </View>
-        <Disclosure title="Rename this server everywhere">
-          <Field label="New name" value={renameTo} onChangeText={setRenameTo} placeholder={server.name} />
-          <Button
-            label="Rename everywhere"
-            loading={renameMutation.isPending}
-            disabled={!renameTo.trim() || renameTo.trim() === server.name}
-            onPress={() => renameMutation.mutate({ name: server.name, newName: renameTo.trim() })}
-          />
-        </Disclosure>
-        {removePanel(server)}
       </Card>
-
-      <Section
-        title="Tools"
-        trailing={<Button label="Refresh tools" variant="ghost" loading={toolsQuery.isFetching} onPress={() => void toolsQuery.refetch()} />}
-      >
-        <Card>
-          {serverTools ? (
-            <ServerTools entry={serverTools} open />
-          ) : toolsQuery.isFetching ? (
-            <Loading label="Asking servers for their tools…" />
-          ) : (
-            <Text style={t.text.caption}>Not listed yet. Refresh tools asks every server.</Text>
-          )}
-        </Card>
-      </Section>
 
       {server.transport === "http" && authQuery.error ? (
         <ErrorText>{errorText(authQuery.error)}</ErrorText>
@@ -1839,21 +1807,25 @@ function McpBody({ layout, host, addRequest }: PluginSurfaceProps & { addRequest
         />
       ) : null}
 
-      {revealed ? (
-        <Notice tone="error">
-          <View style={{ gap: t.space.sm }}>
-            <Text style={t.text.body}>
-              Secrets are in clear text on this pane. They re-mask when the editor closes or you leave this server.
-            </Text>
-            <View style={{ flexDirection: "row", gap: t.space.sm }}>
-              <Button label="Hide secrets" onPress={() => setRevealed(false)} />
-            </View>
+      <Accordion>
+        <AccordionItem
+          icon="Wrench"
+          title="What it can do"
+          summary={serverTools ? toolsWord(serverTools) : toolsQuery.isFetching ? "Asking it…" : "Not listed yet"}
+        >
+          {serverTools ? (
+            <ServerTools entry={serverTools} plain />
+          ) : toolsQuery.isFetching ? (
+            <Loading label="Asking your connectors what they can do…" />
+          ) : (
+            <Text style={t.text.caption}>Not listed yet. Refresh asks every connector.</Text>
+          )}
+          <View style={{ flexDirection: "row" }}>
+            <Button label="Refresh" variant="ghost" loading={toolsQuery.isFetching} onPress={() => void toolsQuery.refetch()} />
           </View>
-        </Notice>
-      ) : null}
-
-      <Section title="AI apps">
-        <Card padded={false}>
+        </AccordionItem>
+        <AccordionItem icon="Bot" title="Your AI apps" summary={missing.length > 0 ? `${appsWord} · missing from ${plural(missing.length, "app")}` : appsWord} open={missing.length > 0}>
+          <Card padded={false} level={2}>
           {destinations.map((dest, index) => {
             const present = server.presentIn.includes(dest.id);
             const rawRow = rawRows.find((entry) => entry.destId === dest.id);
@@ -1867,11 +1839,7 @@ function McpBody({ layout, host, addRequest }: PluginSurfaceProps & { addRequest
                 first={index === 0}
                 tone={present ? undefined : "attention"}
                 title={dest.label}
-                subtitle={
-                  present
-                    ? rawRow?.nativePreview ?? (rawQuery.isFetching ? "reading…" : undefined)
-                    : "Not in this app"
-                }
+                subtitle={present ? "Added" : "Not in this app"}
                 meta={
                   present && server.inlineCredentialsIn.includes(dest.id) ? (
                     <StatusPill status="ok" label="Key saved in its settings" />
@@ -1886,7 +1854,7 @@ function McpBody({ layout, host, addRequest }: PluginSurfaceProps & { addRequest
                   present ? (
                     open ? undefined : (
                       <Button
-                        label="Manage"
+                        label="Change"
                         onPress={() => {
                           setEditing(dest.id);
                           setEditTab("fields");
@@ -1930,9 +1898,110 @@ function McpBody({ layout, host, addRequest }: PluginSurfaceProps & { addRequest
               />
             );
           })}
-        </Card>
-      </Section>
+          </Card>
+        </AccordionItem>
+        <AccordionItem icon="PenLine" title="Rename" summary="Change its name in every AI app">
+          <Field label="New name" value={renameTo} onChangeText={setRenameTo} placeholder={server.name} />
+          <View style={{ flexDirection: "row" }}>
+            <Button
+              label="Rename everywhere"
+              loading={renameMutation.isPending}
+              disabled={!renameTo.trim() || renameTo.trim() === server.name}
+              onPress={() => renameMutation.mutate({ name: server.name, newName: renameTo.trim() })}
+            />
+          </View>
+        </AccordionItem>
+        <AccordionItem icon="SlidersHorizontal" title="Technical details" summary="Its address, saved keys, and copies to share">
+          <Facts
+            items={[
+              server.detail ? { value: server.detail } : null,
+              ...editorFacts(server.presentIn, destinations).map((value) => ({ value })),
+              inlineCredentialCount > 0 ? { value: `Key saved in ${plural(inlineCredentialCount, "app")}` } : null,
+              oauthDestinations.length > 0 ? { value: `Sign-in in ${plural(oauthDestinations.length, "app")}` } : null,
+              projectFilesFor(server.name, projectServers).length > 0 ? { value: `In ${plural(projectFilesFor(server.name, projectServers).length, "project")}` } : null,
+              healthQuery.data ? { value: healthCheckedLabel(healthQuery.data, (iso) => new Date(iso).toLocaleString()) } : null,
+            ]}
+          />
+          {revealed ? (
+            <Notice tone="error">Keys are showing as plain text on this page. They're hidden again when you leave this connector.</Notice>
+          ) : null}
+          <View style={{ flexDirection: "row", flexWrap: "wrap", gap: t.space.sm }}>
+            <Button label={revealed ? "Hide keys" : "Show keys"} onPress={() => setRevealed((value) => !value)} />
+            {/* A panel cannot download, so a copy is saved next to the user's other files and the path is reported back. */}
+            <Button
+              label="Save a copy"
+              loading={exportMutation.isPending}
+              onPress={() => exportMutation.mutate({ scope: "one", name: server.name, reveal: revealed })}
+            />
+            <CopyCatalogEntryButton name={server.name} />
+          </View>
+          {rawRows.length > 0 ? (
+            <View style={{ gap: t.space.sm }}>
+              <Text style={t.text.label}>What each app has saved</Text>
+              {destinations
+                .filter((dest) => server.presentIn.includes(dest.id))
+                .map((dest) => {
+                  const rawRow = rawRows.find((entry) => entry.destId === dest.id);
+                  return rawRow?.nativePreview ? (
+                    <View key={dest.id} style={{ gap: t.space.xs }}>
+                      <Text style={t.text.caption}>{dest.label}</Text>
+                      <CodeBlock>{rawRow.nativePreview}</CodeBlock>
+                    </View>
+                  ) : null;
+                })}
+            </View>
+          ) : rawQuery.isFetching ? (
+            <Loading label="Reading…" />
+          ) : null}
+        </AccordionItem>
+        <AccordionItem icon="Trash2" title="Remove" summary="From one app, or from all of them" tone="error">
+          {removePanel(server)}
+        </AccordionItem>
+      </Accordion>
     </View>
+  ) : null;
+
+  // Every connector into one file (0.19.0: moved here from the old import-and-export tab).
+  const backupBody = (
+    <>
+      <Text style={t.text.body}>
+        {`Saves every connector from every AI app into one file on ${host.label}. Keys are left out unless you include them, and a file without its keys can't be added back as it is.`}
+      </Text>
+      <Segmented
+        value={exportRevealed ? "reveal" : "mask"}
+        onChange={(value) => setExportRevealed(value === "reveal")}
+        options={[
+          { value: "mask", label: "Leave keys out" },
+          { value: "reveal", label: "Include keys" },
+        ]}
+      />
+      {exportRevealed ? (
+        <Notice tone="error">The file will hold your keys as plain text. Delete it once you've used it.</Notice>
+      ) : null}
+      <View style={{ flexDirection: "row" }}>
+        <Button
+          label="Save a backup"
+          loading={exportMutation.isPending && exportMutation.variables?.scope === "all"}
+          disabled={servers.length === 0}
+          onPress={() => exportMutation.mutate({ scope: "all", reveal: exportRevealed })}
+        />
+      </View>
+    </>
+  );
+
+  // The less-used parts of the Connectors tab, last and folded (0.19.0): backup, Paseo's own tools, totals.
+  const extras = ready ? (
+    <Accordion>
+      <AccordionItem key={`backup-${extraOpen ?? ""}`} icon="Archive" title="Back up your connectors" summary="Save them all to one file" open={extraOpen === "backup"}>
+        {backupBody}
+      </AccordionItem>
+      <AccordionItem icon="Boxes" title="Built-in tools" summary={paseoToolsTitle(paseoToolsQuery.data, Boolean(paseoToolsQuery.error))}>
+        <PaseoToolsCard hostLabel={host.label} />
+      </AccordionItem>
+      <AccordionItem icon="ChartColumn" title="Totals and last check" summary={`${plural(servers.length, "connector")} · ${plural(destinations.length, "app account")}`}>
+        {summaryStrip}
+      </AccordionItem>
+    </Accordion>
   ) : null;
 
   const serversSection = server ? serverPane : catalogOpen ? (
@@ -1946,6 +2015,10 @@ function McpBody({ layout, host, addRequest }: PluginSurfaceProps & { addRequest
         if (name) setAddName(name);
         go("transfer", { mode: "add" });
       }}
+      onPaste={() => {
+        setCatalogOpen(false);
+        go("transfer", { mode: "import" });
+      }}
       onInstalled={refreshDefinitions}
       onOpenServer={(name) => {
         setCatalogOpen(false);
@@ -1957,9 +2030,8 @@ function McpBody({ layout, host, addRequest }: PluginSurfaceProps & { addRequest
       <Toolbar
         actions={
           <>
-            <Button label="Add server" variant="primary" onPress={() => setCatalogOpen(true)} />
-            <Button label="Import" onPress={() => go("transfer", { mode: "import" })} />
-            {/* One Refresh: settings, health, sign-in and every server's tool list. */}
+            <Button label="Add connector" icon="Plus" variant="primary" onPress={() => setCatalogOpen(true)} />
+            {/* One Refresh: settings, health, sign-in and every connector's tool list. */}
             <Button
               label="Refresh"
               variant="ghost"
@@ -1977,34 +2049,27 @@ function McpBody({ layout, host, addRequest }: PluginSurfaceProps & { addRequest
         <Notice tone="attention">
           <View style={{ flexDirection: t.compact ? "column" : "row", alignItems: t.compact ? "stretch" : "center", gap: t.space.sm }}>
             <Text style={[t.text.body, { flex: t.compact ? undefined : 1 }]}>
-              {`${plural(gallery.counts.gaps, "server")} ${gallery.counts.gaps === 1 ? "is" : "are"} missing from some of your AI apps. Copy ${gallery.counts.gaps === 1 ? "it" : "them"} everywhere in one go, after a preview.`}
+              {`${plural(gallery.counts.gaps, "connector")} ${gallery.counts.gaps === 1 ? "is" : "are"} missing from some of your AI apps. Copy ${gallery.counts.gaps === 1 ? "it" : "them"} everywhere in one go, after a preview.`}
             </Text>
             <Button label={COPY_ALL_LABEL} variant="secondary" onPress={() => setCopyOpen(true)} />
           </View>
         </Notice>
       ) : null}
       {list}
-      {/* Extras last, folded and quiet (the calm standard): Paseo's own tools, and the totals the pills don't show. */}
-      <View style={{ gap: t.space.xs }}>
-        <PaseoToolsDisclosure hostLabel={host.label} quiet />
-        {ready ? (
-          <Disclosure quiet title="Totals and last check" openTitle="Hide totals">
-            {summaryStrip}
-          </Disclosure>
-        ) : null}
-      </View>
+      {extras}
     </View>
   );
 
   const projectsSection = (
     <View style={{ gap: t.space.section }}>
+      <Text style={t.text.body}>{PROJECTS_LINE}</Text>
       {authQuery.isLoading ? <Loading label="Reading projects…" /> : null}
       {authQuery.error ? <ErrorText>{authQuery.data ? `Could not refresh projects (${errorText(authQuery.error)}). Showing the earlier read.` : `Could not read projects: ${errorText(authQuery.error)}`}</ErrorText> : null}
       {authQuery.data && projectGroups.length === 0 ? (
         <Card>
           <EmptyState
-            title="No project brings its own servers"
-            body={`No project on ${host.label} brings its own servers yet. A project lists them in a file called .mcp.json in its top folder; they show here after the next refresh.`}
+            title="No project has its own connectors"
+            body={`No project on ${host.label} comes with its own connectors yet. A project lists them in a file called .mcp.json in its top folder; they show here after the next refresh.`}
           />
         </Card>
       ) : null}
@@ -2016,46 +2081,47 @@ function McpBody({ layout, host, addRequest }: PluginSurfaceProps & { addRequest
               first={index === 0}
               title={project}
               subtitle={names.join(", ")}
-              meta={<Facts items={[{ value: plural(names.length, "server") }]} />}
+              meta={<Facts items={[{ value: plural(names.length, "connector") }]} />}
             />
           ))}
         </Card>
       ) : null}
-      <QuietLine icon="KeyRound">To sign in to a project's servers, open that project's workspace and choose Workspace connectors (MCP) (command palette → "Open workspace connectors (MCP)").</QuietLine>
+      <QuietLine icon="KeyRound">{`To sign in to a project's connectors, open that project's workspace, then its Workspace ${MCP_NAME_LOWER} tab.`}</QuietLine>
     </View>
   );
 
   const addPane = (
     <View style={{ gap: t.space.section }}>
       <Card>
-        <Text style={t.text.heading}>Add a server</Text>
-        <Field label="Name" value={addName} onChangeText={setAddName} placeholder="my-server" />
+        <Field label="Name" value={addName} onChangeText={setAddName} placeholder="my-connector" hint="What your AI apps will call it." />
         <Segmented
           value={addKind}
           onChange={setAddKind}
           options={[
-            { value: "http", label: "On the web" },
-            { value: "stdio", label: "On this computer" },
+            { value: "http", label: "It has a link" },
+            { value: "stdio", label: "It runs on this computer" },
           ]}
         />
         {addKind === "http" ? (
-          <Field label="Web address" value={addUrl} onChangeText={setAddUrl} placeholder="https://example.com/mcp" hint="From the server's instructions." />
+          <Field label="Link" value={addUrl} onChangeText={setAddUrl} placeholder="https://example.com/mcp" hint="From the connector's setup instructions." />
         ) : (
-          <Field label="Program to run" value={addCommand} onChangeText={setAddCommand} placeholder="npx -y some-mcp-server" hint="The command the server's instructions give you to start it." />
+          <Field label="Command that starts it" value={addCommand} onChangeText={setAddCommand} placeholder="npx -y some-mcp-server" hint="Its setup instructions give you this." />
         )}
-        <Field
-          label={addKind === "http" ? "Keys (optional)" : "Settings (optional)"}
-          value={addKv}
-          onChangeText={setAddKv}
-          multiline
-          mono
-          placeholder={addKind === "http" ? "Authorization=Bearer …" : "API_KEY=…"}
-          hint={
-            addKind === "http"
-              ? "Only if the instructions give you a key, one Name=value per line. Signs in with your account? Leave this blank; after adding, open the server and choose Connect."
-              : "One NAME=value per line, only if the instructions ask for one."
-          }
-        />
+        <Disclosure quiet title={addKind === "http" ? "Needs a key or token?" : "Needs settings?"} open={Boolean(addKv.trim())}>
+          <Field
+            label={addKind === "http" ? "Key or token" : "Settings"}
+            value={addKv}
+            onChangeText={setAddKv}
+            multiline
+            mono
+            placeholder={addKind === "http" ? "Authorization=Bearer …" : "API_KEY=…"}
+            hint={
+              addKind === "http"
+                ? "Only if the instructions give you one, one Name=value per line. If it signs in with your account instead, leave this empty: after adding, open it and choose Connect."
+                : "One NAME=value per line, only if the instructions ask for one."
+            }
+          />
+        </Disclosure>
       </Card>
       <Targets
         title="Add it to"
@@ -2086,28 +2152,28 @@ function McpBody({ layout, host, addRequest }: PluginSurfaceProps & { addRequest
   const importPane = (
     <View style={{ gap: t.space.section }}>
       <Card>
-        <Text style={t.text.heading}>Paste a server's setup text</Text>
         <Field
+          label="Setup instructions"
           value={blob}
           onChangeText={setBlob}
           multiline
           mono
           minHeight={t.text.mono.lineHeight * 10}
-          placeholder={'{ "mcpServers": { "example": { "type": "http", "url": "https://…" } } }'}
-          hint="Straight from the server's instructions; extra formatting around it is handled."
+          placeholder="Paste the setup instructions here"
+          hint="Copy them from the app's website as they are. Extra text around them is fine."
         />
       </Card>
-      {parseQuery.isFetching ? <Loading label="Reading it…" /> : null}
+      {parseQuery.isFetching ? <Loading label="Reading them…" /> : null}
       {parseQuery.error ? <ErrorText>{errorText(parseQuery.error)}</ErrorText> : null}
       {parsed && parsed.normalisations.length > 0 ? (
-        <Section title="Cleaned up on the way in">
+        <Disclosure quiet title="What was tidied up">
           <Lines items={parsed.normalisations} />
-        </Section>
+        </Disclosure>
       ) : null}
       {parsed && parsed.issues.length > 0 ? <Issues source={debouncedBlob} issues={parsed.issues} /> : null}
       {parsed && parsed.servers.length > 0 ? (
         <>
-          <Section title={`Found ${parsed.servers.length}`}>
+          <Section title={`Found ${plural(parsed.servers.length, "connector")}`}>
             <Card padded={false}>
               {parsed.servers.map((entry, index) => {
                 const on = picked.includes(entry.name);
@@ -2128,14 +2194,14 @@ function McpBody({ layout, host, addRequest }: PluginSurfaceProps & { addRequest
                     meta={
                       <Facts
                         items={[
-                          { value: entry.kind === "http" ? "on the web" : "on this computer" },
+                          { value: entry.kind === "http" ? "on the web" : "runs on this computer" },
                           entry.hasPlaceholders.length > 0
                             ? { value: `fill in ${entry.hasPlaceholders.join(", ")}`, tone: "attention" as Status }
                             : null,
                         ]}
                       />
                     }
-                    trailing={on ? <Tag label="import" tone="ok" /> : <Tag label="skip" />}
+                    trailing={on ? <Tag label="Add" tone="ok" /> : <Tag label="Skip" />}
                   />
                 );
               })}
@@ -2149,13 +2215,13 @@ function McpBody({ layout, host, addRequest }: PluginSurfaceProps & { addRequest
             onAll={importTargets.all}
             onNone={importTargets.none}
           />
-          <Section title="If a server of that name is already there">
+          <Section title="If you already have one with the same name">
             <Segmented
               value={overwrite ? "overwrite" : "keep"}
               onChange={(value) => setOverwrite(value === "overwrite")}
               options={[
-                { value: "keep", label: "Keep what is there" },
-                { value: "overwrite", label: "Overwrite it" },
+                { value: "keep", label: "Keep mine" },
+                { value: "overwrite", label: "Replace it" },
               ]}
             />
           </Section>
@@ -2163,7 +2229,7 @@ function McpBody({ layout, host, addRequest }: PluginSurfaceProps & { addRequest
             <Notice tone="attention">
               <View style={{ gap: t.space.sm }}>
                 <Text style={t.text.body}>
-                  {`${stillPlaceholders.map((entry) => entry.name).join(", ")} still ${stillPlaceholders.length === 1 ? "has" : "have"} parts to fill in (like <API_KEY>). Added as they are, they won't connect.`}
+                  {`${stillPlaceholders.map((entry) => entry.name).join(", ")} still ${stillPlaceholders.length === 1 ? "has" : "have"} parts to fill in (like <API_KEY>). Added as ${stillPlaceholders.length === 1 ? "it is, it won't" : "they are, they won't"} connect.`}
                 </Text>
                 <Segmented
                   value={allowPlaceholders ? "allow" : "block"}
@@ -2194,7 +2260,7 @@ function McpBody({ layout, host, addRequest }: PluginSurfaceProps & { addRequest
       {importResult ? (
         <>
           {importResult.written.length > 0 ? (
-            <Section title="Written">
+            <Section title="Added">
               <Lines items={importResult.written} />
             </Section>
           ) : null}
@@ -2209,76 +2275,59 @@ function McpBody({ layout, host, addRequest }: PluginSurfaceProps & { addRequest
     </View>
   );
 
+  // Add with a link (0.19.0): the old import-and-export tab, reached from Add connector and Help; Connectors stays lit.
   const transferSection = (
     <View style={{ gap: t.space.section }}>
+      <View style={{ flexDirection: "row" }}>
+        <Button label="← Back to the gallery" variant="ghost" onPress={() => { go("servers", { server: null }); setCatalogOpen(true); }} />
+      </View>
+      <View style={{ gap: t.space.xs }}>
+        <Text accessibilityRole="header" style={t.text.display}>Add with a link</Text>
+        <Text style={t.text.body}>For a connector that isn't in the gallery: use the link or the setup instructions its maker gives you.</Text>
+      </View>
       <Segmented
         value={mode}
         onChange={setMode}
         options={[
-          { value: "add", label: "Add server" },
-          { value: "import", label: "Paste setup text" },
+          { value: "add", label: "Paste a link" },
+          { value: "import", label: "Paste setup instructions" },
         ]}
       />
       {mode === "add" ? addPane : importPane}
-      <Card>
-        <Step index={0} title="Save a backup of every server" />
-        <Text style={t.text.body}>
-          Saves every server from every AI app into one file, next to your other files on {host.label}. Keys are hidden unless you choose to include them, and a file with hidden keys can't be added back as it is.
-        </Text>
-        <Segmented
-          value={exportRevealed ? "reveal" : "mask"}
-          onChange={(value) => setExportRevealed(value === "reveal")}
-          options={[
-            { value: "mask", label: "Hide keys" },
-            { value: "reveal", label: "Include keys" },
-          ]}
-        />
-        {exportRevealed ? (
-          <Notice tone="error">The file will hold your keys as plain text. Delete it once you've used it.</Notice>
-        ) : null}
-        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: t.space.sm }}>
-          <Button
-            label="Save backup file"
-            loading={exportMutation.isPending && exportMutation.variables?.scope === "all"}
-            disabled={servers.length === 0}
-            onPress={() => exportMutation.mutate({ scope: "all", reveal: exportRevealed })}
-          />
-        </View>
-      </Card>
     </View>
   );
 
-  const guideSection = (
+  // Help (0.19.0): plain questions first, each folded, then how connectors work.
+  const helpAction = (target: HelpTarget) => {
+    if (target.to === "filter") go("servers", { server: null, filter: target.filter });
+    else if (target.to === "copy") setCopyOpen(true);
+    else if (target.to === "projects") go("projects");
+    else if (target.to === "add") { go("servers", { server: null }); setCatalogOpen(true); }
+    else { setExtraOpen("backup"); go("servers", { server: null, filter: "all" }); }
+  };
+  const helpSection = (
     <View style={{ gap: t.space.section }}>
-      <Grid min={260}>
-        {GUIDE_STEPS.map((step, index) => (
-          <Card key={step.title}>
-            <Step index={index + 1} title={step.title} />
-            <Text style={t.text.body}>{step.detail}</Text>
-            <View style={{ flexDirection: "row" }}>
-              <Button label={step.label} onPress={() => go(step.section, step.section === "servers" ? { server: null, filter: step.filter ?? "all" } : {})} />
-            </View>
-          </Card>
-        ))}
-      </Grid>
-      <Card title="When something doesn't work" icon="LifeBuoy">
-        <Text style={t.text.body}>
-          Sign-in happens on the computer running Paseo, which may not be the one in front of you. Connect opens the server's sign-in page in a browser there.
-        </Text>
-        <Text style={t.text.body}>
-          If the browser ends up on a "localhost" page that won't load, the sign-in came back to the wrong computer. Copy that page's full address, paste it into "Callback return URL" under the account, then choose Finish connection.
-        </Text>
-        <Text style={t.text.body}>
-          Sign-ins belong to each account and are never copied. "Copy to all my AI apps" on Overview copies the servers themselves; every app and account still signs in to each server once.
-        </Text>
-        <Text style={t.text.body}>
-          A server marked "Not installed" needs its program installed on {host.label}. A server marked "Not working" didn't answer; open it to see what went wrong and check its address or keys.
-        </Text>
-        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: t.space.sm }}>
-          <Button label="Show servers that need sign-in" onPress={() => go("servers", { server: null, filter: "sign-in" })} />
-          <Button label="Show servers that need attention" onPress={() => go("servers", { server: null, filter: "issues" })} />
-        </View>
-      </Card>
+      <View style={{ gap: t.space.row }}>
+        <SectionTitle icon="CircleHelp">Common questions</SectionTitle>
+        <Accordion>
+          {HELP_QUESTIONS.map((item) => (
+            <AccordionItem key={item.question} icon={item.icon} title={item.question}>
+              {item.answer.map((line) => (
+                <Text key={line} style={t.text.body}>{line.split("{host}").join(host.label)}</Text>
+              ))}
+              {item.action ? (
+                <View style={{ flexDirection: "row" }}>
+                  <Button label={item.action.label} onPress={() => helpAction(item.action!.target)} />
+                </View>
+              ) : null}
+            </AccordionItem>
+          ))}
+        </Accordion>
+      </View>
+      <View style={{ gap: t.space.row }}>
+        <SectionTitle icon="BookOpen">How connectors work</SectionTitle>
+        <GuideCard apps={appNames(destinations)} onAdd={() => { go("servers", { server: null }); setCatalogOpen(true); }} onCopy={() => setCopyOpen(true)} />
+      </View>
     </View>
   );
 
@@ -2292,7 +2341,7 @@ function McpBody({ layout, host, addRequest }: PluginSurfaceProps & { addRequest
           ? projectsSection
           : section === "transfer"
             ? transferSection
-            : guideSection;
+            : helpSection;
 
   const pad = t.compact ? 16 : 24;
   return (
@@ -2300,13 +2349,11 @@ function McpBody({ layout, host, addRequest }: PluginSurfaceProps & { addRequest
       {/* Padded the same way as Screen below, so the header, the tab bar and the content share one left edge. */}
       <View style={{ paddingHorizontal: pad, paddingTop: pad }}>
         <View style={{ width: "100%", maxWidth: t.maxWidth, alignSelf: "center", gap: t.space.row }}>
-          <Header title={MCP_NAME} status={headerPill} caption={ready ? `${plural(servers.length, "server")} on ${host.label}` : `on ${host.label}`} />
+          <Header title={MCP_NAME} status={headerPill} caption={ready ? `${plural(servers.length, "connector")} on ${host.label}` : `on ${host.label}`} />
           <TabBar active={section} onSelect={(next) => { setCopyOpen(false); go(next, next === "servers" ? { server: null } : {}); }} />
         </View>
       </View>
       <Screen t={t} paddingTop={t.space.section}>
-        {/* Overview has no intro: its status card is its introduction (the calm standard). */}
-        {copyOpen || section === "overview" || (section === "servers" && server) ? null : <TabIntro section={section} />}
         {matrixStale ? (
           <StaleNote what="your AI apps' settings" at={readAt(matrixQuery.dataUpdatedAt)} reason={errorText(matrixQuery.error)} onRetry={refreshAll} />
         ) : matrixQuery.isError && section !== "overview" ? (
@@ -2352,19 +2399,19 @@ function SignInFocus({
       <View style={{ gap: t.space.sm }}>
         <Text style={t.text.bodyStrong}>{`${server} needs sign-in`}</Text>
         {reading ? (
-          <Loading label="Reading this agent's servers…" />
+          <Loading label="Reading this agent's connectors…" />
         ) : signIn ? (
           signIn
         ) : (
           <Text style={t.text.caption}>
             {entry
-              ? `${server} can't be signed in to from here for this agent's account. Sign in from its page under Manage all servers, or in the AI app itself.`
-              : `${server} isn't one of the servers this agent loads. Sign in from its page under Manage all servers, or in the AI app itself.`}
+              ? `${server} can't be signed in to from here for this agent's account. Sign in from its page under All connectors, or in the AI app itself.`
+              : `${server} isn't one of the connectors this agent loads. Sign in from its page under All connectors, or in the AI app itself.`}
           </Text>
         )}
         {canOpenMcp() ? (
           <View style={{ flexDirection: "row" }}>
-            <Button label="Manage all servers" variant="ghost" onPress={() => openMcp()} />
+            <Button label="All connectors" variant="ghost" onPress={() => openMcp()} />
           </View>
         ) : null}
       </View>
@@ -2388,7 +2435,7 @@ export function McpWorkspacePanel(props: PluginWorkspacePanelProps) {
 export function WorkspaceBody({
   host,
   workspaceId,
-  caption = "project MCP servers and sign-in",
+  caption = "this project's connectors and sign-in",
   intro,
   providerId,
   agentId,
@@ -2595,13 +2642,13 @@ export function WorkspaceBody({
       : !data
         ? { status: "neutral" as Status, label: "Reading" }
         : data.servers.length === 0
-          ? { status: "neutral" as Status, label: "No project servers" }
-          : { status: "ok" as Status, label: plural(data.servers.length, "project server") };
+          ? { status: "neutral" as Status, label: "No project connectors" }
+          : { status: "ok" as Status, label: plural(data.servers.length, "project connector") };
 
   const body = !workspace ? (
     <EmptyState title="Workspace unavailable" body="This Paseo workspace no longer exists." />
   ) : workspaceQuery.isLoading ? (
-    <Loading label="Reading project MCP servers…" />
+    <Loading label="Reading this project's connectors…" />
   ) : workspaceQuery.error && !data ? (
     <Notice tone="error">
       <View style={{ gap: t.space.sm }}>
@@ -2614,7 +2661,7 @@ export function WorkspaceBody({
   ) : server && data ? (
     <View style={{ gap: t.space.section }}>
       <View style={{ flexDirection: "row" }}>
-        <Button label="← Workspace MCP servers" variant="ghost" onPress={() => setSelected(null)} />
+        <Button label={`← Workspace ${MCP_NAME_LOWER}`} variant="ghost" onPress={() => setSelected(null)} />
       </View>
       <View style={{ gap: t.space.sm }}>
         <View style={{ flexDirection: "row", alignItems: "center", gap: t.space.sm }}>
@@ -2691,18 +2738,18 @@ export function WorkspaceBody({
           signIn={(entry) => authFor(entry.name, agentServersQuery.data?.account ?? null, entry.inlineCredentials, entry.transport)}
         />
       ) : null}
-      <Section title="This project's own servers (.mcp.json)">
+      <Section title="This project's own connectors">
       <Facts
         items={[
           { value: data.configPath || "No .mcp.json file" },
-          { value: plural(data.servers.length, "project server") },
+          { value: plural(data.servers.length, "project connector") },
         ]}
       />
       <Card padded={false}>
         {data.servers.length === 0 ? (
           <EmptyState
-            title={data.configPath ? "No servers of its own" : "This project has no servers of its own"}
-            body={data.configPath ? "Its .mcp.json file is there but lists no servers." : "A project lists its own servers in a file called .mcp.json in its top folder."}
+            title={data.configPath ? "No connectors of its own" : "This project has no connectors of its own"}
+            body={data.configPath ? "Its .mcp.json file is there but lists no connectors." : "A project lists its own connectors in a file called .mcp.json in its top folder."}
           />
         ) : null}
         {data.servers.map((entry, index) => (

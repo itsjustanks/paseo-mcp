@@ -372,9 +372,9 @@ test("with injection Paseo tools are one more server with their real tool count"
 test("the chip counts Paseo tools only when this agent gets them", () => {
   const health = { results: [{ name: "a", status: "ok" as const, note: "", scopes: [] }], checkedAt: "" };
   const tools = { servers: [{ name: "a", transport: "http" as const, kind: "listed" as const, note: "", tools: [{ name: "t", title: "", description: "", takesArguments: false, arguments: [], required: [] }], serverInfo: null, protocolVersion: "" }], checkedAt: "" };
-  assert.equal(chipLabel(health, tools).label, "1 MCP · 1 tools");
-  assert.equal(chipLabel(health, tools, 0).label, "1 MCP · 1 tools");
-  assert.equal(chipLabel(health, tools, 61).label, "2 MCP · 62 tools");
-  assert.equal(chipLabel(null, null, 61).label, "1 MCP");
-  assert.equal(chipLabel(null, null).label, "MCP");
+  assert.equal(chipLabel(health, tools).label, "1 connector · 1 tools");
+  assert.equal(chipLabel(health, tools, 0).label, "1 connector · 1 tools");
+  assert.equal(chipLabel(health, tools, 61).label, "2 connectors · 62 tools");
+  assert.equal(chipLabel(null, null, 61).label, "1 connector");
+  assert.equal(chipLabel(null, null).label, "Connectors");
 });

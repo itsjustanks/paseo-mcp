@@ -314,7 +314,7 @@ export type WriteOptions = {
   headerTable?: "headers" | "http_headers";
 };
 
-const alreadyThere = (name: string) => new Error(`already has a server called ${name}`);
+const alreadyThere = (name: string) => new Error(`already has a connector called ${name}`);
 
 function jsonMcpWrite(path: string, name: string, def: McpDef | null, options: WriteOptions = {}): void {
   jsonMcpWriteMany(path, [{ name, def }], options);
@@ -336,7 +336,7 @@ function jsonMcpWriteMany(path: string, entries: Array<{ name: string; def: McpD
   const refused = new Map<string, string>();
   const raw = config.mcpServers;
   const servers = raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, McpDef>) : {};
-  if (raw !== undefined && servers !== raw) throw new Error(`${path} has an mcpServers that isn't a list of servers — refusing to overwrite it`);
+  if (raw !== undefined && servers !== raw) throw new Error(`${path} has an mcpServers that isn't a list of connectors — refusing to overwrite it`);
   let changed = false;
   for (const { name, def } of entries) {
     try {
@@ -966,13 +966,13 @@ export async function handleMcpAdd(
   const def: McpDef = {};
   if (input.kind === "stdio") {
     const parts = (input.command ?? "").trim().split(/\s+/).filter(Boolean);
-    if (parts.length === 0) return { ok: false, message: "stdio server needs a command" };
+    if (parts.length === 0) return { ok: false, message: "a connector on this computer needs a program to run" };
     def.command = parts[0];
     if (parts.length > 1) def.args = parts.slice(1);
     const env = parseKvLines(input.kvLines);
     if (Object.keys(env).length > 0) def.env = env;
   } else {
-    if (!input.url?.trim()) return { ok: false, message: "http server needs a URL" };
+    if (!input.url?.trim()) return { ok: false, message: "a connector on the web needs a web address" };
     def.url = input.url.trim();
     const headers = parseKvLines(input.kvLines);
     if (Object.keys(headers).length > 0) def.headers = headers;
@@ -1026,7 +1026,7 @@ export function removeFromProjectFile(path: string, name: string): "removed" | "
       delete servers[name];
       return true;
     },
-    check: (servers) => (name in servers ? "written file still defines the server" : ""),
+    check: (servers) => (name in servers ? "written file still defines the connector" : ""),
   });
   return changed ? "removed" : "absent";
 }
@@ -1182,7 +1182,7 @@ export async function handleMcpEditOne(
       if (!(key in storedRecord)) {
         return {
           ok: false,
-          message: `'${key}' has no stored value here — press Reveal secrets and paste the real value, or keep the original key name`,
+          message: `'${key}' has no stored value here — press Show keys and paste the real value, or keep the original key name`,
         };
       }
       record[key] = storedRecord[key];
@@ -1198,7 +1198,7 @@ export async function handleMcpEditOne(
   const def: McpDef = { ...(stored ?? {}) };
   if (input.kind === "stdio") {
     const parts = (input.command ?? "").trim().split(/\s+/).filter(Boolean);
-    if (parts.length === 0) return { ok: false, message: "stdio server needs a command" };
+    if (parts.length === 0) return { ok: false, message: "a connector on this computer needs a program to run" };
     def.command = parts[0];
     if (parts.length > 1) def.args = parts.slice(1);
     else delete def.args;
@@ -1207,7 +1207,7 @@ export async function handleMcpEditOne(
     if (Object.keys(record).length > 0) def.env = record;
     else delete def.env;
   } else {
-    if (!input.url?.trim()) return { ok: false, message: "http server needs a URL" };
+    if (!input.url?.trim()) return { ok: false, message: "a connector on the web needs a web address" };
     def.url = input.url.trim();
     delete def.command;
     delete def.args;
