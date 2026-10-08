@@ -301,6 +301,15 @@ can do here" (behind **Learn more** on a phone). The words are in `shared/guide.
 English. On Paseo 0.11 the page is a full screen with the app's own sidebar row; on 0.10 and later links
 open in the system browser. Older apps keep the surface and sidebar item they had, decided at runtime
 (`shared/host-features.ts`). `requirements.paseo` is `>=0.9.0` since 0.19.2: Paseo accepts the manifest's `description` only from 0.9.0.
+Copies go through the app's own clipboard (`copyText`, `clipboardCopier` in `shared/host-features.ts`;
+0.20.0); React Native's deprecated `Clipboard` serves only an app without it, and a refused copy says
+"Couldn't copy". Toasts come from one hook (`useToast` in `client/ui.tsx`): the app's, or inline lines on
+an app without one. Everything a person sees that may quote a provider or a CLI (toasts, inline errors,
+failure lists, previews) goes through one redactor, `shared/redact.ts`; CLI failures are a fixed sentence
+plus the CLI's last line, redacted (`cliFailure`). A Copy button never offers a key: the saved config has
+none while keys are shown, and previews are masked by the host, including TOML lines kept as written
+(an `oauth` table's `client_secret`), for display only. The manifest has no `name`, `icon` or `media` yet: Paseo 0.11.0-beta.5's manifest
+schema is strict and rejects them, so they wait until every host runs 0.11.1.
 
 **Overview** is calm (0.18.0, AI Router 0.15.0's rules): a status card with the state in words
 ("Fix the server that isn't working", "All set: your servers are working"), three rows (health, AI
@@ -344,9 +353,40 @@ Above the gallery, Paseo's built-in tools ("Paseo's built-in tools · on · 61 t
 top. One **Refresh** re-reads the settings, health, sign-in and every server's tool list. The logic is in
 `shared/servers.ts` (`serverGallery`).
 
+### Compare-before-replace (0.20.0)
+
+Settings files other programs write too (~/.claude.json, a project's .mcp.json, Codex's and Grok's
+config.toml) are changed only through `readStamped` + `replaceGuarded` (`server/safe-write.ts`): the
+inode, size, mtime and a SHA-256 of the text are recorded at the read; the new text goes to a temporary
+file in the same folder; the file is stamped again right before the rename, and any difference deletes
+the temporary file and throws a retryable `ConcurrentChangeError` ("Claude Code changed its settings file
+while saving. Nothing was changed; try again."). The rename keeps the file's mode; the read-back must
+equal the bytes written, and if it doesn't nothing more is written (no rollback) and the user is told
+where the backup is. Temporary files are created 0600 and removed on any failure; the stamp hashes the
+file's bytes, and a file that isn't valid UTF-8 is refused. Reveal to edit carries the connector's
+version (`entryVersionFromText`); Save is refused if it changed since. The plugin's own files (settings copies, caches, saved keys)
+and exports use the plain atomic writer.
+
+### Where each connector is set up (0.20.0)
+
+Every surface uses the same plain labels (`shared/scope.ts`): **Everywhere** for a user-level config
+(~/.claude.json's top level, ~/.codex/config.toml, the other apps' own files), **This project · <name>**
+for a project's .mcp.json (and what the injection hook adds from it), and **This project, just for you**
+for Claude Code's local scope (`projects[<dir>].mcpServers` in ~/.claude.json), shown read only as
+"Claude Code · just for you": the plugin never writes those entries, and Remove gives the
+`claude mcp remove <name> -s local` command instead. The workspace and agent
+panels group by scope, project first. When a name is set up at several levels, `loadFor` keeps the
+winner (local, then project, then user, Claude Code's documented order) and records what it hides
+(`shadows`), and the row says which copy is used. Rows name sources without paths; Technical details
+lists home-relative paths with Copy. Add starts on the scope being browsed (`startingScope`) and names
+the file it writes. Codex's project `.codex/config.toml` is not read yet.
+
 ### Removing a server
 
-Each server's page offers three scopes, each a two-step confirm that names the files:
+Each server's page offers three scopes, each a two-step confirm that names the files. Since 0.20.0 the
+second step is Paseo's own dialog (`Modal`), with Cancel, rather than a box further down the page (an app
+without `Modal` keeps it in the page). Each opening is a fresh session (`shared/remove-dialog.ts`): Cancel
+forgets the app picked, and Confirm is single-use:
 
 | Scope | What is written |
 | --- | --- |

@@ -1,7 +1,9 @@
 import type { PluginTheme } from "@getpaseo/plugin";
 import * as HostRN from "@getpaseo/plugin/client/react-native";
-import React, { createContext, useContext, useMemo, useState } from "react";
+import React, { createContext, useContext, useMemo, useState, useSyncExternalStore } from "react";
 import { ActivityIndicator, Clipboard, Image, Pressable, ScrollView, Text, TextInput, View } from "react-native";
+import { clipboardCopier, createMessageStore, toastHook, type ToastApi } from "../shared/host-features";
+import { redactSecrets } from "../shared/redact";
 
 /**
  * The plugin's design system.
@@ -238,7 +240,10 @@ export function Screen({
 }) {
   const pad = t.compact ? SPACE.md : SPACE.section;
   const body = (
-    <View style={{ maxWidth: t.maxWidth, width: "100%", alignSelf: "center", gap: t.space.section }}>{children}</View>
+    <View style={{ maxWidth: t.maxWidth, width: "100%", alignSelf: "center", gap: t.space.section }}>
+      <InlineMessages />
+      {children}
+    </View>
   );
   return (
     <TokensProvider value={t}>
@@ -1091,22 +1096,50 @@ export function ComboBox({
   );
 }
 
+// ------------------------------------------------------------------ toasts
+
+/** Toasts on an app without `useToast`: kept here and shown as lines at the top of the screen. */
+const inlineMessages = createMessageStore();
+const useInlineToast = (): ToastApi => ({
+  show: (message, options) => inlineMessages.push(message, options?.variant, options?.durationMs),
+  error: (message) => inlineMessages.push(message, "error"),
+});
+
 /**
- * No RPC copies arbitrary text, so this goes through the host's clipboard —
- * which a host is free not to have. The caller says so rather than pretending
- * the copy happened; the text stays selectable either way.
+ * Every toast in the plugin goes through here (0.20.0): the app's toast, or
+ * an inline line on an app without one, and always through the shared
+ * redactor, so provider output never reaches the screen raw.
  */
-export function copyToClipboard(text: string): boolean {
-  try {
-    Clipboard.setString(text);
-    return true;
-  } catch {
-    return false;
-  }
+export const useToast = toastHook(HostRN, useInlineToast, redactSecrets);
+
+/** Nothing unless the app has no toasts; then the latest messages, each for a few seconds. */
+function InlineMessages() {
+  const t = useTokens();
+  const messages = useSyncExternalStore(inlineMessages.subscribe, inlineMessages.read, inlineMessages.read);
+  if (messages.length === 0) return null;
+  return (
+    <View accessibilityLiveRegion="polite" style={{ gap: t.space.xs }}>
+      {messages.map((entry) => (
+        <Text key={entry.id} style={[t.text.body, { color: entry.variant === "error" ? t.color.danger : entry.variant === "warning" ? t.color.warning : t.color.fg }]}>
+          {entry.message}
+        </Text>
+      ))}
+    </View>
+  );
 }
 
+/**
+ * Copies through the app's own clipboard (`copyText`, 0.20.0); React Native's
+ * deprecated `Clipboard` is only the fallback, and on the web it failed without
+ * saying so. False means nothing was copied: the caller says so rather than
+ * pretending, and the text stays selectable. Never pass a key or a token.
+ */
+export const copyToClipboard = clipboardCopier(HostRN, (text) => Clipboard.setString(text));
+
+/** `copy={false}` wherever the text may hold a key: the Copy button must never put one on the clipboard. */
 export function CodeBlock({ children, tone, copy = true }: { children: string; tone?: Status; copy?: boolean }) {
   const t = useTokens();
+  const toast = useToast();
   const [copied, setCopied] = useState(false);
   return (
     <View
@@ -1132,9 +1165,11 @@ export function CodeBlock({ children, tone, copy = true }: { children: string; t
           accessibilityLabel={copied ? "Copied to clipboard" : "Copy to clipboard"}
           hitSlop={t.control.hit}
           onPress={() => {
-            if (!copyToClipboard(children)) return;
-            setCopied(true);
-            setTimeout(() => setCopied(false), 1500);
+            void copyToClipboard(children).then((ok) => {
+              if (!ok) return toast.show("Couldn't copy. Select the text instead.", { variant: "warning" });
+              setCopied(true);
+              setTimeout(() => setCopied(false), 1500);
+            });
           }}
         >
           <Text style={{ ...TYPE.secondary, fontWeight: "600", color: copied ? t.color.success : t.color.accent }}>{copied ? "Copied" : "Copy"}</Text>
@@ -1205,9 +1240,10 @@ export function Loading({ label }: { label?: string }) {
   );
 }
 
+/** An error in the page. It often quotes a provider or a CLI, so it goes through the shared redactor. */
 export function ErrorText({ children }: { children: string }) {
   const t = useTokens();
-  return <Text style={[t.text.body, { color: t.color.danger }]}>{children}</Text>;
+  return <Text style={[t.text.body, { color: t.color.danger }]}>{redactSecrets(children)}</Text>;
 }
 
 /**

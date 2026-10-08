@@ -25,6 +25,8 @@ export const McpServerRowSchema = z.object({
   presentIn: z.array(z.string()), // destination ids
   // 0.19.2: a tool the Codex app ships (shared/builtin.ts). Absent from older hosts.
   builtIn: z.boolean().optional(),
+  // 0.20.0, read only: Claude Code's "just for you" copies, `projects[<project>].mcpServers` in a .claude.json. Absent from older hosts.
+  localIn: z.array(z.object({ destId: z.string(), project: z.string() })).optional(),
 });
 export type McpServerRow = z.infer<typeof McpServerRowSchema>;
 
@@ -194,6 +196,8 @@ export const AgentServerSchema = z.object({
   configPath: z.string(),
   inlineCredentials: z.boolean(),
   enabled: z.object({ state: EnabledStateSchema, writable: z.boolean(), lever: LeverSchema, reason: z.string() }),
+  /** 0.20.0: other levels with a connector of the same name, which this copy hides here. Absent from older hosts. */
+  shadows: z.array(LoadScopeSchema).optional(),
 });
 export type AgentServer = z.infer<typeof AgentServerSchema>;
 
@@ -237,6 +241,8 @@ export const mcpAgentServers = defineRpc({
     toolSearch: ToolSearchVerdictSchema.optional(),
     /** 0.11.2: with an `agentId` whose record the host could read, the servers other plugins added to it. */
     pluginServers: z.array(PluginServerSchema).optional(),
+    /** 0.20.0: the host's home folder, so files show as "~/.claude.json" in expanded detail. */
+    home: z.string().optional(),
   }),
 });
 
@@ -385,6 +391,8 @@ export const McpDefRowSchema = z.object({
   command: z.string(),
   url: z.string(),
   kvLines: z.string(), // KEY=value per line (env for stdio, headers for http)
+  /** 0.20.0: the connector's version in this file when read; sent back on Save. */
+  version: z.string().optional(),
 });
 export type McpDefRow = z.infer<typeof McpDefRowSchema>;
 
@@ -402,7 +410,10 @@ export const mcpEditOne = defineRpc({
     kind: z.enum(["stdio", "http"]),
     command: z.string().optional(),
     url: z.string().optional(),
-    kvLines: z.string().optional(), // masked values (•••…) keep that destination's stored secret
+    kvLines: z.string().optional(),
+    /** 0.20.0: the version the values were revealed at, and which fields the user changed since. */
+    version: z.string().optional(),
+    changed: z.object({ kind: z.boolean().optional(), command: z.boolean().optional(), url: z.boolean().optional(), kvLines: z.boolean().optional() }).optional(),
   }),
   output: z.object({ ok: z.boolean(), message: z.string() }),
 });

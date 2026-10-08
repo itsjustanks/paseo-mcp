@@ -54,8 +54,8 @@ let runCodex = async (codexHome: string): Promise<Record<string, AuthState>> => 
     throw new Error(`Codex took longer than ${CLI_TIMEOUT_MS / 1000} s to list its connectors (it asks each one over the network whether it needs a sign-in)`);
   }
   if (result.code !== 0) {
-    const last = result.stderr.split("\n").map((line) => line.trim()).filter((line) => line && !/stale arg0 temp dirs/.test(line)).at(-1) ?? "";
-    throw new Error(`codex mcp list stopped with exit code ${result.code}${last ? `: ${last.replace(/https?:\/\/\S+/g, "<url>").slice(0, 160)}` : ""}`);
+    // A fixed sentence: what Codex printed can hold a key, so it isn't shown (0.20.0).
+    throw new Error(`codex mcp list stopped with exit code ${result.code}; run it in a terminal to see why`);
   }
   try {
     return parseCodexMcpList(result.stdout);

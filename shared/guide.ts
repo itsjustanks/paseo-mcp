@@ -33,7 +33,7 @@ export type TabId = keyof typeof TABS_META;
 export const TAB_ORDER: readonly TabId[] = ["overview", "servers", "projects", "guide"];
 
 /** The one muted line at the top of Projects. */
-export const PROJECTS_LINE = "Some projects come with their own connectors. Anyone who opens the project gets them too.";
+export const PROJECTS_LINE = "This project: some projects come with their own connectors, in a file called .mcp.json. Anyone who opens the project gets them too, and Claude Code uses a project's copy there over one set up everywhere.";
 
 // -------------------------------------------------------------- Overview guide
 

@@ -60,23 +60,23 @@ function AttentionDot({ kind, colors, onPress }: { kind: "failing" | "sign-in"; 
 export type PopoverProps = { theme: PluginTheme; close(): void; openScreen: OpenScreen };
 export type OpenPopover = (Content: ComponentType<PopoverProps>) => void;
 
-/** "a, b, c and 2 more". */
-function names(list: readonly string[]): string {
-  const head = list.slice(0, 3).join(", ");
+/** "a (Everywhere), b (This project · data-glue) and 2 more". */
+function names(list: readonly string[], where: Readonly<Record<string, string>> = {}): string {
+  const head = list.slice(0, 3).map((name) => (where[name] ? `${name} (${where[name]})` : name)).join(", ");
   return list.length > 3 ? `${head} and ${list.length - 3} more` : head;
 }
 
 /** The dot's popover (0.19.2): what needs a look, in a line or two, and the two things to do about it. */
 export function AttentionPopover({ theme, close, openScreen }: PopoverProps) {
   const t = useUi(theme, true);
-  const { failing, signIn } = useHostAttentionNames();
+  const { failing, signIn, where } = useHostAttentionNames();
   const go = (params?: Record<string, string>) => {
     openScreen(params ? { screenId: MCP_SCREEN_ID, params } : { screenId: MCP_SCREEN_ID });
     close();
   };
   const lines = [
-    failing.length > 0 ? { kind: "failing" as const, head: `${failing.length} ${failing.length === 1 ? "connector isn't" : "connectors aren't"} working`, list: names(failing) } : null,
-    signIn.length > 0 ? { kind: "sign-in" as const, head: `${signIn.length} ${signIn.length === 1 ? "needs" : "need"} sign-in`, list: names(signIn) } : null,
+    failing.length > 0 ? { kind: "failing" as const, head: `${failing.length} ${failing.length === 1 ? "connector isn't" : "connectors aren't"} working`, list: names(failing, where) } : null,
+    signIn.length > 0 ? { kind: "sign-in" as const, head: `${signIn.length} ${signIn.length === 1 ? "needs" : "need"} sign-in`, list: names(signIn, where) } : null,
   ].filter((line): line is NonNullable<typeof line> => line !== null);
   const primary = failing.length > 0 ? { label: "Show them", params: filterParams("issues") } : signIn.length > 0 ? { label: "Show them", params: filterParams("sign-in") } : { label: `Open ${MCP_NAME}`, params: undefined };
   return (

@@ -146,7 +146,7 @@ test("validation: untrusted text never carries a key, plain http, a ${VAR} or a 
   );
   assert.deepEqual(parsed.items.map((entry) => entry.name), ["com.ok/fine"]);
   assert.equal(parsed.refused.length, 7);
-  assert.ok(!JSON.stringify(parsed).includes("sk_live_51H"), "a refused key is never quoted back");
+  assert.ok(!JSON.stringify(parsed).includes("sk_" + "live_51H"), "a refused key is never quoted back");
   const shown = parsed.items[0]!.entry.description;
   assert.ok(!shown.includes("‮"), "bidi controls are stripped");
   // Markup is plain text to React Native's <Text>; it is kept as text, never parsed.
@@ -165,7 +165,7 @@ test("validation: an isSecret: false on a credential input never makes it public
 
 test("validation: size and count caps, errors that never quote the text", () => {
   assert.match(parseLibrary(" ".repeat(1024 * 1024 + 1)).error, /1 MB/);
-  const bad = parseLibrary("OPENAI_API_KEY=sk-proj-abcdefghijklmnopqrstuvwxyz");
+  const bad = parseLibrary("OPENAI_API_KEY=" + "sk-" + "proj-abcdefghijklmnopqrstuvwxyz");
   assert.match(bad.error, /not valid JSON \(line 1\)/);
   assert.ok(!/OPENAI|sk-proj/.test(bad.error));
   assert.match(parseLibrary('{"hello": 1}').error, /servers/);

@@ -1,7 +1,7 @@
 /** Connectors (MCP servers): their settings, health and sign-ins, kept together per connector. */
 import type { PluginSurfaceProps, PluginWorkspacePanelProps } from "@getpaseo/plugin/client";
 import { useRpc, useWorkspace } from "@getpaseo/plugin/client";
-import { useToast } from "@getpaseo/plugin/client/react-native";
+import * as HostRN from "@getpaseo/plugin/client/react-native";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Pressable, Text, View } from "react-native";
@@ -37,12 +37,18 @@ import { clockTime } from "../shared/schedule";
 import { ownedFromRow } from "../shared/catalog";
 import { CURATED_CATALOG } from "../shared/catalog-curated";
 import { BUILT_IN_LABEL, BUILT_IN_NOTE } from "../shared/builtin";
-import { SERVER_FILTERS, appsLine, healthPlainNote, projectFilesFor, providerName, removePlan, serverGallery, signInState, type RemovePlan, type RemoveScope, type ServerCardModel, type ServerFilter } from "../shared/servers";
+import { SERVER_FILTERS, appsLine, healthPlainNote, localRemoveCommand, projectFilesFor, providerName, removePlan, serverGallery, signInState, type RemovePlan, type RemoveScope, type ServerCardModel, type ServerFilter } from "../shared/servers";
 import { COPY_ALL_EXPLAINER, COPY_ALL_LABEL } from "../shared/copy-all";
 import { overviewNextStep, overviewVerdict, type OverviewTarget } from "../shared/overview";
 import { HELP_QUESTIONS, HOW_IT_WORKS_QUESTION, MCP_NAME, MCP_NAME_LOWER, PROJECTS_LINE, WHAT_CONNECTORS_ARE, type HelpTarget } from "../shared/guide";
 import { addServerRequest, checkNowRequest, filterRequest, tabFromParams, type ScreenFilter, type ScreenTab } from "../shared/screen-params";
 import { summarizeTools } from "../shared/tools";
+import { hostModal } from "../shared/host-features";
+import { redactSecrets } from "../shared/redact";
+import { openRemoveSession, type RemoveSession } from "../shared/remove-dialog";
+import { EVERYWHERE, EVERYWHERE_LINE, homeRelative, scopeLabel, scopeOrder, shadowLine, sourceLabel, thisProject } from "../shared/scope";
+import { JSON_EDIT_START, REVEAL_START, jsonDirty, jsonEditReducer, jsonToSave, jsonVersion, revealReducer, revealedValue } from "../shared/json-edit";
+import { formatIssue } from "../shared/issues";
 import {
   ParsedServerSchema,
   mcpExport,
@@ -65,9 +71,10 @@ import { CatalogGallery, CopyCatalogEntryButton } from "./catalog";
 import { CopyAllPanel } from "./copy-all";
 import { ServerHealthTag, healthCheckedLabel, healthStatus, healthWord, splitIssues, useHealth } from "./health";
 import { setSignInFocus, useSignInFocus } from "./focus";
-import { canOpenMcp, canSyncTab, openMcp, syncTab, takePendingServer } from "./navigate";
+import { canOpenMcp, canSyncTab, openMcp, openMcpAdd, syncTab, takePendingAdd, takePendingServer, type AddStart } from "./navigate";
 import { GuideParts, OverviewGuide } from "./guide";
 import { useOpenLink } from "./links";
+import { AskAgentButton } from "./ask";
 import { TabBar, type SectionId } from "./navigation";
 import { PaseoToolsAgentRow, PaseoToolsCard, PaseoToolsLine, paseoToolsTitle, usePaseoTools } from "./paseo-tools";
 import { AiRouterCard } from "./promo";
@@ -108,6 +115,7 @@ import {
   TYPE,
   copyToClipboard,
   useTokens,
+  useToast,
   useUi,
   type Status,
 } from "./ui";
@@ -143,18 +151,6 @@ function errorText(error: unknown): string {
 /** "14:05" for a query's last successful read. */
 function readAt(updatedAt: number): string {
   return clockTime(updatedAt ? new Date(updatedAt).toISOString() : null);
-}
-
-/**
- * "line 4, col 12 — message", the offending line, and a caret under the column.
- * A coordinate the reader has to count to is a coordinate they will get wrong.
- */
-function formatIssue(source: string, issue: JsonIssue): string {
-  if (issue.line < 1) return issue.message;
-  const head = `line ${issue.line}, col ${issue.column} — ${issue.message}`;
-  const line = source.split("\n")[issue.line - 1];
-  if (line === undefined) return head;
-  return `${head}\n${line}\n${" ".repeat(Math.max(0, issue.column - 1))}^`;
 }
 
 function shellQuote(value: string): string {
@@ -209,7 +205,7 @@ function Lines({ items }: { items: string[] }) {
     <View style={{ gap: t.space.xs }}>
       {items.map((item, index) => (
         <Text key={`${item}-${index}`} style={t.text.caption}>
-          {item}
+          {redactSecrets(item)}
         </Text>
       ))}
     </View>
@@ -287,16 +283,84 @@ function useTargetSet(destinations: Destination[]) {
 
 // ------------------------------------------------------------------- editors
 
+/**
+ * The Fields tab (0.20.0 review): masked and read-only first, like the JSON
+ * tab. "Reveal to edit" loads the real values into the form's own buffer;
+ * Hide keys, Close or leaving drops them. Save sends only revealed values, and
+ * the host refuses masked text anyway.
+ */
+/** What the Fields form saves (0.20.0): the values, the version they were revealed at, and which changed since. */
+type FieldsSave = {
+  kind: Kind;
+  url: string;
+  command: string;
+  kvLines: string;
+  version?: string;
+  changed?: { kind: boolean; command: boolean; url: boolean; kvLines: boolean };
+};
+
 function FieldsEditor({
   row,
+  loadRaw,
   saving,
   onDirty,
   onSave,
 }: {
   row: McpDefRow;
+  loadRaw: () => Promise<McpDefRow | null>;
   saving: boolean;
   onDirty: (dirty: boolean) => void;
-  onSave: (input: { kind: Kind; url: string; command: string; kvLines: string }) => void;
+  onSave: (input: FieldsSave) => void;
+}) {
+  const t = useTokens();
+  const [state, dispatch] = React.useReducer(revealReducer<McpDefRow>, REVEAL_START);
+  useEffect(() => () => onDirty(false), [onDirty]);
+  const reveal = () => {
+    dispatch({ type: "reveal-start" });
+    loadRaw()
+      .then((raw) => dispatch(raw ? { type: "revealed", value: raw } : { type: "reveal-failed", error: "Couldn't read these settings. Try again." }))
+      .catch(() => dispatch({ type: "reveal-failed", error: "Couldn't read these settings. Try again." }));
+  };
+  const raw = revealedValue(state);
+  if (!raw) {
+    const shown = [`${row.kind === "http" ? "URL" : "Command"}: ${row.kind === "http" ? row.url : row.command}`, row.kvLines ? `${row.kind === "http" ? "Headers" : "Environment"}:\n${row.kvLines}` : ""].filter(Boolean).join("\n");
+    return (
+      <View style={{ gap: t.space.row }}>
+        <CodeBlock copy={false}>{shown}</CodeBlock>
+        <Text style={t.text.caption}>These can't be changed here. Reveal to edit loads the real settings; Hide keys, Close or leaving forgets them.</Text>
+        <View style={{ flexDirection: "row", gap: t.space.sm }}>
+          <Button label="Reveal to edit" loading={state.mode === "masked" && state.loading} onPress={reveal} />
+        </View>
+        {state.mode === "masked" && state.error ? <ErrorText>{state.error}</ErrorText> : null}
+      </View>
+    );
+  }
+  return (
+    <FieldsForm
+      row={raw}
+      saving={saving}
+      onDirty={onDirty}
+      onSave={onSave}
+      onHide={() => {
+        onDirty(false);
+        dispatch({ type: "hide" });
+      }}
+    />
+  );
+}
+
+function FieldsForm({
+  row,
+  saving,
+  onDirty,
+  onSave,
+  onHide,
+}: {
+  row: McpDefRow;
+  saving: boolean;
+  onDirty: (dirty: boolean) => void;
+  onSave: (input: FieldsSave) => void;
+  onHide: () => void;
 }) {
   const t = useTokens();
   const [kind, setKind] = useState<Kind>(row.kind);
@@ -327,16 +391,20 @@ function FieldsEditor({
         multiline
         mono
         placeholder={kind === "http" ? "Authorization=Bearer …" : "API_KEY=…"}
-        hint="One KEY=value per line. A hidden ••• value keeps the key this app already has."
+        hint="One KEY=value per line."
       />
-      <View style={{ flexDirection: "row", gap: t.space.sm }}>
+      <View style={{ flexDirection: "row", flexWrap: "wrap", gap: t.space.sm }}>
         <Button
           label="Save this destination"
           variant="primary"
           loading={saving}
           disabled={!dirty}
-          onPress={() => onSave({ kind, url, command, kvLines })}
+          onPress={() =>
+            // The revealed version and what changed since Reveal go with it (0.20.0): unchanged fields stay as stored.
+            onSave({ kind, url, command, kvLines, ...(row.version ? { version: row.version } : {}), changed: { kind: kind !== row.kind, command: command !== row.command, url: url !== row.url, kvLines: kvLines !== row.kvLines } })
+          }
         />
+        <Button label="Hide keys" variant="ghost" onPress={onHide} />
       </View>
     </View>
   );
@@ -347,43 +415,78 @@ function FieldsEditor({
  * clean from the daemon, and any keystroke throws the verdict away — a pass from
  * two edits ago is not permission to write.
  */
+/**
+ * The definition as JSON (0.20.0 review): a masked, read-only view first.
+ * "Reveal to edit" loads the real definition into its own buffer, and Save
+ * sends only that buffer; "Hide keys", Close or leaving the page drops it
+ * (shared/json-edit.ts). The masked text is never edited, so it is never saved.
+ */
 function JsonEditor({
-  seed,
+  masked,
   nativePreview,
+  loadRaw,
   onDirty,
   onPut,
 }: {
-  seed: string;
+  masked: string;
   nativePreview: string;
+  loadRaw: () => Promise<{ json: string; version?: string } | null>;
   onDirty: (dirty: boolean) => void;
-  onPut: (json: string, dryRun: boolean) => Promise<PutResult | null>;
+  onPut: (json: string, dryRun: boolean, version?: string) => Promise<PutResult | null>;
 }) {
   const t = useTokens();
-  const [buffer, setBuffer] = useState(seed);
-  const [baseline, setBaseline] = useState(seed);
+  const [state, dispatch] = React.useReducer(jsonEditReducer, JSON_EDIT_START);
   const [verdict, setVerdict] = useState<PutResult | null>(null);
   const [showPreview, setShowPreview] = useState(false);
   const [busy, setBusy] = useState<"validate" | "preview" | "save" | null>(null);
-  const dirty = buffer !== baseline;
+  const dirty = jsonDirty(state);
   useEffect(() => onDirty(dirty), [dirty, onDirty]);
+  // Leaving drops the raw buffer with the component; say the page is clean again.
+  useEffect(() => () => onDirty(false), [onDirty]);
 
+  const reveal = () => {
+    dispatch({ type: "reveal-start" });
+    loadRaw()
+      .then((raw) => dispatch(raw === null ? { type: "reveal-failed", error: "Couldn't read this definition. Try again." } : { type: "revealed", raw: raw.json, ...(raw.version ? { version: raw.version } : {}) }))
+      .catch(() => dispatch({ type: "reveal-failed", error: "Couldn't read this definition. Try again." }));
+  };
+  const hide = () => {
+    dispatch({ type: "hide" });
+    setVerdict(null);
+    setShowPreview(false);
+  };
   const run = async (job: "validate" | "preview" | "save") => {
+    const json = jsonToSave(state);
+    if (json === null) return;
     setBusy(job);
-    const result = await onPut(buffer, job !== "save");
+    const result = await onPut(json, job !== "save", jsonVersion(state));
     setBusy(null);
     if (!result) return;
     setVerdict(result);
     setShowPreview(job === "preview");
-    if (job === "save" && result.ok) setBaseline(buffer);
+    if (job === "save" && result.ok) dispatch({ type: "saved", text: json });
   };
 
+  if (state.mode === "masked") {
+    return (
+      <View style={{ gap: t.space.row }}>
+        <CodeBlock copy={false}>{masked.trimEnd()}</CodeBlock>
+        <Text style={t.text.caption}>This view can't be edited. Reveal to edit loads the real definition to change; Hide keys, Close or leaving forgets it.</Text>
+        <View style={{ flexDirection: "row", gap: t.space.sm }}>
+          <Button label="Reveal to edit" loading={state.loading} onPress={reveal} />
+        </View>
+        {state.error ? <ErrorText>{state.error}</ErrorText> : null}
+      </View>
+    );
+  }
+  const buffer = state.buffer;
   return (
     <View style={{ gap: t.space.row }}>
       <Field
         label="Definition"
         value={buffer}
         onChangeText={(next) => {
-          setBuffer(next);
+          dispatch({ type: "edit", text: next });
           setVerdict(null);
           setShowPreview(false);
         }}
@@ -392,7 +495,7 @@ function JsonEditor({
         minHeight={t.text.mono.lineHeight * 14}
         hint="Claude's shape, whatever the destination stores. Preview shows the translation."
       />
-      <View style={{ flexDirection: "row", gap: t.space.sm }}>
+      <View style={{ flexDirection: "row", flexWrap: "wrap", gap: t.space.sm }}>
         <Button label="Validate" loading={busy === "validate"} onPress={() => void run("validate")} />
         <Button label="Preview" loading={busy === "preview"} onPress={() => void run("preview")} />
         <Button
@@ -407,11 +510,12 @@ function JsonEditor({
           variant="ghost"
           disabled={!dirty}
           onPress={() => {
-            setBuffer(baseline);
+            dispatch({ type: "revert" });
             setVerdict(null);
             setShowPreview(false);
           }}
         />
+        <Button label="Hide keys" variant="ghost" onPress={hide} />
       </View>
       {verdict && !verdict.ok && verdict.issues.length === 0 ? <ErrorText>{verdict.message}</ErrorText> : null}
       {verdict ? <Issues source={buffer} issues={verdict.issues} /> : null}
@@ -424,7 +528,8 @@ function JsonEditor({
       {showPreview && verdict ? (
         <>
           <Section title="What this destination will hold">
-            <CodeBlock>{verdict.preview || nativePreview}</CodeBlock>
+            {/* The host masks keys in the preview; the saved text may show them, so it gets no Copy. */}
+            <CodeBlock copy={Boolean(verdict.preview)}>{verdict.preview || nativePreview}</CodeBlock>
           </Section>
           {verdict.dropped.length > 0 ? (
             <Section title="Dropped — no equivalent in this format">
@@ -446,6 +551,8 @@ function DestinationEditor({
   otherCount,
   onSaveFields,
   onPut,
+  loadRaw,
+  loadRawFields,
   onCopyEverywhere,
   onClose,
 }: {
@@ -455,8 +562,10 @@ function DestinationEditor({
   rawRow?: RawDefRow;
   saving: boolean;
   otherCount: number;
-  onSaveFields: (input: { kind: Kind; url: string; command: string; kvLines: string }) => void;
-  onPut: (json: string, dryRun: boolean) => Promise<PutResult | null>;
+  onSaveFields: (input: FieldsSave) => void;
+  onPut: (json: string, dryRun: boolean, version?: string) => Promise<PutResult | null>;
+  loadRaw: () => Promise<{ json: string; version?: string } | null>;
+  loadRawFields: () => Promise<McpDefRow | null>;
   onCopyEverywhere: () => void;
   onClose: () => void;
 }) {
@@ -484,6 +593,7 @@ function DestinationEditor({
           <FieldsEditor
             key={`${defRow.destId}-fields`}
             row={defRow}
+            loadRaw={loadRawFields}
             saving={saving}
             onDirty={setDirty}
             onSave={onSaveFields}
@@ -496,8 +606,9 @@ function DestinationEditor({
       ) : rawRow.found ? (
         <JsonEditor
           key={`${rawRow.destId}-json`}
-          seed={rawRow.json}
+          masked={rawRow.json}
           nativePreview={rawRow.nativePreview}
+          loadRaw={loadRaw}
           onDirty={setDirty}
           onPut={onPut}
         />
@@ -674,12 +785,13 @@ function AuthRows({
                             {session.message}
                           </Text>
                         </View>
-                        {session.url ? <CodeBlock>{session.url}</CodeBlock> : null}
+                        {/* "Copy link" below is the one way to copy it. */}
+                        {session.url ? <CodeBlock copy={false}>{session.url}</CodeBlock> : null}
                         <View style={{ flexDirection: "row", gap: t.space.sm }}>
                           {session.url ? (
                             <>
                               <Button label="Open sign-in" icon="ExternalLink" onPress={() => openLinkInBrowser(session.url)} />
-                              <Button label="Copy link" onPress={() => onCopied(copyToClipboard(session.url))} />
+                              <Button label="Copy link" onPress={() => void copyToClipboard(session.url).then(onCopied)} />
                             </>
                           ) : null}
                           {live ? <Button label="Cancel" variant="ghost" onPress={() => onCancel(session.key)} /> : null}
@@ -719,10 +831,6 @@ function AuthRows({
 
 // --------------------------------------------------------------- switches
 
-function scopeWord(scope: AgentServer["scope"]): string {
-  return scope === "user" ? "In every project" : scope === "project" ? "This project's own" : "This folder only";
-}
-
 /**
  * What one agent loads here, one row per connector, with the per-workspace
  * switch its app actually has. Claude: `disabledMcpServers` for user and local
@@ -744,6 +852,8 @@ function AgentServers({
   toolsByName,
   health,
   signIn,
+  projectName,
+  onAddHere,
 }: {
   data: z.output<typeof mcpAgentServers.output> | undefined;
   loading: boolean;
@@ -753,6 +863,10 @@ function AgentServers({
   toolsByName: Map<string, McpServerTools> | null;
   health: ReadonlyMap<string, McpHealth> | null;
   signIn: (server: AgentServer) => React.ReactNode;
+  /** 0.20.0: for "This project · <name>". */
+  projectName: string;
+  /** 0.20.0: opens Add on "This project" with this project picked; absent where the page can't be opened. */
+  onAddHere?: () => void;
 }) {
   const t = useTokens();
   // 0.19.2: a 401 is how a working sign-in connector answers the check, so the word comes from this chat's account.
@@ -770,54 +884,94 @@ function AgentServers({
     if (!result || !resultNeedsAttention(result)) return 2;
     return result.status === "down" || result.status === "binary-missing" ? 0 : 1;
   };
-  const rows = [...data.servers].sort((a, b) => rank(a) - rank(b) || a.name.localeCompare(b.name));
+  // 0.20.0: what this project adds first, then what every project gets.
+  const sorted = [...data.servers].sort((a, b) => rank(a) - rank(b) || scopeOrder(a.scope) - scopeOrder(b.scope) || a.name.localeCompare(b.name));
+  const here = sorted.filter((entry) => entry.scope !== "user");
+  const everywhere = sorted.filter((entry) => entry.scope === "user");
   const anySwitch = data.servers.some((entry) => entry.enabled.writable);
-  return (
-    <View style={{ gap: t.space.sm }}>
-      {anySwitch ? <Text style={t.text.caption}>{`A switch changes what new chats in this project load. ${SWITCH_EFFECT_NOTE}`}</Text> : null}
-      <Card padded={false}>
-        {rows.length === 0 && !data.paseoTools && !data.pluginServers?.length ? <EmptyState title="Nothing loads here" body="This chat's AI app has no connectors for this project." /> : null}
-        {rows.map((entry, index) => {
-          const tools = toolsByName?.get(entry.name);
-          const off = entry.enabled.state === "disabled";
-          const result = health?.get(entry.name);
-          const problem = result && resultNeedsAttention(result) ? result : null;
-          return (
-            <Row
-              key={entry.name}
-              first={index === 0}
-              tone={problem ? healthStatus(problem.status) : undefined}
-              title={<Text numberOfLines={1} style={[t.text.bodyStrong, { opacity: off ? 0.6 : 1 }]}>{entry.name}</Text>}
-              meta={
-                <View style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: t.space.sm }}>
-                  {result?.builtIn ? <Tag label={BUILT_IN_LABEL} /> : result ? <StatusPill {...word(entry.name, result)} /> : null}
-                  <Text style={t.text.caption}>{off ? "Off in this project" : scopeWord(entry.scope)}</Text>
-                  {entry.enabled.state === "undecided" ? <Tag label="Asks when a chat starts" tone="attention" /> : null}
-                  {tools && tools.kind === "listed" ? <Text style={t.text.caption}>{toolsWord(tools)}</Text> : null}
-                </View>
-              }
-              trailing={
-                entry.enabled.writable ? (
-                  <Toggle
-                    label={`${entry.name} ${off ? "off" : "on"} in this project`}
-                    value={!off}
-                    loading={toggling === entry.name}
-                    disabled={toggling !== null}
-                    onChange={(next) => onToggle(entry.name, next)}
-                  />
-                ) : problem && canOpenMcp() ? (
-                  <Button label="Fix" onPress={() => openMcp(entry.name)} />
-                ) : undefined
-              }
-              expanded={signIn(entry)}
+  const provider = data.scope?.provider ?? "";
+  const row = (entry: AgentServer, index: number) => {
+    const tools = toolsByName?.get(entry.name);
+    const off = entry.enabled.state === "disabled";
+    const result = health?.get(entry.name);
+    const problem = result && resultNeedsAttention(result) ? result : null;
+    const shadow = shadowLine(entry.scope, entry.shadows ?? [], provider);
+    return (
+      <Row
+        key={entry.name}
+        first={index === 0}
+        tone={problem ? healthStatus(problem.status) : undefined}
+        title={<Text numberOfLines={1} style={[t.text.bodyStrong, { opacity: off ? 0.6 : 1 }]}>{entry.name}</Text>}
+        meta={
+          <View style={{ gap: t.space.hair }}>
+            <View style={{ flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: t.space.sm }}>
+              {result?.builtIn ? <Tag label={BUILT_IN_LABEL} /> : result ? <StatusPill {...word(entry.name, result)} /> : null}
+              <Text style={t.text.caption}>{off ? `Off in this project · ${sourceLabel(entry.scope, entry.configPath)}` : sourceLabel(entry.scope, entry.configPath)}</Text>
+              {entry.enabled.state === "undecided" ? <Tag label="Asks when a chat starts" tone="attention" /> : null}
+              {tools && tools.kind === "listed" ? <Text style={t.text.caption}>{toolsWord(tools)}</Text> : null}
+            </View>
+            {shadow ? <Text style={t.text.caption}>{shadow}</Text> : null}
+          </View>
+        }
+        trailing={
+          entry.enabled.writable ? (
+            <Toggle
+              label={`${entry.name} ${off ? "off" : "on"} in this project`}
+              value={!off}
+              loading={toggling === entry.name}
+              disabled={toggling !== null}
+              onChange={(next) => onToggle(entry.name, next)}
             />
-          );
-        })}
-        {data.paseoTools ? <PaseoToolsAgentRow info={data.paseoTools} providerLabel={providerName(data.scope?.provider ?? "")} first={rows.length === 0} /> : null}
-        {(data.pluginServers ?? []).map((entry, index) => (
-          <PluginServerRow key={`plugin:${entry.name}`} entry={entry} first={index === 0 && rows.length === 0 && !data.paseoTools} />
-        ))}
-      </Card>
+          ) : problem && canOpenMcp() ? (
+            <Button label="Fix" onPress={() => openMcp(entry.name)} />
+          ) : undefined
+        }
+        expanded={signIn(entry)}
+      />
+    );
+  };
+  const group = (title: string, line: string, children: React.ReactNode, action?: React.ReactNode) => (
+    <View style={{ gap: t.space.sm }}>
+      <View style={{ flexDirection: "row", alignItems: "center", gap: t.space.sm }}>
+        <View style={{ flex: 1, minWidth: 0, gap: t.space.hair }}>
+          <Text style={t.text.bodyStrong}>{title}</Text>
+          <Text style={t.text.caption}>{line}</Text>
+        </View>
+        {action}
+      </View>
+      {children}
+    </View>
+  );
+  return (
+    <View style={{ gap: t.space.row }}>
+      {anySwitch ? <Text style={t.text.caption}>{`A switch changes what new chats in this project load. ${SWITCH_EFFECT_NOTE}`}</Text> : null}
+      {group(
+        thisProject(projectName),
+        here.length > 0 ? `What this project adds: ${plural(here.length, "connector")}.` : data.projectIncluded ? "Nothing is set up just for this project." : data.projectNote ? `${data.projectNote}.` : "Nothing is set up just for this project.",
+        here.length > 0 ? <Card padded={false}>{here.map(row)}</Card> : null,
+        onAddHere ? <Button label="Add here" icon="Plus" variant="ghost" onPress={onAddHere} /> : undefined,
+      )}
+      {group(
+        EVERYWHERE,
+        everywhere.length > 0 || data.paseoTools ? "What every project gets." : "Nothing is set up everywhere for this chat's AI app.",
+        everywhere.length > 0 || data.paseoTools ? (
+          <Card padded={false}>
+            {everywhere.map(row)}
+            {data.paseoTools ? <PaseoToolsAgentRow info={data.paseoTools} providerLabel={providerName(provider)} first={everywhere.length === 0} /> : null}
+          </Card>
+        ) : null,
+      )}
+      {(data.pluginServers ?? []).length > 0
+        ? group(
+            "Added when this chat started",
+            "By another plugin, for this chat only.",
+            <Card padded={false}>
+              {(data.pluginServers ?? []).map((entry, index) => (
+                <PluginServerRow key={`plugin:${entry.name}`} entry={entry} first={index === 0} />
+              ))}
+            </Card>,
+          )
+        : null}
     </View>
   );
 }
@@ -877,41 +1031,26 @@ function RemovePanel({
 }) {
   const t = useTokens();
   const present = destinations.filter((dest) => server.presentIn.includes(dest.id));
-  const [destId, setDestId] = useState<string>(present[0]?.id ?? "");
-  const plan = armed ? removePlan(server, destinations, armed.scope, armed.destId ?? destId, projectFiles) : null;
+  // 0.20.0: Claude's "just for you" copies are read only here; the note says how to remove them in Claude Code.
+  const local = (server.localIn ?? []).filter((entry) => destinations.some((dest) => dest.id === entry.destId));
   const everywhereCount = present.length + projectFiles.length;
-  if (present.length === 0 && projectFiles.length === 0) return null;
+  if (present.length === 0 && projectFiles.length === 0 && local.length === 0) return null;
   return (
     <View style={{ gap: t.space.sm }}>
-      {!armed ? (
+      {local.length > 0 ? <LocalCopyNote name={server.name} local={local} /> : null}
+      {present.length === 0 && projectFiles.length === 0 ? null : !armed ? (
         <View style={{ gap: t.space.sm }}>
           <Text style={t.text.body}>You'll see exactly what's removed before anything changes.</Text>
           <View style={{ flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: t.space.sm }}>
             {present.length > 1 ? <Button label="From one app…" variant="danger" disabled={pending} onPress={() => onArm({ scope: "one" })} /> : null}
             {present.length > 0 ? <Button label={present.length > 1 ? `From all ${plural(present.length, "app")}` : "From this app"} variant="danger" disabled={pending} onPress={() => onArm({ scope: present.length > 1 ? "all" : "one" })} /> : null}
-            {projectFiles.length > 0 ? <Button label={`Everywhere, projects too (${everywhereCount})`} variant="danger" disabled={pending} onPress={() => onArm({ scope: "everywhere" })} /> : null}
+            {projectFiles.length > 0 ? <Button label={`From all apps and project files (${everywhereCount})`} variant="danger" disabled={pending} onPress={() => onArm({ scope: "everywhere" })} /> : null}
           </View>
         </View>
-      ) : null}
-      {armed?.scope === "one" && present.length > 1 ? (
-        <Segmented value={destId} onChange={setDestId} options={present.map((dest) => ({ value: dest.id, label: dest.label }))} />
-      ) : null}
-      {armed && plan ? (
-        <Notice tone="error">
-          <View style={{ gap: t.space.sm }}>
-            <Text style={t.text.bodyStrong}>{plan.title}</Text>
-            {plan.lines.map((line, index) => (
-              <Text key={index} style={t.text.caption}>{line}</Text>
-            ))}
-            <View style={{ flexDirection: "row", flexWrap: "wrap", gap: t.space.sm }}>
-              <Button label={plan.confirmLabel} variant="danger" loading={pending} onPress={() => onRemove(plan)} />
-              <Button label="Cancel" variant="ghost" onPress={() => onArm(null)} />
-            </View>
-          </View>
-        </Notice>
-      ) : armed ? (
-        <Text style={t.text.caption}>Nothing to remove there.</Text>
-      ) : null}
+      ) : (
+        // Mounted per opening, so closing drops everything it chose (0.20.0).
+        <RemoveConfirm server={server} destinations={destinations} projectFiles={projectFiles} scope={armed.scope} pending={pending} onClose={() => onArm(null)} onRemove={onRemove} />
+      )}
       {result && result.skipped.length > 0 ? (
         <Notice tone={result.ok ? "attention" : "error"}>
           <View style={{ gap: t.space.xs }}>
@@ -921,6 +1060,114 @@ function RemovePanel({
         </Notice>
       ) : null}
     </View>
+  );
+}
+
+/**
+ * Claude Code's "just for you" copy (0.20.0): read only, because Claude Code
+ * rewrites ~/.claude.json constantly and a plugin can't change it safely. The
+ * note gives the command that removes it in Claude Code, with Copy, and Ask an
+ * agent to run it in a chat you pick.
+ */
+function LocalCopyNote({ name, local }: { name: string; local: Array<{ destId: string; project: string }> }) {
+  const t = useTokens();
+  const projects = [...new Set(local.map((entry) => entry.project))];
+  const commands = projects.map((project) => localRemoveCommand(name, project)).join("\n");
+  const message = `Please remove the MCP connector "${name}" from Claude Code's "just for you" (local) scope. Run this, then check it's gone with: claude mcp list\n${commands}`;
+  return (
+    <Notice tone="attention">
+      <View style={{ gap: t.space.sm }}>
+        <Text style={t.text.body}>{`Claude Code's "just for you" copy stays. Remove it in Claude Code with claude mcp remove ${name} -s local, run in ${projects.length === 1 ? "that project's folder" : "each project's folder"}:`}</Text>
+        <CodeBlock>{commands}</CodeBlock>
+        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: t.space.sm }}>
+          <AskAgentButton message={message} />
+        </View>
+      </View>
+    </Notice>
+  );
+}
+
+type HostModalComponent = React.FC<{ title: string; open: boolean; onOpenChange(open: boolean): void; children: React.ReactNode }> & {
+  Content: React.ComponentType<{ children: React.ReactNode }>;
+};
+/** The app's dialog where it has one (chosen once, never per render); otherwise the confirm stays in the page. */
+const HostModal = hostModal<HostModalComponent>(HostRN);
+
+/**
+ * The ask-first step of Remove (0.20.0): the app's own dialog, titled short
+ * (the app cuts a long title; the first line says where from). One session
+ * per opening holds the app picked and a single-use Confirm. On a phone the
+ * app draws the dialog's content as a sheet outside this screen's tree, so the
+ * tokens are handed in again, inside it.
+ */
+function RemoveConfirm({
+  server,
+  destinations,
+  projectFiles,
+  scope,
+  pending,
+  onClose,
+  onRemove,
+}: {
+  server: McpServerRow;
+  destinations: Destination[];
+  projectFiles: { project: string; path: string }[];
+  scope: RemoveScope;
+  pending: boolean;
+  onClose: () => void;
+  onRemove: (plan: RemovePlan) => void;
+}) {
+  const t = useTokens();
+  const session = useRef<RemoveSession | null>(null);
+  session.current ??= openRemoveSession({ server, destinations, projectFiles, scope, onRemove });
+  const [, redraw] = useState(0);
+  const current = session.current;
+  const plan = current.plan();
+  const present = destinations.filter((dest) => server.presentIn.includes(dest.id));
+  const body = (
+    <View style={{ gap: t.space.row }}>
+      {scope === "one" && present.length > 1 ? (
+        <Segmented
+          value={current.destId()}
+          onChange={(destId) => {
+            current.select(destId);
+            redraw((count) => count + 1);
+          }}
+          options={present.map((dest) => ({ value: dest.id, label: dest.label }))}
+        />
+      ) : null}
+      {plan ? (
+        <View style={{ gap: t.space.sm }}>
+          {plan.lines.map((line, index) => (
+            <Text key={index} style={t.text.body}>{line}</Text>
+          ))}
+        </View>
+      ) : (
+        <Text style={t.text.body}>Nothing to remove there.</Text>
+      )}
+      <View style={{ flexDirection: "row", flexWrap: "wrap", gap: t.space.sm }}>
+        {plan ? <Button label={plan.confirmLabel} variant="danger" loading={pending} onPress={() => void current.confirm()} /> : null}
+        <Button label="Cancel" variant="ghost" onPress={onClose} />
+      </View>
+    </View>
+  );
+  if (!HostModal) {
+    // An app without a dialog: the confirm in the page, as before 0.20.0.
+    return (
+      <Notice tone="error">
+        <View style={{ gap: t.space.sm }}>
+          <Text style={t.text.bodyStrong}>{`Remove ${server.name}?`}</Text>
+          {body}
+        </View>
+      </Notice>
+    );
+  }
+  return (
+    <HostModal title={`Remove ${server.name}?`} open onOpenChange={(open) => (open ? undefined : onClose())}>
+      <HostModal.Content>
+        <TokensProvider value={t}>{body}</TokensProvider>
+      </HostModal.Content>
+    </HostModal>
   );
 }
 
@@ -979,6 +1226,7 @@ function ServerGalleryCard({ card, checking, onOpen }: { card: ServerCardModel; 
         <StatusPill status={waiting ? "busy" : card.health ? healthStatus(card.health) : "neutral"} label={waiting ? "Checking…" : card.healthWord} />
         <Text numberOfLines={2} style={{ ...TYPE.secondary, color: card.missing > 0 ? t.color.warning : t.color.fg }}>{card.apps}</Text>
         <Text numberOfLines={1} style={{ ...TYPE.secondary, color: card.signIn === "needs" ? t.color.warning : t.color.fg }}>{card.signInText}</Text>
+        {card.alsoIn ? <Text numberOfLines={2} style={{ ...TYPE.secondary, color: t.color.muted }}>{card.alsoIn}</Text> : null}
       </View>
     </Card>
     </Pressable>
@@ -1098,6 +1346,12 @@ function McpBody({
   const [extraOpen, setExtraOpen] = useState<"backup" | null>(null);
   // 0.12.0: "Add server" opens the catalogue gallery in place of the list.
   const [catalogOpen, setCatalogOpen] = useState(addRequest !== null);
+  // 0.20.0: where Add starts: "This project" from a workspace or the Projects tab, "Everywhere" from Connectors.
+  const [addStart, setAddStart] = useState<AddStart | null>(null);
+  const openAdd = (start: AddStart) => {
+    setAddStart(start);
+    setCatalogOpen(true);
+  };
   // The sidebar "+" (0.11): each press carries a new `at`, so the gallery opens again even while the page is open.
   useEffect(() => {
     if (addRequest === null) return;
@@ -1278,6 +1532,11 @@ function McpBody({
   useEffect(() => {
     const requested = takePendingServer();
     if (requested) selectServer(requested);
+    const add = takePendingAdd();
+    if (add) {
+      setSection("servers");
+      openAdd(add);
+    }
   }, []);
   const go = (next: SectionId, options: { server?: string | null; filter?: Filter; mode?: Mode } = {}) => {
     setSection(next);
@@ -1367,7 +1626,7 @@ function McpBody({
     },
   });
   const editOneMutation = useMutation({
-    mutationFn: (input: { destId: string; kind: Kind; command: string; url: string; kvLines: string }) =>
+    mutationFn: (input: FieldsSave & { destId: string }) =>
       callEditOne({ name: selected as string, ...input }),
     onError: fail,
     onSuccess: report,
@@ -1427,9 +1686,20 @@ function McpBody({
     },
   });
 
-  const putJson = async (destId: string, json: string, dryRun: boolean): Promise<PutResult | null> => {
+  // "Reveal to edit": the real definition for one destination, read only when asked and kept only by its editor.
+  const loadRawJson = async (destId: string): Promise<{ json: string; version?: string } | null> => {
+    const result = await callRawGet({ name: selected as string, reveal: true });
+    const row = result.rows.find((entry) => entry.destId === destId && entry.found);
+    return row ? { json: row.json, ...(row.version ? { version: row.version } : {}) } : null;
+  };
+  // "Reveal to edit" on the Fields tab: the real values for one destination, kept only by its form.
+  const loadRawFields = async (destId: string): Promise<McpDefRow | null> => {
+    const result = await callDefAll({ name: selected as string, reveal: true });
+    return result.rows.find((row) => row.destId === destId && row.found) ?? null;
+  };
+  const putJson = async (destId: string, json: string, dryRun: boolean, version?: string): Promise<PutResult | null> => {
     try {
-      const result = await callRawPut({ name: selected as string, destId, json, dryRun });
+      const result = await callRawPut({ name: selected as string, destId, json, dryRun, ...(version ? { version } : {}) });
       if (!dryRun) report(result);
       return result;
     } catch (error) {
@@ -1466,13 +1736,15 @@ function McpBody({
   // Your servers as the Add gallery's "already have" rules read them (shared/catalog.ts alreadyHave).
   const owned = useMemo(() => servers.map(ownedFromRow), [servers]);
   // The Servers gallery: cards, what the filter and search keep, and each pill's count (shared/servers.ts).
-  const gallery = serverGallery({ servers: ownServers, destinations, health, accounts, authRead: Boolean(authQuery.data), known: KNOWN_SERVERS, filter, query });
+  const gallery = serverGallery({ servers: ownServers, destinations, health, accounts, authRead: Boolean(authQuery.data), known: KNOWN_SERVERS, filter, query, projectServers });
   const toolTotals = toolsQuery.data ? summarizeTools(toolsQuery.data.servers) : null;
 
   const server = selected ? servers.find((entry) => entry.name === selected) : undefined;
   const serverHealth = server ? health?.get(server.name) : undefined;
   const serverTools = server ? toolsByName?.get(server.name) : undefined;
-  const missing = server ? destinations.filter((dest) => !server.presentIn.includes(dest.id)) : [];
+  // 0.20.0: a "just for you" copy only has nothing to copy from, so nothing is "missing".
+  const localOnly = Boolean(server && server.presentIn.length === 0 && (server.localIn?.length ?? 0) > 0);
+  const missing = server && !localOnly ? destinations.filter((dest) => !server.presentIn.includes(dest.id)) : [];
   const rawRows: RawDefRow[] = rawQuery.data?.rows ?? [];
   const defRows: McpDefRow[] = defQuery.data?.rows ?? [];
   const accountForDestination = (dest: Destination) =>
@@ -1720,7 +1992,7 @@ function McpBody({
       }
       onComplete={(key, redirectUrl) => loginCompleteMutation.mutate({ key, redirectUrl })}
       onCopied={(ok) =>
-        ok ? toast.show("Sign-in link copied.", { variant: "success" }) : toast.show("No clipboard here — the link above is selectable.", { variant: "warning" })
+        ok ? toast.show("Sign-in link copied.", { variant: "success" }) : toast.show("Couldn't copy. The link above is selectable.", { variant: "warning" })
       }
       bare
       onlyAccount={{ provider: dest.provider, email: dest.account }}
@@ -1822,7 +2094,7 @@ function McpBody({
           onCopied={(ok) =>
             ok
               ? toast.show("Sign-in link copied.", { variant: "success" })
-              : toast.show("No clipboard here — the link above is selectable.", { variant: "warning" })
+              : toast.show("Couldn't copy. The link above is selectable.", { variant: "warning" })
           }
         />
       ) : null}
@@ -1890,6 +2162,8 @@ function McpBody({
                     )
                   ) : serverBuiltIn ? (
                     <Tag label="Codex only" />
+                  ) : localOnly ? (
+                    <Tag label="Not in this app" />
                   ) : (
                     <Button
                       label="Add here"
@@ -1911,7 +2185,9 @@ function McpBody({
                         saving={editOneMutation.isPending}
                         otherCount={destinations.length - 1}
                         onSaveFields={(input) => editOneMutation.mutate({ destId: dest.id, ...input })}
-                        onPut={(json, dryRun) => putJson(dest.id, json, dryRun)}
+                        onPut={(json, dryRun, version) => putJson(dest.id, json, dryRun, version)}
+                        loadRaw={() => loadRawJson(dest.id)}
+                        loadRawFields={() => loadRawFields(dest.id)}
                         onCopyEverywhere={() =>
                           applyMutation.mutate({
                             name: server.name,
@@ -1977,7 +2253,7 @@ function McpBody({
                   return rawRow?.nativePreview ? (
                     <View key={dest.id} style={{ gap: t.space.xs }}>
                       <Text style={t.text.caption}>{dest.label}</Text>
-                      <CodeBlock>{rawRow.nativePreview}</CodeBlock>
+                      <CodeBlock copy={!revealed}>{rawRow.nativePreview}</CodeBlock>
                     </View>
                   ) : null;
                 })}
@@ -2048,10 +2324,14 @@ function McpBody({
 
   const serversSection = server ? serverPane : catalogOpen ? (
     <CatalogGallery
+      start={addStart}
       destinations={destinations}
       owned={owned}
       ownedReady={ready}
-      onClose={() => setCatalogOpen(false)}
+      onClose={() => {
+        setCatalogOpen(false);
+        setAddStart(null);
+      }}
       onAddByHand={(name) => {
         setCatalogOpen(false);
         // The name only: nothing else from a registry answer is carried into the form.
@@ -2073,10 +2353,12 @@ function McpBody({
       <Toolbar
         actions={
           <>
-            <Button label="Add connector" icon="Plus" variant="primary" onPress={() => setCatalogOpen(true)} />
+            <Button label="Add connector" icon="Plus" variant="primary" onPress={() => openAdd({ scope: "user" })} />
           </>
         }
       />
+      {/* 0.20.0: where these live, once for the tab rather than on every card. */}
+      <Text style={t.text.body}>{EVERYWHERE_LINE}</Text>
       {filters}
       {filter === "gaps" && gallery.counts.gaps > 0 ? (
         <Notice tone="attention">
@@ -2095,6 +2377,7 @@ function McpBody({
 
   const projectsSection = (
     <View style={{ gap: t.space.section }}>
+      <Toolbar actions={<Button label="Add to a project" icon="Plus" variant="primary" onPress={() => { setSection("servers"); openAdd({ scope: "project" }); }} />} />
       <Text style={t.text.body}>{PROJECTS_LINE}</Text>
       {authQuery.isLoading ? <Loading label="Reading projects…" /> : null}
       {authQuery.error ? <ErrorText>{authQuery.data ? `Could not refresh projects (${errorText(authQuery.error)}). Showing the earlier read.` : `Could not read projects: ${errorText(authQuery.error)}`}</ErrorText> : null}
@@ -2112,9 +2395,24 @@ function McpBody({
             <Row
               key={project}
               first={index === 0}
-              title={project}
+              title={thisProject(project)}
               subtitle={names.join(", ")}
-              meta={<Facts items={[{ value: plural(names.length, "connector") }]} />}
+              meta={
+                <View style={{ gap: t.space.hair }}>
+                  <Facts items={[{ value: `${project} · .mcp.json` }, { value: plural(names.length, "connector") }]} />
+                  {(() => {
+                    // 0.20.0: a name this project shares with one set up everywhere.
+                    const shared = names.filter((name) => ownServers.some((entry) => entry.name === name));
+                    // Claude Code's order: your own "just for you" copy, then this project's, then everywhere's.
+                    const ownHere = shared.filter((name) => ownServers.find((entry) => entry.name === name)?.localIn?.some((local) => local.project.split(/[\\/]/).pop() === project));
+                    return shared.length > 0 ? (
+                      <Text style={t.text.caption}>
+                        {`Also set up everywhere: ${shared.join(", ")}. Claude Code uses this project's copy here${ownHere.length > 0 ? `, except where you have your own "just for you" copy (${ownHere.join(", ")}), which comes first` : ""}.`}
+                      </Text>
+                    ) : null;
+                  })()}
+                </View>
+              }
             />
           ))}
         </Card>
@@ -2684,7 +2982,7 @@ export function WorkspaceBody({
         onSignOut={(target) => logoutMutation.mutate({ provider: target.provider, accountDir: target.isPrimary ? "" : target.dir, server, workspaceId })}
         onComplete={(key, redirectUrl) => completeMutation.mutate({ key, redirectUrl })}
         onCopied={(ok) =>
-          ok ? toast.show("Sign-in link copied.", { variant: "success" }) : toast.show("No clipboard here — the link above is selectable.", { variant: "warning" })
+          ok ? toast.show("Sign-in link copied.", { variant: "success" }) : toast.show("Couldn't copy. The link above is selectable.", { variant: "warning" })
         }
         bare
         onlyAccount={{ provider: account.provider, email: account.email }}
@@ -2777,7 +3075,7 @@ export function WorkspaceBody({
         }
         onComplete={(key, redirectUrl) => completeMutation.mutate({ key, redirectUrl })}
         onCopied={(ok) =>
-          ok ? toast.show("Sign-in link copied.", { variant: "success" }) : toast.show("No clipboard here — the link above is selectable.", { variant: "warning" })
+          ok ? toast.show("Sign-in link copied.", { variant: "success" }) : toast.show("Couldn't copy. The link above is selectable.", { variant: "warning" })
         }
       />
     </View>
@@ -2842,12 +3140,16 @@ export function WorkspaceBody({
             toolsByName={toolsByName}
             health={healthByName}
             signIn={(entry) => (problems?.signIn.includes(entry.name) ? null : authFor(entry.name, account, entry.inlineCredentials, entry.transport))}
+            projectName={workspace?.name ?? data.workspace.name}
+            onAddHere={canOpenMcp() ? () => openMcpAdd({ scope: "project", projectPath: data.workspace.projectRootPath || data.workspace.directory }) : undefined}
           />
         </Section>
       ) : null}
       <Accordion>
         {chatSection}
-        <AccordionItem icon="FolderCode" title="This project's own connectors" summary={data.servers.length === 0 ? "None" : plural(data.servers.length, "connector")}>
+        {/* 0.20.0: when this chat loads the project's file, its connectors are in "This project" above; this fold is for when it doesn't. */}
+        {agentServersQuery.data?.projectIncluded ? null : (
+        <AccordionItem icon="FolderCode" title="This project's .mcp.json" summary={data.servers.length === 0 ? "None" : `${plural(data.servers.length, "connector")}, not loaded by this chat's AI app`}>
           {data.servers.length === 0 ? (
             <Text style={t.text.body}>{data.configPath ? "Its .mcp.json file is there but lists no connectors." : "This project has none. A project lists its own connectors in a file called .mcp.json in its top folder."}</Text>
           ) : (
@@ -2858,6 +3160,7 @@ export function WorkspaceBody({
             </Card>
           )}
         </AccordionItem>
+        )}
         {problems && problems.elsewhere.length > 0 ? (
           <AccordionItem icon="TriangleAlert" title="Problems elsewhere" summary={`${plural(problems.elsewhere.length, "connector")} this chat doesn't load`}>
             <Text style={t.text.body}>These don't affect this chat. They show as the dot on Connectors in the sidebar.</Text>
@@ -2885,6 +3188,12 @@ export function WorkspaceBody({
                 <Text key={entry.name} style={t.text.caption}>{`${entry.name} (${entry.transport}): ${entry.enabled.reason}${entry.detail ? ` ${entry.detail}` : ""}`}</Text>
               ))}
               {!agentServersQuery.data.projectIncluded && agentServersQuery.data.projectNote ? <Text style={t.text.caption}>{agentServersQuery.data.projectNote}.</Text> : null}
+              <Text style={t.text.label}>Where each comes from</Text>
+              <CodeBlock>
+                {agentServersQuery.data.servers
+                  .map((entry) => `${entry.name}: ${scopeLabel(entry.scope, workspace?.name ?? data.workspace.name)} · ${homeRelative(entry.configPath, agentServersQuery.data?.home ?? "")}`)
+                  .join("\n")}
+              </CodeBlock>
             </View>
           ) : null}
           {data.servers.map((entry) => (

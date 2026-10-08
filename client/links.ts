@@ -1,8 +1,7 @@
 import * as pluginClient from "@getpaseo/plugin/client";
-import { useToast } from "@getpaseo/plugin/client/react-native";
 import { Linking } from "react-native";
 import { externalUrlOpener } from "../shared/host-features";
-import { copyToClipboard } from "./ui";
+import { copyToClipboard, useToast } from "./ui";
 
 /**
  * Paseo 0.10 and later hand plugins `openExternalUrl`, which opens the
@@ -19,7 +18,7 @@ export async function openLink(url: string): Promise<"opened" | "copied" | "fail
     else await Linking.openURL(url);
     return "opened";
   } catch {
-    return copyToClipboard(url) ? "copied" : "failed";
+    return (await copyToClipboard(url)) ? "copied" : "failed";
   }
 }
 

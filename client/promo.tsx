@@ -1,12 +1,11 @@
 import { useRpc, useSettings } from "@getpaseo/plugin/client";
-import { useToast } from "@getpaseo/plugin/client/react-native";
 import { useQuery } from "@tanstack/react-query";
 import React, { useState } from "react";
 import { Text, View } from "react-native";
 import { mcpSiblings } from "../shared/contracts";
 import { promoSettings } from "../shared/settings";
 import { AI_ROUTER } from "../shared/siblings";
-import { QuietLine, copyToClipboard, useTokens } from "./ui";
+import { QuietLine, copyToClipboard, useTokens, useToast } from "./ui";
 import { useOpenLink } from "./links";
 
 export const SIBLINGS_QUERY_KEY = ["paseo-mcp", "siblings"] as const;
@@ -49,9 +48,11 @@ export function AiRouterCard() {
   };
   const open = () => openLink(AI_ROUTER.repoUrl);
   const copy = () =>
-    copyToClipboard(AI_ROUTER.installSource)
-      ? toast.show("AI Router install source copied.", { variant: "success" })
-      : toast.show(`No clipboard here — the install source is ${AI_ROUTER.installSource}`, { variant: "warning" });
+    void copyToClipboard(AI_ROUTER.installSource).then((ok) =>
+      ok
+        ? toast.show("AI Router install source copied.", { variant: "success" })
+        : toast.show(`Couldn't copy. The install source is ${AI_ROUTER.installSource}`, { variant: "warning" }),
+    );
 
   // One quiet line, never a card (the calm standard). Nothing about installing until the host has answered.
   const links = [

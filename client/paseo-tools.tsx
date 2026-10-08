@@ -1,6 +1,5 @@
 /** Paseo's built-in MCP tools: the Servers card, the Overview line and the agent panel row. */
 import { useRpc } from "@getpaseo/plugin/client";
-import { useToast } from "@getpaseo/plugin/client/react-native";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import React, { useState } from "react";
 import { Text, View } from "react-native";
@@ -24,7 +23,7 @@ import {
 import { ADD_PROJECT_SERVERS } from "../shared/settings";
 import { backoffMs, failureStreak } from "../shared/schedule";
 import { canOpenMcp, openMcp } from "./navigate";
-import { Button, Card, Disclosure, ErrorText, Facts, Loading, Notice, Row, Section, Segmented, StatusLine, StatusPill, Tag, Toggle, useTokens, type Status } from "./ui";
+import { Button, Card, Disclosure, ErrorText, Facts, Loading, Notice, Row, Section, Segmented, StatusLine, StatusPill, Tag, Toggle, useTokens, type Status, useToast } from "./ui";
 
 export const PASEO_TOOLS_QUERY_KEY = ["paseo-mcp", "paseo-tools"] as const;
 

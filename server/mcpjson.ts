@@ -1,11 +1,13 @@
 import type { PluginHandlerContext } from "@getpaseo/plugin/server";
-import { writeFileSafely } from "./safe-write";
+import { readStamped, replaceGuarded, writeFileSafely, type FileStamp } from "./safe-write";
 import { spawn, type ChildProcess } from "node:child_process";
 import { request as httpRequest } from "node:http";
-import { chmodSync, existsSync, mkdirSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { homedir, hostname } from "node:os";
 import { basename, delimiter, dirname, join, resolve, sep } from "node:path";
 import type { Destination } from "../shared/contracts";
+import { cliFailure, isSecretName, redactSecrets, redactValue } from "../shared/redact";
+import { genericParserMessage } from "../shared/issues";
 import { onShutdown } from "./lifecycle";
 import { withDeadline } from "./run";
 import {
@@ -19,6 +21,7 @@ import {
   jsonMcpRead,
   jsonSafeDef,
   maskValue,
+  jsonLike,
   readJson,
   redactDetail,
   searchPath,
@@ -26,7 +29,12 @@ import {
   tomlMcpNamesFromText,
   tomlMcpReadOneFromText,
   tomlKey,
+  STALE_REVEAL,
+  entryFromText,
+  entryVersionFromText,
+  parseJsonObject,
   tomlReadForWrite,
+  tomlReadStamped,
   tomlString,
   writeTextAtomic,
   writeTomlChecked,
@@ -150,6 +158,19 @@ function tomlToCanonical(def: McpDef): Stored {
   return { entry, carry, ...(def.tables ? { tables: def.tables } : {}), ...(def.partial ? { partial: def.partial } : {}) };
 }
 
+/** readStored from one fresh read, with the connector's version in that read (0.20.0: what a reveal carries). */
+function readStoredFresh(dest: Destination, name: string): { stored: Stored | null; version: string } {
+  let text: string | null = null;
+  try {
+    text = readStamped(dest.configPath).text;
+  } catch {
+    text = null;
+  }
+  const raw = entryFromText(dest.format, text, name);
+  const stored = !raw ? null : DIALECTS[dialectOf(dest)].format === "json-mcp" ? { entry: canonicaliseJson(raw as Entry), carry: [] } : tomlToCanonical(raw);
+  return { stored, version: entryVersionFromText(dest.format, text, name) };
+}
+
 function readStored(dest: Destination, name: string): Stored | null {
   if (DIALECTS[dialectOf(dest)].format === "json-mcp") {
     const raw = jsonMcpRead(dest.configPath)[name] as Entry | undefined;
@@ -192,6 +213,57 @@ function maskEntry(entry: Entry): Entry {
     masked[section] = Object.fromEntries(Object.entries(record).map(([key, value]) => [key, maskValue(value)]));
   }
   return masked;
+}
+
+/**
+ * Display only (0.20.0): TOML lines kept as written (`carry`, and subtables
+ * such as `[mcp_servers.x.oauth]`) as the app may show them. A secret-looking
+ * key, or any key in a secret-looking table, keeps only its last four
+ * characters; everything else still goes through the shared redactor. Writes
+ * never use this: they keep the stored lines untouched.
+ */
+const SECRET_TABLE = /header|env|auth|oauth|secret|credential|token/i;
+const SECRET_KEY = /key|token|secret|password|passwd|pwd|auth|credential|cookie|session/i;
+
+function maskTomlLine(line: string, secretTable: boolean): string {
+  const pair = /^(\s*("[^"]*"|'[^']*'|[^=\s]+)\s*=\s*)(.*?)\s*$/.exec(line);
+  if (!pair || (!secretTable && !SECRET_KEY.test(pair[2]))) return redactSecrets(line);
+  const quoted = /^"(.*)"$/.exec(pair[3]) ?? /^'(.*)'$/.exec(pair[3]);
+  return `${pair[1]}"${quoted ? maskValue(quoted[1]) : MASK}"`;
+}
+
+export function maskCarryForDisplay(carry: readonly string[]): string[] {
+  return carry.map((line) => maskTomlLine(line, false));
+}
+
+export function maskTablesForDisplay(tables: McpDef["tables"]): McpDef["tables"] {
+  return tables?.map((table) => ({ sub: table.sub, lines: table.lines.map((line) => maskTomlLine(line, SECRET_TABLE.test(table.sub))) }));
+}
+
+/**
+ * A definition as the app shows it with keys hidden (0.20.0): env and header
+ * values masked, a secret flag's value in `args` hidden by position
+ * (`--api-key X`), credentials in the address hidden, and any other setting
+ * with a secret name (`bearer_token`) hidden. Display and redacted exports
+ * only: never written back.
+ */
+export function maskForDisplay(entry: Entry): Entry {
+  const shown = maskEntry(entry);
+  // Everything but env and headers (masked above, keeping a hint) goes through the structural redactor:
+  // a secret key at any depth (`oauth.password`), secret flags in `args`, credentials in `url`.
+  for (const [key, value] of Object.entries(shown)) {
+    if (key === "env" || key === "headers") continue;
+    shown[key] = redactValue(value, isSecretName(key), key);
+  }
+  return shown;
+}
+
+/** What the app shows of one stored definition: keys masked, retained TOML masked, the rest redacted. */
+function displayPreview(entry: Entry, stored: Stored | null, dialect: ReturnType<typeof dialectOf>, name: string, path: string): string {
+  const spec = DIALECTS[dialect];
+  const shown = toNative(maskForDisplay(entry), maskCarryForDisplay(stored?.carry ?? []), dialect, new Set(Object.keys(stored?.entry ?? {})));
+  if (stored?.tables && shown.native.format === "toml-mcp") shown.native.def.tables = maskTablesForDisplay(stored.tables);
+  return redactSecrets(renderNative(shown.native, name, path, spec.headerKey));
 }
 
 function containsMask(value: unknown): boolean {
@@ -510,18 +582,20 @@ function normalise(raw: string): { text: string; notes: string[]; name: string }
 }
 
 function syntaxIssue(text: string, error: unknown): JsonIssue {
-  const message = error instanceof Error ? error.message : String(error);
-  const position = /position (\d+)/.exec(message);
+  const raw = error instanceof Error ? error.message : String(error);
+  // The parser's words without the text it quotes (0.20.0): the position comes from `raw`, the message doesn't carry input.
+  const message = genericParserMessage(raw);
+  const position = /position (\d+)/.exec(raw);
   if (position) {
     const before = text.slice(0, Number.parseInt(position[1], 10));
     return {
       line: before.split("\n").length,
       column: before.length - before.lastIndexOf("\n"),
       code: "json-syntax",
-      message: message.replace(/\s*in JSON at position.*$/, ""),
+      message,
     };
   }
-  const lineCol = /line (\d+) column (\d+)/.exec(message);
+  const lineCol = /line (\d+) column (\d+)/.exec(raw);
   if (lineCol) {
     return { line: Number.parseInt(lineCol[1], 10), column: Number.parseInt(lineCol[2], 10), code: "json-syntax", message };
   }
@@ -532,7 +606,8 @@ function syntaxIssue(text: string, error: unknown): JsonIssue {
 
 // `stored` is what the caller already read from this destination — planWrites
 // uses it as-is rather than reading the same file again per pair.
-type Pair = { dest: Destination; name: string; entry: Entry; stored: Stored | null };
+/** `expectVersion` (0.20.0): the connector's version when the hand editor revealed it. */
+type Pair = { dest: Destination; name: string; entry: Entry; stored: Stored | null; expectVersion?: string };
 
 type Plan = {
   issues: JsonIssue[];
@@ -564,8 +639,9 @@ function planWrites(pairs: Pair[]): Plan {
   const issues: JsonIssue[] = [];
   const dropped: string[] = [];
   const previews = new Map<string, string>();
-  const documents = new Map<string, { dest: Destination; text: string }>();
+  const documents = new Map<string, { dest: Destination; text: string; before: string; stamp: FileStamp }>();
   const jsonConfigs = new Map<string, Record<string, unknown>>();
+  const readsAtPlan = new Map<string, { text: string | null; stamp: FileStamp }>();
 
   for (const pair of pairs) {
     const dialect = dialectOf(pair.dest);
@@ -582,21 +658,37 @@ function planWrites(pairs: Pair[]): Plan {
     // Subtables this model doesn't show (`env_http_headers`, `tools.<tool>`) stay in the file they came from.
     if (stored?.tables && translated.native.format === "toml-mcp") translated.native.def.tables = stored.tables;
     for (const note of translated.dropped) dropped.push(`${pair.dest.label}: ${note}`);
-    previews.set(key, renderNative(translated.native, pair.name, path, spec.headerKey));
+    // The preview is shown in the app (0.20.0): masks were restored above for the write only, and retained
+    // TOML (carry lines, subtables like `oauth`) is masked separately from what is written.
+    previews.set(key, displayPreview(pair.entry, stored ?? null, dialect, pair.name, path));
 
     if (translated.native.format === "json-mcp") {
       if (!jsonConfigs.has(path)) {
         // A file that exists but will not parse must never be rewritten: it
         // holds account identity and project history, not only MCP servers.
-        const config = existsSync(path) ? readJson(path) : {};
+        let read: ReturnType<typeof readStamped>;
+        try {
+          read = readStamped(path);
+        } catch (error) {
+          issues.push({ ...here(), code: "shape", message: error instanceof Error ? error.message : String(error) });
+          continue;
+        }
+        const config = read.text === null ? {} : parseJsonObject(read.text);
         if (config === null) {
           issues.push({ ...here(), code: "shape", message: `${path} exists but is not valid JSON — refusing to overwrite it` });
           continue;
         }
         jsonConfigs.set(path, config);
+        // The read this plan was built from (0.20.0): the commit writes only if the file is still exactly this.
+        readsAtPlan.set(path, read);
       }
       const config = jsonConfigs.get(path);
       if (!config) continue;
+      // Checked on the very read the write is built from: a token rotated since Reveal is never overwritten.
+      if (pair.expectVersion !== undefined && entryVersionFromText("json-mcp", readsAtPlan.get(path)?.text ?? null, pair.name) !== pair.expectVersion) {
+        issues.push({ ...here(), code: "shape", message: STALE_REVEAL });
+        continue;
+      }
       const servers = (config.mcpServers as Record<string, unknown> | undefined) ?? {};
       servers[pair.name] = translated.native.value;
       config.mcpServers = servers;
@@ -605,7 +697,8 @@ function planWrites(pairs: Pair[]): Plan {
 
     if (!documents.has(path)) {
       try {
-        documents.set(path, { dest: pair.dest, text: tomlReadForWrite(path) });
+        const read = tomlReadStamped(path);
+        documents.set(path, { dest: pair.dest, text: read.text, before: read.text, stamp: read.stamp });
       } catch (error) {
         issues.push({ ...here(), code: "shape", message: error instanceof Error ? error.message : String(error) });
         continue;
@@ -613,6 +706,10 @@ function planWrites(pairs: Pair[]): Plan {
     }
     const document = documents.get(path);
     if (!document) continue;
+    if (pair.expectVersion !== undefined && entryVersionFromText("toml-mcp", document.before, pair.name) !== pair.expectVersion) {
+      issues.push({ ...here(), code: "shape", message: STALE_REVEAL });
+      continue;
+    }
     let next = "";
     try {
       next = tomlApply(document.text, pair.name, translated.native.def, path, spec.headerKey);
@@ -645,7 +742,8 @@ function planWrites(pairs: Pair[]): Plan {
   // that get written.
   const jsonTexts = new Map<string, string>();
   for (const [path, config] of jsonConfigs) {
-    const text = `${JSON.stringify(config, null, 2)}\n`;
+    // The file's own layout is kept (0.20.0): its indent and final newline.
+    const text = jsonLike(readsAtPlan.get(path)?.text ?? null, config);
     try {
       JSON.parse(text);
     } catch (error) {
@@ -661,8 +759,10 @@ function planWrites(pairs: Pair[]): Plan {
     const label = (path: string) => pairs.find((pair) => pair.dest.configPath === path)?.dest.label ?? path;
     for (const [path, text] of jsonTexts) {
       try {
-        backupFile(path);
-        writeTextAtomic(path, text);
+        const read = readsAtPlan.get(path);
+        if (!read) throw new Error("no read to compare with; nothing written");
+        const backup = backupFile(path);
+        replaceGuarded(path, text, read.stamp, { backup });
         written.push(label(path));
       } catch (error) {
         failed.push(`${label(path)}: ${error instanceof Error ? error.message : String(error)}`);
@@ -670,7 +770,8 @@ function planWrites(pairs: Pair[]): Plan {
     }
     for (const [path, document] of documents) {
       try {
-        writeTomlChecked(path, tomlReadForWrite(path), document.text);
+        // The text read when the plan was made, not a fresh one: a change since then aborts the write.
+        writeTomlChecked(path, document.before, document.text, document.stamp);
         written.push(document.dest.label);
       } catch (error) {
         failed.push(`${document.dest.label}: ${error instanceof Error ? error.message : String(error)}`);
@@ -690,22 +791,26 @@ export async function handleMcpRawGet({ name, reveal }: { name: string; reveal: 
   const rows = destinations.map((dest) => {
     const dialect = dialectOf(dest);
     const spec = DIALECTS[dialect];
-    const stored = readStored(dest, name);
+    const { stored, version } = readStoredFresh(dest, name);
     if (!stored) {
       return { destId: dest.id, destLabel: dest.label, dialect, found: false, json: "", masked: false, nativePreview: "" };
     }
     const secrets = secretPaths(stored.entry);
     if (secrets.length > 0) containsSecrets = true;
-    const shown = reveal ? stored.entry : maskEntry(stored.entry);
+    // Keys hidden: a read-only view (the editor loads the real text separately to edit), so it is masked for display.
+    const shown = reveal ? stored.entry : maskForDisplay(stored.entry);
     const { native } = toNative(shown, stored.carry, dialect, new Set(Object.keys(stored.entry)));
+    // Keys hidden: the saved config as shown goes through the same display masking as the editor's preview.
+    const nativePreview = reveal ? renderNative(native, name, dest.configPath, spec.headerKey) : displayPreview(stored.entry, stored, dialect, name, dest.configPath);
     return {
       destId: dest.id,
       destLabel: dest.label,
       dialect,
       found: true,
-      json: `${JSON.stringify(shown, null, 2)}\n`,
+      json: reveal ? `${JSON.stringify(shown, null, 2)}\n` : redactSecrets(`${JSON.stringify(shown, null, 2)}\n`),
       masked: !reveal && secrets.length > 0,
-      nativePreview: renderNative(native, name, dest.configPath, spec.headerKey),
+      nativePreview,
+      version,
     };
   });
   return { rows, containsSecrets };
@@ -735,7 +840,7 @@ function unwrapSingle(parsed: unknown, name: string): { entry: Entry | null; not
 }
 
 export async function handleMcpRawPut(
-  { name, destId, json, dryRun }: { name: string; destId: string; json: string; dryRun: boolean },
+  { name, destId, json, dryRun, version }: { name: string; destId: string; json: string; dryRun: boolean; version?: string },
   { paseo }: PluginHandlerContext,
 ) {
   const empty = { ok: false, preview: "", dropped: [] as string[] };
@@ -778,7 +883,7 @@ export async function handleMcpRawPut(
   }));
   issues.push(...validate(resolved.entry, name, dialect, text));
 
-  const plan = planWrites([{ dest, name, entry: resolved.entry, stored }]);
+  const plan = planWrites([{ dest, name, entry: resolved.entry, stored, ...(version !== undefined ? { expectVersion: version } : {}) }]);
   const preview = plan.previews.get(`${dest.configPath}::${name}`) ?? "";
   issues.push(...plan.issues);
 
@@ -1054,7 +1159,7 @@ export async function handleMcpExport(
     if (!reveal) for (const path of secrets) redacted.push(`${serverName} ${path}`);
     // Export in Claude's shape whatever the source was, so it can be pasted
     // straight back into a README, a colleague's config, or this importer.
-    const { native } = toNative(reveal ? found.stored.entry : maskEntry(found.stored.entry), [], "claude-json", new Set(Object.keys(found.stored.entry)));
+    const { native } = toNative(reveal ? found.stored.entry : maskForDisplay(found.stored.entry), [], "claude-json", new Set(Object.keys(found.stored.entry)));
     if (native.format === "json-mcp") mcpServers[serverName] = native.value;
   }
 
@@ -1239,7 +1344,7 @@ function deliverCallback(port: number, path: string, query: string): Promise<{ o
       },
     );
     call.on("timeout", () => call.destroy(new Error("no answer within 10s")));
-    call.on("error", (error) => done({ ok: false, message: error.message }));
+    call.on("error", (error) => done({ ok: false, message: redactSecrets(error.message) }));
     call.end();
   });
 }
@@ -1347,7 +1452,7 @@ export async function handleMcpLogin(
   try {
     cwd = await workspaceLoginDirectory(workspaceId, server, paseo);
   } catch (error) {
-    return { ok: false, session: null, message: error instanceof Error ? error.message : String(error) };
+    return { ok: false, session: null, message: redactSecrets(error instanceof Error ? error.message : String(error)) };
   }
 
   const key = `${provider}|${accountConfig.keyDir}|${workspaceId ?? "user"}|${server}`;
@@ -1432,10 +1537,10 @@ export async function handleMcpLogin(
   };
   child.stdout?.on("data", onChunk);
   child.stderr?.on("data", onChunk);
-  child.once("error", (error) => finish(key, "failed", error.message));
+  child.once("error", (error) => finish(key, "failed", cliFailure(`Sign-in for '${server}' didn't start`, `${provider} mcp login`, null)));
   child.once("exit", (code) => {
     if (code === 0) finish(key, "done", `${server} is authorised for ${session.account}`);
-    else finish(key, "failed", output.trim().split("\n").slice(-3).join(" ").slice(0, 300) || `${provider} mcp login exited with ${code}`);
+    else finish(key, "failed", cliFailure(`Sign-in for '${server}' didn't finish`, `${provider} mcp login`, code));
   });
 
   // Give the CLI a moment to print its link so the first response is useful;
@@ -1529,7 +1634,7 @@ export async function handleMcpLogout({
   try {
     cwd = await workspaceLoginDirectory(workspaceId, server, paseo);
   } catch (error) {
-    return { ok: false, message: error instanceof Error ? error.message : String(error) };
+    return { ok: false, message: redactSecrets(error instanceof Error ? error.message : String(error)) };
   }
   return await new Promise<{ ok: boolean; message: string }>((done) => {
     const child = spawn(binary, ["mcp", "logout", server], {
@@ -1546,13 +1651,14 @@ export async function handleMcpLogout({
     const timer = setTimeout(() => child.kill("SIGTERM"), 20_000);
     child.once("error", (error) => {
       clearTimeout(timer);
-      done({ ok: false, message: error.message });
+      done({ ok: false, message: cliFailure(`Couldn't sign out of '${server}'`, `${provider} mcp logout`, null) });
     });
     child.once("exit", (code) => {
       clearTimeout(timer);
+      // A fixed sentence only: the CLI's output can carry a token (0.20.0).
       done({
         ok: code === 0,
-        message: code === 0 ? `cleared the stored grant for '${server}'` : output.trim().slice(-300) || `${provider} mcp logout exited with ${code}`,
+        message: code === 0 ? `cleared the stored grant for '${server}'` : cliFailure(`Couldn't sign out of '${server}'`, `${provider} mcp logout`, code),
       });
     });
   });

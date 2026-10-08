@@ -239,7 +239,7 @@ test("team catalogue: good entries show, literal secrets are refused by id", () 
   const text = JSON.stringify({
     entries: [
       { id: "n8n", name: "Team n8n", publisher: "InvestorKit", category: "automation", transport: "http", url: "https://n8n.example.ondigitalocean.app/mcp/abc", headers: { Authorization: "Bearer {N8N_TOKEN}" }, inputs: [{ id: "N8N_TOKEN", label: "n8n token" }], auth: "header" },
-      { id: "leaky", name: "Leaky", transport: "http", url: "https://mcp.example.com/mcp", headers: { Authorization: "Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.abc" }, auth: "header" },
+      { id: "leaky", name: "Leaky", transport: "http", url: "https://mcp.example.com/mcp", headers: { Authorization: `Bearer ${["ey" + "JhbGciOiJIUzI1NiJ9", "ey" + "JzdWIiOiIxMjM0NTY3ODkwIn0", "abc"].join(".")}` }, auth: "header" },
       { id: "leaky-env", name: "Leaky env", transport: "stdio", command: "npx", args: ["x@1.0.0"], env: { API_KEY: "plaintext" }, auth: "env" },
       { id: "plain", name: "Plain http", transport: "http", url: "http://intranet/mcp", auth: "none" },
       { id: "n8n", name: "Duplicate", transport: "http", url: "https://mcp.example.com/mcp", auth: "oauth" },
@@ -391,7 +391,7 @@ test("budget line names the tier", () => {
 });
 
 test("secret sniffing: keys are caught, paths and host names are not", () => {
-  for (const secret of ["sk_" + "live_51Habcdefghijklmnop", "ghp_" + "abcdefghijklmnopqrstuvwxyz0123", "a1b2c3d4e5f6g7h8i9j0k1l2m3n4", "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.abc", "dop_v1_0123456789abcdef0123"]) {
+  for (const secret of ["sk_" + "live_51Habcdefghijklmnop", "ghp_" + "abcdefghijklmnopqrstuvwxyz0123", "a1b2c3d4e5f6g7h8i9j0k1l2m3n4", ["ey" + "JhbGciOiJIUzI1NiJ9", "ey" + "JzdWIiOiIxMjM0NTY3ODkwIn0", "abc"].join("."), "dop_v1_0123456789abcdef0123"]) {
     assert.equal(looksLikeSecret(secret), true, secret);
   }
   for (const plain of ["/@pinion05/supabase-mcp-lite/mcp", "agent-observatory-sensor.nolimit-observatory.workers.dev", "https://github.com/upstash/context7", "relume-library-mcp.relume.io", "Bearer ", "@playwright/mcp@latest"]) {

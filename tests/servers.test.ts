@@ -58,7 +58,7 @@ test("remove plan for one editor names the file, counts one, and says who keeps 
   assert.ok(plan);
   assert.deepEqual(plan.targets, [codex.id]);
   assert.equal(plan.title, "Remove jam from Codex · demo@example.com (primary)?");
-  assert.equal(plan.lines[0], "It will be deleted from Codex · demo@example.com (primary).");
+  assert.equal(plan.lines[0], "Everywhere: it will be deleted from Codex · demo@example.com (primary).");
   assert.equal(plan.lines[1], "The other 2 apps keep jam.");
   assert.match(plan.lines.at(-1)!, /no undo.*save a copy/i);
   assert.equal(plan.credentialCount, 0);
@@ -70,7 +70,7 @@ test("remove plan for all editors lists every file, counts them, and flags inlin
   assert.ok(plan);
   assert.deepEqual(plan.targets, destinations.map((entry) => entry.id));
   assert.equal(plan.title, "Remove heroui-pro from all 4 apps?");
-  assert.equal(plan.lines[0], `It will be deleted from 4 apps: ${destinations.map((entry) => entry.label).join(", ")}.`);
+  assert.equal(plan.lines[0], `Everywhere: it will be deleted from 4 apps: ${destinations.map((entry) => entry.label).join(", ")}.`);
   assert.equal(plan.credentialCount, 2);
   assert.equal(plan.lines[1], "2 of them have a key saved in their settings; those keys are lost with them.");
   assert.equal(plan.confirmLabel, "Remove from 4 apps");
@@ -117,15 +117,16 @@ test("remove plan for everywhere names every project file, counts them, and warn
   assert.equal(plan.title, "Remove jam from everywhere?");
   assert.deepEqual(plan.targets, [claude.id, codex.id]);
   assert.deepEqual(plan.projectFiles, [`${HOME}/projects/data-glue/.mcp.json`, `${HOME}/projects/unfold/.mcp.json`]);
-  assert.equal(plan.lines[0], `It will be deleted from 2 apps: ${claude.label}, ${codex.label}.`);
-  assert.match(plan.lines[1], /^2 projects will lose it too: .*data-glue\/\.mcp\.json, .*unfold\/\.mcp\.json\. .*git status/);
+  assert.equal(plan.lines[0], `Everywhere: it will be deleted from 2 apps: ${claude.label}, ${codex.label}.`);
+  assert.match(plan.lines[1], /^2 projects: their \.mcp\.json will lose it too \(data-glue · \.mcp\.json, unfold · \.mcp\.json\)\. .*git status/);
+  assert.doesNotMatch(plan.lines[1], /\//, "friendly names, no paths (0.20.0)");
   assert.match(plan.lines.at(-1)!, /backed up.*no undo/i);
-  assert.equal(plan.confirmLabel, "Remove from 2 apps and 2 projects");
+  assert.equal(plan.confirmLabel, "Remove from 2 apps and 2 project files");
   // Only in projects: still a plan, with no editor line.
   const only = removePlan(server("expo", []), destinations, "everywhere", undefined, projectFilesFor("expo", projectServers));
   assert.ok(only);
-  assert.match(only.lines[0], /^1 project will lose it too/);
-  assert.equal(only.confirmLabel, "Remove from 1 project");
+  assert.match(only.lines[0], /^This project · \S+: its \.mcp\.json will lose it too/);
+  assert.equal(only.confirmLabel, "Remove from 1 project file");
   // Nothing in projects: says so instead of listing nothing.
   const none = removePlan(server("linear", [claude.id]), destinations, "everywhere", undefined, []);
   assert.ok(none);
@@ -138,7 +139,7 @@ test("remove plan for one or all editors warns when a project file would bring t
   const all = removePlan(server("jam", [claude.id, codex.id]), destinations, "all", undefined, files);
   assert.ok(all);
   assert.deepEqual(all.projectFiles, []);
-  assert.match(all.lines[1], /^2 projects still list it \(data-glue, unfold\), and Claude Code picks it up again in those projects.*Remove everywhere/);
+  assert.match(all.lines[1], /^2 projects still list it in \.mcp\.json \(data-glue, unfold\), and Claude Code picks it up again in those projects.*From all apps and project files/);
   const one = removePlan(server("jam", [claude.id, codex.id]), destinations, "one", claude.id, files);
   assert.ok(one);
   assert.match(one.lines[1], /still list it/);

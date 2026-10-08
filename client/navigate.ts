@@ -23,6 +23,22 @@ export function openMcp(server: string | null = null): void {
   opener?.("mcp");
 }
 
+export type AddStart = { scope: "user" | "project"; projectPath?: string };
+let pendingAdd: AddStart | null = null;
+
+/** 0.20.0: opens MCP management on Add, starting on a scope ("This project" from a workspace, with its project picked). */
+export function openMcpAdd(start: AddStart): void {
+  pendingAdd = start;
+  opener?.("mcp");
+}
+
+/** The Add a just-opened surface was asked to start, consumed on read. */
+export function takePendingAdd(): AddStart | null {
+  const start = pendingAdd;
+  pendingAdd = null;
+  return start;
+}
+
 /** The server a just-opened surface was asked to show, consumed on read. */
 export function takePendingServer(): string | null {
   const server = pendingServer;

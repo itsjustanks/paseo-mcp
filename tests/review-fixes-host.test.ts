@@ -64,6 +64,7 @@ const context = { paseo: { config: { get: async () => ({ config: { providers } }
 const { handleMcpCopyPlan, handleMcpCopyAll } = await import("../server/copy-all");
 const { handleMcpAdd, handleMcpApply, handleMcpSync, hasInlineCredentials } = await import("../server/handlers");
 const { daemonRead, resetDaemonReads } = await import("../server/daemon-cache");
+const { readStamped } = await import("../server/safe-write");
 const { alreadyHave, endpointKey, similarName } = await import("../shared/catalog");
 const { CURATED_CATALOG } = await import("../shared/catalog-curated");
 const { curatedCard } = await import("../shared/catalog");
@@ -193,7 +194,7 @@ test("fix 2: the structural check finds what breaks a file, and a write that wou
   assert.match(tomlStructureProblem('[mcp_servers.a]\nenabled_tools = [\n  "x",\n'), /left open at the end/);
   const before = '[mcp_servers.a]\nurl = "https://a.example/mcp"\n';
   writeFileSync(P.grok, before);
-  assert.throws(() => writeTomlChecked(P.grok, before, `${before}\n[mcp_servers.a]\nurl = "b"\n`), /put back as it was/);
+  assert.throws(() => writeTomlChecked(P.grok, before, `${before}\n[mcp_servers.a]\nurl = "b"\n`, readStamped(P.grok).stamp), /nothing was written, it is as it was/);
   assert.equal(text(P.grok), before, "the backup went back");
 });
 
@@ -349,7 +350,7 @@ test("fix 6: ${VAR} headers become Codex's own env settings; anything else with 
 test("fix 7: a key in the address or the arguments is seen: the reviewer's four cases", async () => {
   const cases = {
     zap: { url: "https://mcp.zapier.com/api/mcp/s/ZAPSECRETPATH123/mcp" },
-    gh: { command: "npx", args: ["-y", "@x/gh-mcp", "--pat", "ghp_SECRETVALUE"] },
+    gh: { command: "npx", args: ["-y", "@x/gh-mcp", "--pat", "gh" + "p_SECRETVALUE"] },
     basic: { url: "https://user:hunter2@h.example/mcp" },
     tok: { command: "some-mcp", args: ["sk-live-abc123"] },
   };

@@ -1,6 +1,7 @@
 import type { PluginHandlerContext } from "@getpaseo/plugin/server";
-import { randomBytes } from "node:crypto";
-import { copyFileSafely, writeFileSafely } from "./safe-write";
+import { displayCommand, redactSecrets } from "../shared/redact";
+import { createHash, randomBytes } from "node:crypto";
+import { ConcurrentChangeError, NotUtf8Error, copyFileSafely, readStamped, replaceGuarded, writeFileSafely, type FileStamp } from "./safe-write";
 import { chmodSync, existsSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
@@ -70,6 +71,16 @@ export function readJson(path: string): Record<string, unknown> | null {
   }
 }
 
+/** A JSON object from text, or null when it isn't one (the read-for-write twin of readJson). */
+export function parseJsonObject(text: string): Record<string, unknown> | null {
+  try {
+    const value = JSON.parse(text) as unknown;
+    return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+  } catch {
+    return null;
+  }
+}
+
 /** The cached parse (server/files.ts), for callers that only look. Do not change the result. */
 function readJsonShared(path: string): Record<string, unknown> | null {
   const value = readJsonCached(path);
@@ -86,6 +97,8 @@ export function backupFile(path: string): string | null {
   // never overwrites (COPYFILE_EXCL), so a repeated name would fail the write.
   const backup = `${path}.bak-paseo-mcp-${stamp}-${randomBytes(3).toString("hex")}`;
   copyFileSafely(path, backup);
+  // A backup holds the same keys as the file, so only the owner reads it (0.20.0), whatever the original's mode.
+  chmodSync(backup, 0o600);
   // Keep the most recent few so config dirs do not fill with backups. The count
   // is per file and generous on purpose: applying one server to seven
   // destinations is a single user action that writes seven files, and a tighter
@@ -115,7 +128,19 @@ export function writeTextAtomic(path: string, text: string): void {
 }
 
 export function writeJsonAtomic(path: string, value: unknown): void {
-  writeTextAtomic(path, `${JSON.stringify(value, null, 2)}\n`);
+  writeTextAtomic(path, jsonLike(existsSync(path) ? readFileSync(path, "utf8") : null, value));
+}
+
+/**
+ * JSON text in the layout the file already had (0.20.0): its indent (two
+ * spaces, four, a tab, or none at all) and whether it ended with a newline.
+ * A new file gets two spaces and a newline, as before.
+ */
+export function jsonLike(previous: string | null, value: unknown): string {
+  if (previous === null || !previous.trim()) return `${JSON.stringify(value, null, 2)}\n`;
+  const indent = /\n([ \t]+)\S/.exec(previous)?.[1] ?? (/\n/.test(previous.trim()) ? "  " : "");
+  const body = indent ? JSON.stringify(value, null, indent) : JSON.stringify(value);
+  return previous.endsWith("\n") ? `${body}\n` : body;
 }
 
 // ---------------------------------------------------------------- accounts / slots
@@ -312,11 +337,47 @@ export function jsonMcpRead(path: string): Record<string, McpDef> {
 export type WriteOptions = {
   /** Add only: refuse, after this write's own fresh read, when the file has a server of that name in any form. */
   onlyIfAbsent?: boolean;
+  /**
+   * 0.20.0: the connector's version when its values were revealed (`entryVersionFromText`).
+   * Checked against this write's own stamped read; a different version refuses the write.
+   */
+  expectVersion?: string;
   /** The target dialect's header table (Codex `http_headers`, Grok `headers`). */
   headerTable?: "headers" | "http_headers";
 };
 
 const alreadyThere = (name: string) => new Error(`already has a connector called ${name}`);
+
+/** What a save says when the connector changed after its values were revealed (0.20.0). */
+export const STALE_REVEAL = "This connector changed since you revealed it; reveal again.";
+
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.keys(value as Record<string, unknown>).sort().map((key) => `${JSON.stringify(key)}:${stableJson((value as Record<string, unknown>)[key])}`).join(",")}}`;
+  }
+  return JSON.stringify(value ?? null);
+}
+
+/** One connector's entry as written in a settings file's text, or null. */
+export function entryFromText(format: Destination["format"], text: string | null, name: string): McpDef | null {
+  if (text === null) return null;
+  if (format === "toml-mcp") return tomlMcpReadOneFromText(text, name);
+  const servers = parseJsonObject(text)?.mcpServers;
+  const entry = servers && typeof servers === "object" && !Array.isArray(servers) ? (servers as Record<string, unknown>)[name] : undefined;
+  return entry && typeof entry === "object" ? (structuredClone(entry) as McpDef) : null;
+}
+
+/**
+ * One connector's version in one settings file (0.20.0): an opaque hash of
+ * its entry as read. Taken when its values are revealed and sent back on
+ * Save, so a token rotated in between is never overwritten with the old one.
+ * Only the connector's own entry counts: Claude Code rewrites the rest of
+ * ~/.claude.json all the time, and that alone shouldn't make you reveal again.
+ */
+export function entryVersionFromText(format: Destination["format"], text: string | null, name: string): string {
+  return createHash("sha256").update(stableJson(entryFromText(format, text, name))).digest("hex").slice(0, 32);
+}
 
 function jsonMcpWrite(path: string, name: string, def: McpDef | null, options: WriteOptions = {}): void {
   jsonMcpWriteMany(path, [{ name, def }], options);
@@ -331,7 +392,9 @@ function jsonMcpWriteMany(path: string, entries: Array<{ name: string; def: McpD
   // A file that EXISTS but will not parse must never be overwritten: rewriting
   // it from `{}` would drop everything else it holds (account identity, project
   // history, settings). Missing is fine — that is a genuine first write.
-  const config = existsSync(path) ? readJson(path) : {};
+  // Stamped at the read (0.20.0): the write goes ahead only if the file is still exactly this.
+  const { text: beforeText, stamp } = readStamped(path);
+  const config = beforeText === null ? {} : parseJsonObject(beforeText);
   if (config === null) {
     throw new Error(`${path} exists but is not valid JSON — refusing to overwrite it`);
   }
@@ -339,6 +402,7 @@ function jsonMcpWriteMany(path: string, entries: Array<{ name: string; def: McpD
   const raw = config.mcpServers;
   const servers = raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, McpDef>) : {};
   if (raw !== undefined && servers !== raw) throw new Error(`${path} has an mcpServers that isn't a list of connectors — refusing to overwrite it`);
+  if (options.expectVersion !== undefined && entries.some(({ name }) => entryVersionFromText("json-mcp", beforeText, name) !== options.expectVersion)) throw new Error(STALE_REVEAL);
   let changed = false;
   for (const { name, def } of entries) {
     try {
@@ -354,8 +418,8 @@ function jsonMcpWriteMany(path: string, entries: Array<{ name: string; def: McpD
   }
   if (!changed) return refused;
   config.mcpServers = servers;
-  backupFile(path);
-  writeJsonAtomic(path, config);
+  const backup = backupFile(path);
+  replaceGuarded(path, jsonLike(beforeText, config), stamp, { backup });
   return refused;
 }
 
@@ -595,6 +659,17 @@ export function tomlApply(
   return next;
 }
 
+/** tomlReadForWrite with the file's stamp (0.20.0), for a write that must find the file unchanged. */
+export function tomlReadStamped(path: string): { text: string; stamp: FileStamp } {
+  try {
+    const { text, stamp } = readStamped(path);
+    return { text: text ?? "", stamp };
+  } catch (error) {
+    if (error instanceof ConcurrentChangeError || error instanceof NotUtf8Error) throw error;
+    throw new Error(`${path} exists but could not be read (${error instanceof Error ? error.message : String(error)}) — refusing to overwrite it`);
+  }
+}
+
 // Only a MISSING file may be created from scratch. An unreadable existing file
 // is an error, never a reason to replace it.
 export function tomlReadForWrite(path: string): string {
@@ -609,20 +684,19 @@ export function tomlReadForWrite(path: string): string {
 /**
  * The one way a TOML config is written (0.15.0). The file as it was must
  * hold together (tomlStructureProblem), or nothing is written: an unreadable
- * file is never a reason to replace it. Then: backup, atomic write, and the
- * file as written is checked again. When that check fails, the backup goes
- * back and the write is reported as failed.
+ * file is never a reason to replace it. The new text is checked the same way
+ * before anything is written (0.20.0: the read-back proves the file is
+ * exactly this text, so checking it first means nothing has to be put back),
+ * then backup and compare-before-replace.
  */
-export function writeTomlChecked(path: string, before: string, next: string): void {
+export function writeTomlChecked(path: string, before: string, next: string, stamp: FileStamp): void {
   const already = before === "" ? "" : tomlStructureProblem(before);
   if (already) throw new Error(`${path} doesn't read as valid settings (${already}); fix it by hand first, nothing was written`);
+  const problem = tomlStructureProblem(next);
+  if (problem) throw new Error(`the change would have broken ${path} (${problem}); nothing was written, it is as it was`);
   const backup = backupFile(path);
-  writeTextAtomic(path, next);
-  const problem = tomlStructureProblem(readFileSync(path, "utf8"));
-  if (!problem) return;
-  if (backup) writeTextAtomic(path, readFileSync(backup, "utf8"));
-  else rmSync(path, { force: true });
-  throw new Error(`the change would have broken ${path} (${problem}); it was put back as it was`);
+  // Compare-before-replace (0.20.0): only if the file is still exactly what `before` was read from.
+  replaceGuarded(path, next, stamp, { backup });
 }
 
 /** Every server name a TOML file has, in any form (headers, inline tables, dotted keys). */
@@ -638,7 +712,8 @@ function tomlMcpWrite(path: string, name: string, def: McpDef | null, options: W
 
 /** Several servers into one TOML config: one fresh read, one backup, one checked write. Refusals come back by name. */
 function tomlMcpWriteMany(path: string, entries: Array<{ name: string; def: McpDef | null }>, options: WriteOptions = {}): Map<string, string> {
-  const before = tomlReadForWrite(path);
+  const { text: before, stamp } = tomlReadStamped(path);
+  if (options.expectVersion !== undefined && entries.some(({ name }) => entryVersionFromText("toml-mcp", before, name) !== options.expectVersion)) throw new Error(STALE_REVEAL);
   const names = tomlNamesAll(before);
   const refused = new Map<string, string>();
   let next = before;
@@ -651,7 +726,7 @@ function tomlMcpWriteMany(path: string, entries: Array<{ name: string; def: McpD
       refused.set(name, error instanceof Error ? error.message : String(error));
     }
   }
-  if (next !== before) writeTomlChecked(path, before, next);
+  if (next !== before) writeTomlChecked(path, before, next, stamp);
   return refused;
 }
 
@@ -897,8 +972,24 @@ export async function handleMcpMatrix(_input: Record<string, never>, { paseo }: 
   const allNames = [...new Set([...nameSets.values()].flatMap((set) => [...set]))].sort();
   // Every definition, read once per destination — not once per server × destination.
   const defsByDest = new Map(destinations.map((dest) => [dest.id, destRead(dest)] as const));
+  // 0.20.0: Claude's just-for-you copies, so "From all apps and projects" can name and take them out.
+  // Read only: this plugin never writes Claude's per-project entries (Claude Code rewrites ~/.claude.json constantly).
+  const localByName = new Map<string, Array<{ destId: string; project: string }>>();
+  const localDefs = new Map<string, McpDef>();
+  for (const dest of destinations) {
+    if (dest.provider !== "claude" || dest.format !== "json-mcp") continue;
+    const projects = (readJsonCached(dest.configPath) as { projects?: Record<string, { mcpServers?: Record<string, McpDef> }> } | null)?.projects ?? {};
+    for (const [project, entry] of Object.entries(projects)) {
+      for (const [name, def] of Object.entries(entry?.mcpServers ?? {})) {
+        localByName.set(name, [...(localByName.get(name) ?? []), { destId: dest.id, project }]);
+        if (!localDefs.has(name) && def && typeof def === "object") localDefs.set(name, def);
+      }
+    }
+  }
+  // Local-only names are listed too, marked by `localIn` with no `presentIn`.
+  const listed = [...new Set([...allNames, ...localByName.keys()])].sort();
 
-  const servers = allNames.map((name) => {
+  const servers = listed.map((name) => {
     const presentIn = destinations.filter((dest) => nameSets.get(dest.id)?.has(name)).map((dest) => dest.id);
     // Best definition for display: prefer a json-mcp source.
     let def: McpDef | null = null;
@@ -909,6 +1000,7 @@ export async function handleMcpMatrix(_input: Record<string, never>, { paseo }: 
         if (dest.format === "json-mcp") break;
       }
     }
+    if (!def) def = localDefs.get(name) ?? null;
     const transport: "stdio" | "http" | "unknown" = def?.command ? "stdio" : def?.url ? "http" : "unknown";
     // Key names only — env/header VALUES never leave the handler.
     const inlineCredentialsIn = destinations
@@ -924,6 +1016,7 @@ export async function handleMcpMatrix(_input: Record<string, never>, { paseo }: 
       inlineCredentialsIn,
       presentIn,
       ...(builtIn ? { builtIn: true } : {}),
+      ...(localByName.get(name)?.length ? { localIn: localByName.get(name) } : {}),
     };
   });
   return { destinations, servers };
@@ -1053,22 +1146,17 @@ export function editProjectFile(
   path: string,
   { create, change, check }: { create: boolean; change: (servers: Record<string, unknown>) => boolean; check: (servers: Record<string, unknown>) => string },
 ): boolean {
-  const existed = existsSync(path);
+  const { text: beforeText, stamp } = readStamped(path);
+  const existed = beforeText !== null;
   if (!existed && !create) throw new Error("file does not exist");
-  const config = existed ? readJson(path) : {};
+  const config = beforeText === null ? {} : parseJsonObject(beforeText);
   if (config === null) throw new Error("not valid JSON; refusing to overwrite it");
   const servers = (config.mcpServers as Record<string, unknown> | undefined) ?? {};
   if (!change(servers)) return false;
   config.mcpServers = servers;
-  backupFile(path);
-  writeJsonAtomic(path, config);
-  if (!existed) {
-    try {
-      chmodSync(path, 0o644);
-    } catch {
-      // Mode is cosmetic here; the content check below is what matters.
-    }
-  }
+  const backup = backupFile(path);
+  // Compare-before-replace (0.20.0); a new file is readable (0644) like the rest of a repo.
+  replaceGuarded(path, jsonLike(beforeText, config), stamp, { backup, newMode: 0o644 });
   const after = readJson(path);
   if (after === null) throw new Error("written file does not parse; restore it from the .bak-paseo-mcp copy beside it");
   const problem = check((after.mcpServers as Record<string, unknown> | undefined) ?? {});
@@ -1152,53 +1240,78 @@ export function destReadOne(dest: Destination, name: string): McpDef | null {
 export async function handleMcpDefAll({ name, reveal }: { name: string; reveal: boolean }, { paseo }: PluginHandlerContext) {
   const destinations = await buildDestinations(paseo);
   const rows = destinations.map((dest) => {
-    const def = destReadOne(dest, name);
+    // One fresh read gives both the values and their version (0.20.0), so a reveal carries the version it showed.
+    let text: string | null = null;
+    try {
+      text = readStamped(dest.configPath).text;
+    } catch {
+      text = null;
+    }
+    const def = entryFromText(dest.format, text, name);
     if (!def) return { destId: dest.id, found: false, kind: "http" as const, command: "", url: "", kvLines: "" };
+    const version = entryVersionFromText(dest.format, text, name);
     const kind = def.command ? ("stdio" as const) : ("http" as const);
     const record = (kind === "stdio" ? def.env : def.headers) ?? {};
-    const kvLines = Object.entries(record)
-      .map(([key, value]) => `${key}=${reveal ? value : maskValue(value)}`)
-      .join("\n");
+    const kvLines = kvText(reveal ? record : Object.fromEntries(Object.entries(record).map(([key, value]) => [key, maskValue(value)])));
+    // Keys hidden (0.20.0): the command's secret flags and the address's credentials are masked too, not only env and headers.
     return {
       destId: dest.id,
       found: true,
       kind,
-      command: def.command ? [def.command, ...(def.args ?? [])].join(" ") : "",
-      url: def.url ?? "",
+      command: def.command ? (reveal ? [def.command, ...(def.args ?? [])].join(" ") : maskedCommand(def)) : "",
+      url: def.url ? (reveal ? def.url : redactSecrets(def.url)) : "",
       kvLines,
+      version,
     };
   });
   return { rows };
 }
 
+/** The command line as the Fields form shows it with keys hidden. */
+export function maskedCommand(def: Pick<McpDef, "command" | "args">): string {
+  return def.command ? displayCommand(def.command, def.args ?? []) : "";
+}
+
+const MASK_MARK = "•••";
+
 export async function handleMcpEditOne(
-  input: { name: string; destId: string; kind: "stdio" | "http"; command?: string; url?: string; kvLines?: string },
+  input: {
+    name: string;
+    destId: string;
+    kind: "stdio" | "http";
+    command?: string;
+    url?: string;
+    kvLines?: string;
+    /** 0.20.0: the version the values were revealed at; a different version now refuses the save. */
+    version?: string;
+    /** 0.20.0: which fields the user changed after Reveal (diffed against the revealed values). */
+    changed?: { kind?: boolean; command?: boolean; url?: boolean; kvLines?: boolean };
+  },
   { paseo }: PluginHandlerContext,
 ) {
+  // 0.20.0, final review: masked text is never saved, anywhere in any field ("Authorization=Bearer •••").
+  if ([input.command, input.url, input.kvLines].some((value) => (value ?? "").includes(MASK_MARK))) {
+    return { ok: false, message: "Some of it is still hidden (•••). Press Reveal to edit and save the real values; nothing was written." };
+  }
   const destinations = await buildDestinations(paseo, { fresh: true });
   const dest = destinations.find((candidate) => candidate.id === input.destId);
   if (!dest) return { ok: false, message: `unknown destination ${input.destId}` };
-  // Masked values restore from THIS destination's stored secret — per-account
-  // auth settings are the point.
-  const stored = destReadOne(dest, input.name);
+  // A fresh read, not the cache: the values kept below must be the ones the version describes.
+  const read = readStamped(dest.configPath);
+  if (input.version !== undefined && entryVersionFromText(dest.format, read.text, input.name) !== input.version) return { ok: false, message: STALE_REVEAL };
+  const stored = entryFromText(dest.format, read.text, input.name);
+  const sameKind = Boolean(stored) && (stored?.command ? "stdio" : "http") === input.kind;
   const storedRecord = (input.kind === "stdio" ? stored?.env : stored?.headers) ?? {};
-  const parsed = parseKvLines(input.kvLines);
+  // A field the user didn't change is written back from what is stored, byte for byte: args stay the
+  // array they were (["--token", "two words"] is never re-split), the record keeps its exact values.
+  // With the revealed version matching, "unchanged" is decided against what was revealed (the form's own
+  // flags), not against today's file; without flags (an older app), against the stored values as before.
+  const flags = input.version !== undefined ? input.changed : undefined;
+  const commandKept = sameKind && !flags?.kind && (flags ? !flags.command : (input.command ?? "").trim() === storedCommandLine(stored).trim());
+  const urlKept = sameKind && !flags?.kind && (flags ? !flags.url : (input.url ?? "").trim() === (stored?.url ?? "").trim());
+  const recordKept = sameKind && !flags?.kind && (flags ? !flags.kvLines : kvComparable(input.kvLines ?? "") === kvComparable(kvText(storedRecord)));
   const record: Record<string, string> = {};
-  for (const [key, value] of Object.entries(parsed)) {
-    if (value.startsWith("•••")) {
-      // Renaming the key of a masked line would otherwise resolve to "" and
-      // silently drop the secret while reporting success.
-      if (!(key in storedRecord)) {
-        return {
-          ok: false,
-          message: `'${key}' has no stored value here — press Show keys and paste the real value, or keep the original key name`,
-        };
-      }
-      record[key] = storedRecord[key];
-      continue;
-    }
-    if (value !== "") record[key] = value;
-  }
+  for (const [key, value] of Object.entries(parseKvLines(input.kvLines))) if (value !== "") record[key] = value;
   // Start from what is stored and change only the four things this form owns.
   // Rebuilding the entry from the form dropped every key the form cannot show —
   // `type` (18 of 19 real Claude entries carry it, and an HTTP entry without it
@@ -1206,33 +1319,64 @@ export async function handleMcpEditOne(
   // an unrelated header edit).
   const def: McpDef = { ...(stored ?? {}) };
   if (input.kind === "stdio") {
-    const parts = (input.command ?? "").trim().split(/\s+/).filter(Boolean);
-    if (parts.length === 0) return { ok: false, message: "a connector on this computer needs a program to run" };
-    def.command = parts[0];
-    if (parts.length > 1) def.args = parts.slice(1);
-    else delete def.args;
+    if (!commandKept) {
+      const parts = (input.command ?? "").trim().split(/\s+/).filter(Boolean);
+      if (parts.length === 0) return { ok: false, message: "a connector on this computer needs a program to run" };
+      def.command = parts[0];
+      if (parts.length > 1) def.args = parts.slice(1);
+      else delete def.args;
+    }
     delete def.url;
     delete def.headers;
-    if (Object.keys(record).length > 0) def.env = record;
-    else delete def.env;
+    if (!recordKept) {
+      if (Object.keys(record).length > 0) def.env = record;
+      else delete def.env;
+    }
   } else {
-    if (!input.url?.trim()) return { ok: false, message: "a connector on the web needs a web address" };
-    def.url = input.url.trim();
+    if (!urlKept) {
+      if (!input.url?.trim()) return { ok: false, message: "a connector on the web needs a web address" };
+      def.url = input.url.trim();
+    }
     delete def.command;
     delete def.args;
     delete def.env;
-    if (Object.keys(record).length > 0) def.headers = record;
-    else delete def.headers;
+    if (!recordKept) {
+      if (Object.keys(record).length > 0) def.headers = record;
+      else delete def.headers;
+    }
   }
   // Only correct `type` when the transport itself changed: an entry that says
   // "sse" must keep saying "sse" through a header edit.
   if (def.type && (def.type === "stdio") !== (input.kind === "stdio")) def.type = input.kind === "stdio" ? "stdio" : "http";
   try {
-    destWrite(dest, input.name, def);
+    // The version is checked again on the write's own stamped read, so nothing slips in between.
+    destWrite(dest, input.name, def, input.version !== undefined ? { expectVersion: input.version } : {});
     return { ok: true, message: `updated '${input.name}' in ${dest.label} (backup saved)` };
   } catch (error) {
-    return { ok: false, message: `${dest.label}: ${error instanceof Error ? error.message : String(error)}` };
+    const message = error instanceof Error ? error.message : String(error);
+    return { ok: false, message: message === STALE_REVEAL ? message : `${dest.label}: ${message}` };
   }
+}
+
+/** The command line the Fields form shows once revealed: the program and its arguments, joined by spaces. */
+function storedCommandLine(def: McpDef | null): string {
+  return def?.command ? [def.command, ...(def.args ?? [])].join(" ") : "";
+}
+
+/** Env or headers as the Fields form shows them: one KEY=value per line. */
+export function kvText(record: Record<string, string>): string {
+  return Object.entries(record)
+    .map(([key, value]) => `${key}=${value}`)
+    .join("\n");
+}
+
+/** KEY=value lines compared without blank lines or surrounding spaces, as the form trims them. */
+function kvComparable(text: string): string {
+  return text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .join("\n");
 }
 
 export async function handleMcpRename({ name, newName }: { name: string; newName: string }, { paseo }: PluginHandlerContext) {
@@ -1454,7 +1598,14 @@ export async function handleMcpSync(): Promise<{ ok: boolean; log: string }> {
     const projects = (primary.projects as Record<string, Record<string, unknown>> | undefined) ?? {};
     for (const slot of slots.filter((entry) => entry.provider === "claude")) {
       const path = join(slot.dir, ".claude.json");
-      const config = existsSync(path) ? readJson(path) : {};
+      let read: ReturnType<typeof readStamped>;
+      try {
+        read = readStamped(path);
+      } catch (error) {
+        logs.push(`claude · ${slot.email}: SKIPPED — ${error instanceof Error ? error.message : String(error)}`);
+        continue;
+      }
+      const config = read.text === null ? {} : parseJsonObject(read.text);
       if (config === null) {
         logs.push(`claude · ${slot.email}: SKIPPED — ${path} exists but is not valid JSON`);
         continue;
@@ -1469,8 +1620,13 @@ export async function handleMcpSync(): Promise<{ ok: boolean; log: string }> {
         logs.push(`claude · ${slot.email}: already up to date`);
         continue;
       }
-      backupFile(path);
-      writeJsonAtomic(path, config);
+      try {
+        const backup = backupFile(path);
+        replaceGuarded(path, jsonLike(read.text, config), read.stamp, { backup });
+      } catch (error) {
+        logs.push(`claude · ${slot.email}: SKIPPED — ${error instanceof Error ? error.message : String(error)}`);
+        continue;
+      }
       logs.push(`claude · ${slot.email}: ${added} MCP server(s) added, trust copied to ${trusted} project(s)`);
     }
   }
@@ -1495,7 +1651,7 @@ export async function handleMcpSync(): Promise<{ ok: boolean; log: string }> {
     for (const slot of slots.filter((entry) => entry.provider === "codex")) {
       const path = join(slot.dir, "config.toml");
       try {
-        const before = tomlReadForWrite(path);
+        const { text: before, stamp } = tomlReadStamped(path);
         let text = before;
         // By name, in any form (an inline table counts): never clobber a per-account definition.
         const existing = tomlNamesAll(text);
@@ -1505,7 +1661,7 @@ export async function handleMcpSync(): Promise<{ ok: boolean; log: string }> {
           text = tomlApply(text, name, def);
           added += 1;
         }
-        if (text !== before) writeTomlChecked(path, before, text);
+        if (text !== before) writeTomlChecked(path, before, text, stamp);
         const skipped = byHand.filter((name) => !existing.has(name));
         logs.push(
           `codex · ${slot.email}: ${added} MCP server(s) added, ${existing.size} kept as-is${skipped.length > 0 ? `; copy ${skipped.join(", ")} by hand (settings over several lines)` : ""}`,

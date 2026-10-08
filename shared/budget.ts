@@ -52,7 +52,8 @@ export type WorkspaceProfile = {
 
 export type LoadScope = "project" | "local" | "user";
 
-export type LoadedServer = ProfileServer & { scope: LoadScope; configPath: string };
+/** `shadows` (0.20.0): the levels where the same name is also set up, hidden by this copy. */
+export type LoadedServer = ProfileServer & { scope: LoadScope; configPath: string; shadows?: LoadScope[] };
 
 export type WorkspaceLoad = {
   /** Paseo provider id the count is for, or "" when no editor is wired. */
@@ -174,7 +175,12 @@ export function loadFor(
   const seen = new Set<string>();
   const add = (list: ProfileServer[], scopeName: LoadScope, configPath: string) => {
     for (const entry of list) {
-      if (seen.has(entry.name)) continue;
+      if (seen.has(entry.name)) {
+        // The earlier level wins (local, project, user); remember what it hides.
+        const winner = servers.find((server) => server.name === entry.name);
+        if (winner && winner.scope !== scopeName && !winner.shadows?.includes(scopeName)) winner.shadows = [...(winner.shadows ?? []), scopeName];
+        continue;
+      }
       seen.add(entry.name);
       servers.push({ ...entry, scope: scopeName, configPath });
     }

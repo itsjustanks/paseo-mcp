@@ -2,7 +2,6 @@ import { spawn } from "node:child_process";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import type { Destination } from "../shared/contracts";
-import { scrubSecret } from "../shared/setup";
 import { forgetFile } from "./files";
 import { backupFile, destReadOne, destWrite, jsonMcpRead } from "./handlers";
 import { cliPath } from "./mcpjson";
@@ -158,7 +157,6 @@ export function addWithClaudeClient(dest: Destination, name: string, definition:
 async function addNow(dest: Destination, name: string, definition: Record<string, unknown>, clientSecret: string, secretless: boolean): Promise<ByoWrite> {
   const secret = clientSecret.trim();
   if (!secret && !secretless) return { ok: false, message: "No client secret was given, so nothing was written." };
-  const plain = (text: string) => scrubSecret(text, secret).replace(/\u001b\[[0-9;]*[A-Za-z]/g, "").trim().split("\n").slice(-2).join(" ").slice(0, 300);
   const binary = cliPath("claude");
   if (!binary) return { ok: false, message: "Claude Code isn't on this computer's PATH, and only Claude Code can store the client secret. Install it, or add the connector in a terminal with claude mcp add-json." };
   if (basename(dest.configPath) !== ".claude.json") return { ok: false, message: `${dest.configPath} isn't a Claude Code config file.` };
@@ -174,11 +172,11 @@ async function addNow(dest: Destination, name: string, definition: Record<string
   const result = await run(binary, args, secretless ? env : { ...env, MCP_CLIENT_SECRET: secret });
   forgetFile(dest.configPath);
   const failure = result.error
-    ? `claude could not be started: ${plain(result.error)}.`
+    ? "Claude Code could not be started."
     : result.killed
       ? `Claude Code didn't finish within ${Math.round(timeouts.termMs / 1000)} seconds and was stopped.`
       : result.code !== 0
-        ? `${(plain(result.output) || `claude mcp add-json stopped with code ${result.code}`).replace(/\.$/, "")}.`
+        ? `claude mcp add-json stopped with code ${result.code}; nothing it printed is shown here, since it can hold a key. Run it in a terminal to see why.`
         : /client secret could not be stored/i.test(result.output)
           ? "Claude Code could not store the client secret (its secure store was locked or missing)."
           : "";

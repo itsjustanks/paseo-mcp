@@ -1,0 +1,425 @@
+{
+  "about": "Cases for the shared redactor (paseo-mcp shared/redact.ts, redactSecrets): input -> expected. Reuse them in other plugins. Key-shaped values are written as {{NAME}} so this file never holds a full key pattern (GitHub push protection): build each from `placeholders` by joining its fragments, then replace {{NAME}} in input and expected before running a case.",
+  "placeholders": {
+    "PEM_RSA_BEGIN": [
+      "-----BEGIN RSA ",
+      "PRIVATE KEY-----"
+    ],
+    "PEM_RSA_END": [
+      "-----END RSA ",
+      "PRIVATE KEY-----"
+    ],
+    "PEM_BEGIN": [
+      "-----BEGIN ",
+      "PRIVATE KEY-----"
+    ],
+    "PEM_END": [
+      "-----END ",
+      "PRIVATE KEY-----"
+    ],
+    "PEM_BODY": [
+      "MIIEvQIBADAN",
+      "BgkqhkiG9w0BAQEFAASC"
+    ],
+    "JWT": [
+      "ey",
+      "JhbGciOiJIUzI1NiJ9",
+      ".",
+      "ey",
+      "JzdWIiOiIxMjM0NTY3ODkwIn0",
+      ".",
+      "dozjgNryP4J3jVmNHl0w5N"
+    ],
+    "LONG_BASE64": [
+      "4f9KxQ2mZ8pL1vR7tY3w",
+      "B6nC0dE5gH9jA2sD4fG6"
+    ],
+    "ANTHROPIC_KEY": [
+      "sk-",
+      "ant-",
+      "api03-AbCdEf0123456789"
+    ],
+    "GITHUB_TOKEN": [
+      "gh",
+      "p_",
+      "0123456789abcdefABCDEF"
+    ],
+    "SLACK_TOKEN": [
+      "xo",
+      "xb-",
+      "1234-5678-abcdefgh"
+    ],
+    "AWS_ACCESS_KEY_ID": [
+      "AK",
+      "IA",
+      "ABCDEFGHIJKLMNOP"
+    ]
+  },
+  "cases": [
+    {
+      "name": "review probe: lowercase scheme, short value",
+      "input": "Authorization: bearer short-lived-credential",
+      "expected": "Authorization: •••"
+    },
+    {
+      "name": "any Authorization scheme",
+      "input": "authorization: Basic abc",
+      "expected": "authorization: •••"
+    },
+    {
+      "name": "Proxy-Authorization header",
+      "input": "Proxy-Authorization: Digest username=\"a\", response=\"b\"",
+      "expected": "Proxy-Authorization: •••"
+    },
+    {
+      "name": "JSON Authorization header",
+      "input": "\"headers\": { \"Authorization\": \"Bearer abc.def\" }",
+      "expected": "\"headers\": { \"Authorization\": \"•••\" }"
+    },
+    {
+      "name": "TOML Authorization header",
+      "input": "\"Authorization\" = \"Token 123\"",
+      "expected": "\"Authorization\" = \"•••\""
+    },
+    {
+      "name": "review probe: quoted value hidden whole",
+      "input": "password=\"alpha beta\"",
+      "expected": "password=\"•••\""
+    },
+    {
+      "name": "single-quoted value hidden whole",
+      "input": "password='alpha beta' next",
+      "expected": "password='•••' next"
+    },
+    {
+      "name": "review probe: flag and value in a JSON array",
+      "input": "args: [\"--api-key\", \"short-lived-credential\"]",
+      "expected": "args: [\"--api-key\", \"•••\"]"
+    },
+    {
+      "name": "flag and value in a TOML array",
+      "input": "args = [ \"--token\", \"abc\", \"--verbose\" ]",
+      "expected": "args = [ \"--token\", \"•••\", \"--verbose\" ]"
+    },
+    {
+      "name": "flag and value in a command line",
+      "input": "npx server --api-key short-lived-credential --port 3000",
+      "expected": "npx server --api-key ••• --port 3000"
+    },
+    {
+      "name": "--flag=value and --bearer value",
+      "input": "npx server --token=abc --bearer xyz",
+      "expected": "npx server --token=••• --bearer •••"
+    },
+    {
+      "name": "--password, --secret and --auth",
+      "input": "run --password hunter2 --secret s --auth a",
+      "expected": "run --password ••• --secret ••• --auth •••"
+    },
+    {
+      "name": "env-style FOO_TOKEN=value",
+      "input": "GITHUB_TOKEN=ghx-short node server.js",
+      "expected": "GITHUB_TOKEN=••• node server.js"
+    },
+    {
+      "name": "env-style suffix _SECRET",
+      "input": "STRIPE_SECRET=abc OTHER=1",
+      "expected": "STRIPE_SECRET=••• OTHER=1"
+    },
+    {
+      "name": "JSON pair",
+      "input": "{\"client_secret\": \"s3cr3t value\", \"x\": 1}",
+      "expected": "{\"client_secret\": \"•••\", \"x\": 1}"
+    },
+    {
+      "name": "TOML pair",
+      "input": "client_secret = \"s3cr3t-value\"",
+      "expected": "client_secret = \"•••\""
+    },
+    {
+      "name": "YAML pair, quoted",
+      "input": "api_key: \"q w\"",
+      "expected": "api_key: \"•••\""
+    },
+    {
+      "name": "YAML pair, bare rest of line",
+      "input": "api_key: plain yaml value",
+      "expected": "api_key: •••"
+    },
+    {
+      "name": "YAML list item",
+      "input": "  - token: abc def",
+      "expected": "  - token: •••"
+    },
+    {
+      "name": "camelCase key",
+      "input": "{\"apiKey\": \"abc\", \"accessToken\": \"def\"}",
+      "expected": "{\"apiKey\": \"•••\", \"accessToken\": \"•••\"}"
+    },
+    {
+      "name": "access and refresh tokens",
+      "input": "access_token=aaa refresh_token=bbb",
+      "expected": "access_token=••• refresh_token=•••"
+    },
+    {
+      "name": "private key",
+      "input": "private_key = \"-----BEGIN KEY-----\"",
+      "expected": "private_key = \"•••\""
+    },
+    {
+      "name": "secret in a query string",
+      "input": "url = https://example.com/mcp?api_key=zzz&mode=1",
+      "expected": "url = https://example.com/mcp?api_key=•••&mode=1"
+    },
+    {
+      "name": "credentials in an address",
+      "input": "fetch https://user:hunter2@example.com/mcp failed",
+      "expected": "fetch https://•••@example.com/mcp failed"
+    },
+    {
+      "name": "OAuth code in a callback",
+      "input": "https://x.test/cb?code=authcode77&state=1",
+      "expected": "https://x.test/cb?code=•••&state=1"
+    },
+    {
+      "name": "sk- key",
+      "input": "using {{ANTHROPIC_KEY}} now",
+      "expected": "using ••• now"
+    },
+    {
+      "name": "GitHub token",
+      "input": "token {{GITHUB_TOKEN}} here",
+      "expected": "token ••• here"
+    },
+    {
+      "name": "Slack token",
+      "input": "{{SLACK_TOKEN}}",
+      "expected": "•••"
+    },
+    {
+      "name": "AWS key id",
+      "input": "{{AWS_ACCESS_KEY_ID}}",
+      "expected": "•••"
+    },
+    {
+      "name": "JWT",
+      "input": "jwt {{JWT}}",
+      "expected": "jwt •••"
+    },
+    {
+      "name": "long hex",
+      "input": "hash 0123456789abcdef0123456789abcdef0123 done",
+      "expected": "hash ••• done"
+    },
+    {
+      "name": "long base64",
+      "input": "refresh {{LONG_BASE64}} rejected",
+      "expected": "refresh ••• rejected"
+    },
+    {
+      "name": "already masked stays",
+      "input": "X-Api-Key = \"•••wxyz\"",
+      "expected": "X-Api-Key = \"•••wxyz\""
+    },
+    {
+      "name": "already masked YAML stays",
+      "input": "token: •••abcd",
+      "expected": "token: •••abcd"
+    },
+    {
+      "name": "false positive: tokenizer, monkey, keyboard, author (JSON)",
+      "input": "{\"tokenizer\": \"bpe\", \"monkey\": \"george\", \"keyboard\": \"us\", \"author\": \"ann\"}",
+      "expected": "{\"tokenizer\": \"bpe\", \"monkey\": \"george\", \"keyboard\": \"us\", \"author\": \"ann\"}"
+    },
+    {
+      "name": "false positive: tokenizer, monkey, keyboard, author (env)",
+      "input": "tokenizer=bpe monkey=george keyboard=us author=ann",
+      "expected": "tokenizer=bpe monkey=george keyboard=us author=ann"
+    },
+    {
+      "name": "false positive: flags",
+      "input": "run --tokenizer bpe --author ann --keyboard us",
+      "expected": "run --tokenizer bpe --author ann --keyboard us"
+    },
+    {
+      "name": "false positive: OAuth prose",
+      "input": "OAuth: sign in needed. 2 keys saved; the key is lost with it.",
+      "expected": "OAuth: sign in needed. 2 keys saved; the key is lost with it."
+    },
+    {
+      "name": "plain message",
+      "input": "wrote 'byterover-mcp' to Claude · me@example.com (backup saved)",
+      "expected": "wrote 'byterover-mcp' to Claude · me@example.com (backup saved)"
+    },
+    {
+      "name": "a time is not a pair",
+      "input": "Error at 10:30: connection refused",
+      "expected": "Error at 10:30: connection refused"
+    },
+    {
+      "name": "a path survives",
+      "input": "/Users/someone/.codex-accounts/work/config.toml is not valid JSON",
+      "expected": "/Users/someone/.codex-accounts/work/config.toml is not valid JSON"
+    },
+    {
+      "name": "exit code message survives",
+      "input": "codex mcp list stopped with exit code 1",
+      "expected": "codex mcp list stopped with exit code 1"
+    },
+    {
+      "name": "a secret pair inside a plain key's value",
+      "input": "claude mcp logout: token=abc123 refused",
+      "expected": "claude mcp logout: token=••• refused"
+    },
+    {
+      "name": "an already-masked header stays valid JSON",
+      "input": "{\n  \"headers\": {\n    \"Authorization\": \"•••cdef\"\n  }\n}",
+      "expected": "{\n  \"headers\": {\n    \"Authorization\": \"•••cdef\"\n  }\n}"
+    },
+    {
+      "name": "review 3 probe: multiline TOML PEM under a secret key",
+      "input": "private_key = \"\"\"\n{{PEM_BEGIN}}\n{{PEM_BODY}}\nABCDEFGHIJKLMNOPQRSTUVWXYZabcdef\n{{PEM_END}}\n\"\"\"",
+      "expected": "private_key = \"\"\"•••\"\"\""
+    },
+    {
+      "name": "review 3 probe: PEM continuation lines that are all letters, under a plain key",
+      "input": "cert = \"\"\"\n{{PEM_RSA_BEGIN}}\nQUJDREVGR0hJSktMTU5PUFFSU1RVVldY\nabcdefghijklmnopqrstuvwxyzABCDEF\n{{PEM_RSA_END}}\n\"\"\"",
+      "expected": "cert = \"\"\"\n•••\n\"\"\""
+    },
+    {
+      "name": "TOML literal multiline string under a secret key",
+      "input": "client_secret = '''\nline one\nline two\n'''",
+      "expected": "client_secret = '''•••'''"
+    },
+    {
+      "name": "TOML multiline string under a plain key: only the secret inside",
+      "input": "notes = \"\"\"\nhello token=abc123\n\"\"\"",
+      "expected": "notes = \"\"\"\nhello token=•••\n\"\"\""
+    },
+    {
+      "name": "PEM in a JSON-style string with \\n",
+      "input": "key = \"{{PEM_BEGIN}}\\nMIIE\\nABCD\\n{{PEM_END}}\\n\"",
+      "expected": "key = \"•••\\n\""
+    },
+    {
+      "name": "unterminated PEM keeps its quotes",
+      "input": "private_key = \"-----BEGIN KEY-----\"",
+      "expected": "private_key = \"•••\""
+    },
+    {
+      "name": "review 3 probe: short flag -p with a password",
+      "input": "server -p secretpass",
+      "expected": "server -p •••"
+    },
+    {
+      "name": "-p with a port stays visible",
+      "input": "server -p 3000",
+      "expected": "server -p 3000"
+    },
+    {
+      "name": "-p in a TOML args list: password hidden, port kept",
+      "input": "args = [\"-p\", \"hunter2\", \"-p\", \"8080\"]",
+      "expected": "args = [\"-p\", \"•••\", \"-p\", \"8080\"]"
+    },
+    {
+      "name": "--pass is secret, --passthrough is not",
+      "input": "--pass hunter2 --passthrough yes",
+      "expected": "--pass ••• --passthrough yes"
+    },
+    {
+      "name": "review 3 probe: bare Basic credential",
+      "input": "Basic dXNlcjpwYXNz",
+      "expected": "Basic •••"
+    },
+    {
+      "name": "Basic in prose stays",
+      "input": "use Basic authentication here",
+      "expected": "use Basic authentication here"
+    },
+    {
+      "name": "Token in prose stays",
+      "input": "Token expired",
+      "expected": "Token expired"
+    },
+    {
+      "name": "Token with a credential",
+      "input": "token a1b2c3d4e5",
+      "expected": "token •••"
+    },
+    {
+      "name": "review 3 probe: compact nested JSON",
+      "input": "{\"oauth\":{\"password\":\"secret\"}}",
+      "expected": "{\"oauth\":{\"password\":\"•••\"}}"
+    },
+    {
+      "name": "deep nested JSON with args",
+      "input": "{\"a\":{\"b\":{\"client_secret\":\"x\",\"ok\":\"keep\"}},\"args\":[\"--api-key\",\"k\",\"-p\",\"3000\"]}",
+      "expected": "{\"a\":{\"b\":{\"client_secret\":\"•••\",\"ok\":\"keep\"}},\"args\":[\"--api-key\",\"•••\",\"-p\",\"3000\"]}"
+    },
+    {
+      "name": "a secret key holding an object hides everything in it",
+      "input": "{\"credentials\": {\"user\": \"ann\", \"value\": \"b\"}, \"url\": \"https://h/mcp\"}",
+      "expected": "{\"credentials\": {\"user\": \"•••\", \"value\": \"•••\"}, \"url\": \"https://h/mcp\"}"
+    },
+    {
+      "name": "nested JSON inside text",
+      "input": "x = {\"oauth\":{\"password\":\"secret\"}} y",
+      "expected": "x = {\"oauth\":{\"password\":\"•••\"}} y"
+    },
+    {
+      "name": "pretty JSON keeps its indentation",
+      "input": "{\n    \"oauth\": {\n        \"password\": \"secret\"\n    }\n}",
+      "expected": "{\n    \"oauth\": {\n        \"password\": \"•••\"\n    }\n}"
+    },
+    {
+      "name": "release review probe: a secret flag's value that starts with -, in hidden JSON",
+      "input": "{\"command\": \"node\", \"args\": [\"server\", \"--token\", \"-fixtureSecret\"]}",
+      "expected": "{\"command\": \"node\", \"args\": [\"server\", \"--token\", \"•••\"]}"
+    },
+    {
+      "name": "a secret flag's value that starts with -, in a TOML args list",
+      "input": "args = [\"--token\", \"-fixtureSecret\", \"--port\", \"3000\"]",
+      "expected": "args = [\"--token\", \"•••\", \"--port\", \"3000\"]"
+    },
+    {
+      "name": "a secret flag's value that starts with -, on a command line",
+      "input": "server --token -fixtureSecret --port 3000",
+      "expected": "server --token ••• --port 3000"
+    },
+    {
+      "name": "final gate repro: a secret flag after a boolean flag, inside a command string in JSON",
+      "input": "{\"mcpServers\":{\"fixture\":{\"command\":\"sh\",\"args\":[\"-c\",\"exec fixture-server --verbose --api-key -fixtureSecret\"]}}}",
+      "expected": "{\"mcpServers\":{\"fixture\":{\"command\":\"sh\",\"args\":[\"-c\",\"exec fixture-server --verbose --api-key •••\"]}}}"
+    },
+    {
+      "name": "a secret flag after a boolean flag",
+      "input": "--verbose --api-key X",
+      "expected": "--verbose --api-key •••"
+    },
+    {
+      "name": "a short boolean flag, then a secret flag with a quoted value",
+      "input": "-v --token \"a b\"",
+      "expected": "-v --token \"•••\""
+    },
+    {
+      "name": "a boolean flag, then --flag=value starting with -",
+      "input": "--quiet --password=-x",
+      "expected": "--quiet --password=•••"
+    },
+    {
+      "name": "a boolean flag, a secret flag with a single-quoted value, then a port that stays",
+      "input": "cmd --debug --secret 'y z' --port 3000",
+      "expected": "cmd --debug --secret '•••' --port 3000"
+    },
+    {
+      "name": "the same command string in a TOML args list",
+      "input": "args = [\"-c\", \"exec fixture-server --verbose --api-key -fixtureSecret\"]",
+      "expected": "args = [\"-c\", \"exec fixture-server --verbose --api-key •••\"]"
+    },
+    {
+      "name": "a backslash-escaped space stays in the value it belongs to",
+      "input": "cmd --api-key a\\ b --x",
+      "expected": "cmd --api-key ••• --x"
+    }
+  ]
+}

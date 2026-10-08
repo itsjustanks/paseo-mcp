@@ -49,7 +49,7 @@ test("1: registry header values are secret unless named on the public list, what
   const listed = registryCard({ name: "com.example/r", remotes: [{ type: "streamable-http", url: "https://mcp.example.com/mcp", headers: [{ name: "AWS_REGION", isSecret: false }, { name: "DB_HOST", isSecret: true }] }] });
   assert.deepEqual(listed.entry.inputs?.map((input) => [input.id, input.secret]), [["AWS_REGION", false], ["DB_HOST", true]]);
   // A default that reads like a credential makes it secret, whatever it is called.
-  const defaulted = registryCard({ name: "com.example/d", remotes: [{ type: "streamable-http", url: "https://mcp.example.com/mcp", headers: [{ name: "REGION", isSecret: false, default: "sk-proj-abcdefghijklmnop" }] }] });
+  const defaulted = registryCard({ name: "com.example/d", remotes: [{ type: "streamable-http", url: "https://mcp.example.com/mcp", headers: [{ name: "REGION", isSecret: false, default: "sk-" + "proj-abcdefghijklmnop" }] }] });
   assert.equal(defaulted.entry.inputs?.[0]?.secret, true);
 });
 

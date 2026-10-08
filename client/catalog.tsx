@@ -1,6 +1,5 @@
 /** Add a connector: the gallery behind "Add connector", its install sheet, and "Copy for a team list". */
 import { useRpc } from "@getpaseo/plugin/client";
-import { useToast } from "@getpaseo/plugin/client/react-native";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Image, Text, View } from "react-native";
@@ -51,11 +50,13 @@ import {
   Toolbar,
   alpha,
   copyToClipboard,
+  useToast,
   useTokens,
   type Status,
   TYPE,
 } from "./ui";
 import { LibrariesPanel, SecretField } from "./libraries";
+import { EVERYWHERE, startingScope, thisProject } from "../shared/scope";
 import { useOpenLink } from "./links";
 
 type Project = { name: string; path: string; servers: number };
@@ -186,7 +187,10 @@ export function CatalogGallery({
   onInstalled,
   onOpenServer,
   ownedReady = true,
+  start,
 }: {
+  /** 0.20.0: where Add starts, from the scope the user was browsing. */
+  start?: { scope: "user" | "project"; projectPath?: string } | null;
   destinations: Destination[];
   /** 0.19.2: false until your connectors are read; the gallery says "Checking…" instead of a count that changes. */
   ownedReady?: boolean;
@@ -260,6 +264,7 @@ export function CatalogGallery({
         card={picked}
         destinations={destinations}
         projects={data?.projects ?? []}
+        start={start ?? null}
         onBack={() => {
           setPicked(null);
           void catalogQuery.refetch(); // an add changes which cards say "Added"
@@ -380,6 +385,7 @@ function InstallSheet({
   card,
   destinations,
   projects,
+  start,
   onBack,
   onInstalled,
   onOpenServer,
@@ -387,6 +393,7 @@ function InstallSheet({
   card: CatalogCard;
   destinations: Destination[];
   projects: Project[];
+  start: { scope: "user" | "project"; projectPath?: string } | null;
   onBack: () => void;
   onInstalled: () => void;
   onOpenServer: (name: string) => void;
@@ -405,13 +412,17 @@ function InstallSheet({
   // "Add to more": only the places that lack it are picked to start with.
   const missingEditors = destinations.filter((dest) => !added?.editors.includes(dest.id) && support(dest).ok);
   const missingProjects = projects.filter((project) => !added?.projects.includes(project.path));
-  const [scope, setScope] = useState<"user" | "project">(() => (projectAllowed && added && missingEditors.length === 0 && missingProjects.length > 0 ? "project" : "user"));
+  // 0.20.0: start on the scope the user was browsing; the choice stays explicit below.
+  const [scope, setScope] = useState<"user" | "project">(() =>
+    startingScope({ browsing: start?.scope ?? null, projectAllowed, added: Boolean(added), missingApps: missingEditors.length, missingProjects: missingProjects.length }),
+  );
   // Editors an agent can run by default; slots no provider is wired to start unticked.
   const [targets, setTargets] = useState<string[]>(() => {
     const wired = missingEditors.filter((dest) => dest.providerId);
     return (wired.length > 0 || !added ? wired : missingEditors).map((dest) => dest.id);
   });
-  const [projectPath, setProjectPath] = useState((missingProjects[0] ?? projects[0])?.path ?? "");
+  const [projectPath, setProjectPath] = useState((projects.find((project) => project.path === start?.projectPath) ?? missingProjects[0] ?? projects[0])?.path ?? "");
+  const chosenProject = projects.find((project) => project.path === projectPath);
   const [name, setName] = useState(added?.name ?? entry.id);
   const [values, setValues] = useState<Record<string, string>>({});
   const [clientId, setClientId] = useState("");
@@ -526,11 +537,16 @@ function InstallSheet({
             value={scope}
             onChange={setScope}
             options={[
-              { value: "user", label: "My AI apps" },
-              { value: "project", label: "One project" },
+              { value: "user", label: EVERYWHERE },
+              { value: "project", label: "This project" },
             ]}
           />
         ) : null}
+        <Text style={t.text.caption}>
+          {scope === "user"
+            ? "Everywhere: it goes into the AI apps you pick, so every project gets it."
+            : `This project: it goes into ${chosenProject ? `${chosenProject.name} · .mcp.json` : "the project's .mcp.json"}, for anyone who opens that project.`}
+        </Text>
         {scope === "user" ? (
           <Card padded={false}>
             {destinations.length === 0 ? <EmptyState title="No AI app found" body="None of Claude, Codex, Kimi or Grok is set up on this computer yet." /> : null}
@@ -560,7 +576,7 @@ function InstallSheet({
                 selected={project.path === projectPath}
                 onPress={() => setProjectPath(project.path)}
                 title={project.name}
-                subtitle={`${project.servers} connector${project.servers === 1 ? "" : "s"} · ${project.path}`}
+                subtitle={`${project.servers} connector${project.servers === 1 ? "" : "s"} · ${project.name} · .mcp.json`}
                 trailing={project.path === projectPath ? <Tag label="Chosen" tone="ok" /> : added?.projects.includes(project.path) ? <Tag label="Has it" /> : null}
               />
             ))}
@@ -647,7 +663,7 @@ function InstallSheet({
 
       <View style={{ flexDirection: "row", gap: t.space.sm }}>
         <Button
-          label={scope === "user" ? `Add to ${targets.length} app${targets.length === 1 ? "" : "s"}` : "Add to the project"}
+          label={scope === "user" ? `Add everywhere (${targets.length} app${targets.length === 1 ? "" : "s"})` : `Add to ${thisProject(chosenProject?.name ?? "")}`}
           variant="primary"
           loading={install.isPending}
           disabled={!current || !plan?.ok || secretIssues.length > 0}
@@ -761,14 +777,14 @@ export function CopyCatalogEntryButton({ name }: { name: string }) {
   const [fallback, setFallback] = useState("");
   const copy = useMutation({
     mutationFn: () => callEntry({ name }),
-    onSuccess: (result) => {
+    onSuccess: async (result) => {
       if (!result.ok) return toast.error(result.message);
-      if (copyToClipboard(result.json)) {
+      if (await copyToClipboard(result.json)) {
         setFallback("");
         toast.show(`Copied ${name} for a team list. ${result.message}`, { variant: "success" });
       } else {
         setFallback(result.json);
-        toast.show("No clipboard here; the entry is shown below to select.", { variant: "warning" });
+        toast.show("Couldn't copy. The entry is shown below to select.", { variant: "warning" });
       }
     },
     onError: (error) => toast.error(plainError(error)),

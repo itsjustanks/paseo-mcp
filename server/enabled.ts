@@ -1,5 +1,7 @@
 import type { PluginHandlerContext } from "@getpaseo/plugin/server";
+import { homedir } from "node:os";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { readStamped, replaceGuarded } from "./safe-write";
 import { dirname, join } from "node:path";
 import { loadFor, scopeForProvider, type LoadedServer } from "../shared/budget";
 import { unexplainedServers } from "../shared/agent-record";
@@ -30,6 +32,7 @@ import {
   jsonMcpRead,
   readJson,
   redactDetail,
+  jsonLike,
   writeJsonAtomic,
   type McpDef,
 } from "./handlers";
@@ -98,9 +101,13 @@ export function writeInjectionEnabled(path: string, directory: string, name: str
 
 export function readClaudeConfig(path: string): ClaudeConfig {
   if (!existsSync(path)) throw new Error(`${path} does not exist`);
+  return parseClaudeConfig(path, readFileSync(path, "utf8"));
+}
+
+function parseClaudeConfig(path: string, text: string): ClaudeConfig {
   let parsed: unknown;
   try {
-    parsed = JSON.parse(readFileSync(path, "utf8"));
+    parsed = JSON.parse(text);
   } catch (error) {
     throw new Error(`${path} is not valid JSON (${error instanceof Error ? error.message : String(error)}); refusing to touch it`);
   }
@@ -157,6 +164,7 @@ export async function handleMcpAgentServers(
       configPath: server.configPath,
       inlineCredentials: hasInlineCredentials(def),
       enabled: switchVerdict(scope?.provider ?? "", server.scope, entry, server.name, injectionDisabled),
+      ...(server.shadows?.length ? { shadows: server.shadows } : {}),
     };
   });
 
@@ -193,6 +201,7 @@ export async function handleMcpAgentServers(
       : {}),
     ...(toolSearch ? { toolSearch } : {}),
     ...(pluginServers ? { pluginServers } : {}),
+    home: homedir(),
   };
 }
 
@@ -211,13 +220,16 @@ export function writeClaudeEnabled(
   name: string,
   enabled: boolean,
 ): { state: ReturnType<typeof readClaudeEnabled>; changed: boolean } {
-  const before = readClaudeConfig(configPath);
+  // Stamped at the read (0.20.0): Claude Code rewrites this file often, so the write goes ahead only if it is unchanged.
+  const read = readStamped(configPath);
+  if (read.text === null) throw new Error(`${configPath} does not exist`);
+  const before = parseClaudeConfig(configPath, read.text);
   const next = setClaudeEnabled(before, directory, lever, name, enabled);
   assertUnrelatedKeysKept(before, next, directory);
   const changed = JSON.stringify(before.projects?.[directory] ?? null) !== JSON.stringify(next.projects?.[directory] ?? null);
   if (!changed) return { state: readClaudeEnabled(before, directory, lever, name), changed };
-  backupFile(configPath);
-  writeJsonAtomic(configPath, next);
+  const backup = backupFile(configPath);
+  replaceGuarded(configPath, jsonLike(read.text, next), read.stamp, { backup });
   const after = readClaudeConfig(configPath);
   assertUnrelatedKeysKept(before, after, directory);
   const state = readClaudeEnabled(after, directory, lever, name);
@@ -236,7 +248,8 @@ export async function handleMcpSetEnabled(
   if (!server) return { ok: false, message: `'${name}' is not a connector this agent loads` };
   if (!current.scope) return { ok: false, message: "No editor config is wired to this provider" };
   const lever = leverFor(current.scope.provider, server.scope);
-  if (lever === "none") return { ok: false, message: server.enabled.reason };
+  // Read-only rows (Claude's "just for you" copies, 0.20.0) are refused here too, not only hidden in the panel.
+  if (lever === "none" || !server.enabled.writable) return { ok: false, message: server.enabled.reason };
   try {
     if (lever === "injection") {
       const { state, changed } = writeInjectionEnabled(injectionStorePath(), current.directory, name, enabled);

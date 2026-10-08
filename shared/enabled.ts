@@ -108,6 +108,19 @@ export function switchVerdict(
   name: string,
   injectionDisabled: readonly string[] = [],
 ): SwitchVerdict {
+  const verdict = baseSwitchVerdict(provider, scope, entry, name, injectionDisabled);
+  // 0.20.0: Claude Code's "just for you" copies are read only here; their state is shown, not changed.
+  if (scope === "local") return { ...verdict, writable: false, reason: `Claude Code's own copy for this project, just for you. Change or remove it in Claude Code (claude mcp remove ${name} -s local).` };
+  return verdict;
+}
+
+function baseSwitchVerdict(
+  provider: string,
+  scope: LoadScope,
+  entry: ClaudeProjectEntry | null | undefined,
+  name: string,
+  injectionDisabled: readonly string[] = [],
+): SwitchVerdict {
   const lever = leverFor(provider, scope);
   if (lever === "none") return { state: "enabled", writable: false, lever, reason: noSwitchReason(provider, scope) };
   if (lever === "injection") {

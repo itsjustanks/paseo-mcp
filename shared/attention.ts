@@ -20,6 +20,7 @@
  * sidebar row's dot.
  */
 import { resultNeedsAttention, scopedToDirectory, type McpHealthReport, type McpHealthScope } from "./contracts";
+import { EVERYWHERE, thisProject } from "./scope";
 
 /** The agent a chat runs: its Paseo provider id and its working directory ("" when unknown). */
 export type AttentionAgent = { provider: string; cwd: string };
@@ -27,7 +28,15 @@ export type AttentionAgent = { provider: string; cwd: string };
 /** A connector some account still has to sign in to, and the Paseo provider ids whose agents use that account. */
 export type SignInNeed = { name: string; providerIds: string[] };
 
-export type ChatAttention = { failing: string[]; signIn: string[] };
+/** `where` (0.20.0, the sidebar popover only): each name's scope in plain words, "Everywhere" or "This project · data-glue". */
+export type ChatAttention = { failing: string[]; signIn: string[]; where?: Record<string, string> };
+
+/** Where a connector the report knows is set up: Everywhere when any app's own settings have it, else its project(s). */
+export function whereLabel(scopes: readonly Pick<McpHealthScope, "level" | "label">[]): string {
+  if (scopes.length === 0 || scopes.some((scope) => scope.level === "user")) return EVERYWHERE;
+  const projects = [...new Set(scopes.map((scope) => scope.label))];
+  return projects.length === 1 ? thisProject(projects[0]) : `${projects.length} projects`;
+}
 
 /** Trailing slashes off, so `/a/b/` and `/a/b` are one folder. */
 const folder = (path: string) => path.replace(/[\\/]+$/, "");
@@ -115,7 +124,9 @@ export function hostAttentionNames(report: McpHealthReport | null | undefined, s
   const failing = (report?.results ?? []).filter((entry) => resultNeedsAttention(entry)).map((entry) => entry.name);
   const names = new Set((signIn ?? []).filter((need) => listedNeed(report, need)).map((need) => need.name));
   for (const name of failing) names.delete(name);
-  return { failing, signIn: [...names].sort() };
+  const where: Record<string, string> = {};
+  for (const name of [...failing, ...names]) where[name] = whereLabel(report?.results.find((entry) => entry.name === name)?.scopes ?? []);
+  return { failing, signIn: [...names].sort(), where };
 }
 
 /** What a Claude config switches off, per folder: the folders whose `disabledMcpServers` names this connector. */

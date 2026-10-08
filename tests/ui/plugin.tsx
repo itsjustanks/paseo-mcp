@@ -16,7 +16,8 @@ const params = new URLSearchParams(location.search);
 const empty = params.has("empty"), failed = params.has("error");
 const calls: string[] = [];
 const toasts: { message: string; variant: string }[] = [];
-Object.assign(window, { __fixtureCalls: calls, __toasts: toasts });
+const removeInputs: unknown[] = [];
+Object.assign(window, { __fixtureCalls: calls, __toasts: toasts, __removeInputs: removeInputs });
 
 const HOME = "/home/demo";
 const destinations = [
@@ -27,7 +28,7 @@ const destinations = [
 ];
 const [claude, codex, work, kimi] = destinations.map((d) => d.id);
 const servers = [
-  { name: "heroui-pro", transport: "http", detail: "https://mcp.heroui.pro/mcp", authStyle: "inline-credentials", inlineCredentialsIn: [claude, codex], presentIn: [claude, codex, work, kimi] },
+  { name: "heroui-pro", transport: "http", detail: "https://mcp.heroui.pro/mcp", authStyle: "inline-credentials", inlineCredentialsIn: [claude, codex], presentIn: [claude, codex, work, kimi], localIn: [{ destId: claude, project: `${HOME}/projects/data-glue` }] },
   { name: "jam", transport: "http", detail: "https://mcp.jam.dev/mcp", authStyle: "oauth-or-none", inlineCredentialsIn: [], presentIn: [claude, codex] },
   { name: "posthog", transport: "http", detail: "https://mcp.posthog.com/mcp", authStyle: "oauth-or-none", inlineCredentialsIn: [], presentIn: [claude] },
   { name: "playwright", transport: "stdio", detail: "npx @playwright/mcp@latest", authStyle: "oauth-or-none", inlineCredentialsIn: [], presentIn: [claude, codex, work, kimi] },
@@ -265,7 +266,7 @@ async function call(contract: any, input: any) {
     }
     case "def-all": {
       const server = servers.find((s) => s.name === input.name)!;
-      return { rows: destinations.map((d) => ({ destId: d.id, found: server.presentIn.includes(d.id), kind: server.transport === "http" ? "http" : "stdio", command: server.transport === "stdio" ? server.detail : "", url: server.transport === "http" ? server.detail : "", kvLines: server.inlineCredentialsIn.includes(d.id) ? "Authorization=Bearer •••a1b2" : "" })) };
+      return { rows: destinations.map((d) => ({ destId: d.id, found: server.presentIn.includes(d.id), kind: server.transport === "http" ? "http" : "stdio", command: server.transport === "stdio" ? server.detail : "", url: server.transport === "http" ? server.detail : "", kvLines: server.inlineCredentialsIn.includes(d.id) ? (input.reveal ? "Authorization=Bearer demo-token-a1b2" : "Authorization=Bearer •••a1b2") : "" })) };
     }
     case "raw-put": return { ok: true, issues: [], warnings: [], preview: input.json, dropped: [], message: input.dryRun ? "Checked clean." : "Written." };
     case "import-parse": {
@@ -297,8 +298,9 @@ async function call(contract: any, input: any) {
         { name: "supabase", transport: "stdio", detail: "npx -y @supabase/mcp-server", scope: "project", configPath: profile.projectConfigPath, inlineCredentials: true },
         { name: "jam", transport: "http", detail: "https://mcp.jam.dev/mcp", scope: "project", configPath: profile.projectConfigPath, inlineCredentials: false },
         ...userList.filter((s) => !["jam", "supabase"].includes(s.name)).map((s) => ({ name: s.name, transport: s.transport, detail: s.detail, scope: "user", configPath: scopeId, inlineCredentials: s.inlineCredentialsIn.includes(scopeId) })),
-      ].map((row) => ({ ...row, enabled: verdict(row.scope, row.name) }));
-      return { directory: `${HOME}/projects/data-glue`, scope: { id: scopeId, label: destinations.find((d) => d.id === scopeId)!.label, provider: claudeP ? "claude" : "codex", providerId: provider, configPath: scopeId }, projectIncluded: true, projectNote: "", servers: rows, account: accounts.find((a) => a.provider === (claudeP ? "claude" : "codex")) ?? null, paseoTools: (() => { const load = paseoLoad(); return { tools: load.tools[provider] ?? 0, blocker: load.blocker, asOf: load.asOf, source: load.source }; })(), toolSearch: toolSearchMap()?.[provider], ...(input.agentId && params.has("plugin-servers") ? { pluginServers: [{ name: "shared-browser", transport: "stdio", note: "runs on demand" }, { name: "linear-remote", transport: "http", tools: 23, note: "23 tools" }] } : {}) };
+      // 0.20.0: a project entry that is also set up everywhere hides that copy.
+      ].map((row) => ({ ...row, enabled: verdict(row.scope, row.name), ...(row.scope !== "user" && userList.some((s) => s.name === row.name) ? { shadows: ["user"] } : {}) }));
+      return { home: HOME, directory: `${HOME}/projects/data-glue`, scope: { id: scopeId, label: destinations.find((d) => d.id === scopeId)!.label, provider: claudeP ? "claude" : "codex", providerId: provider, configPath: scopeId }, projectIncluded: true, projectNote: "", servers: rows, account: accounts.find((a) => a.provider === (claudeP ? "claude" : "codex")) ?? null, paseoTools: (() => { const load = paseoLoad(); return { tools: load.tools[provider] ?? 0, blocker: load.blocker, asOf: load.asOf, source: load.source }; })(), toolSearch: toolSearchMap()?.[provider], ...(input.agentId && params.has("plugin-servers") ? { pluginServers: [{ name: "shared-browser", transport: "stdio", note: "runs on demand" }, { name: "linear-remote", transport: "http", tools: 23, note: "23 tools" }] } : {}) };
     }
     // 0.14.0: the context meter from the real estimator over the agent-servers
     // fixture, with its tool-search verdict (Claude: on, so deferred; ?routed: off). ?no-usage: the agent has not reported
@@ -366,6 +368,7 @@ async function call(contract: any, input: any) {
     case "add": return { ok: true, message: `Added ${input.name} to ${input.targets.length} editors.` };
     case "apply": return { ok: true, message: `Copied ${input.name} to ${input.targets.length} editors.` };
     case "remove": {
+      removeInputs.push(input);
       const removed = [...(input.targets ?? []).map((id: string) => destinations.find((d) => d.id === id)?.label ?? id), ...(input.projectFiles ?? [])];
       return { ok: removed.length > 0, message: `removed '${input.name}' from: ${removed.join(", ")} (backups saved).`, removed, skipped: [] };
     }
@@ -410,6 +413,16 @@ async function call(contract: any, input: any) {
 /** For the preview page: the same fake host, outside a component (the chip registry reads through it). */
 export const callPreviewRpc = (contract: any, input: unknown) => call(contract, input);
 export function useRpc(contract: any) { return useCallback((input: unknown) => call(contract, input), [contract]); }
+/** 0.20.0: the app's Paseo session for "Ask an agent": two chats, and every send recorded (window.__sent). */
+const sent: Array<{ id: string; text: string }> = [];
+Object.assign(window, { __sent: sent });
+const fakePaseo = {
+  agents: {
+    list: async () => ({ entries: [{ agent: { id: "agent-1", title: "Tidy the data-glue repo", provider: "claude", status: "idle" } }, { agent: { id: "agent-2", title: "Fix the build", provider: "codex", status: "running" } }] }),
+    ref: (id: string) => ({ send: async (text: string) => { await delay(150); sent.push({ id, text }); } }),
+  },
+};
+export function usePaseo() { if (params.has("no-paseo")) throw new Error("no session"); return fakePaseo; }
 export function useWorkspace<T>(_id: string, select: (workspace: { name: string; directory: string }) => T): T { return select({ name: "data-glue", directory: `${HOME}/projects/data-glue` }); }
 export function useAgent<T>(id: string, select: (agent: { id: string; workspaceId: string; provider: string; model: string | null }) => T): T { return select({ id, workspaceId: "ws-1", provider: params.get("provider") ?? "codex", model: params.get("provider") === "claude" ? "claude-opus-5-5" : "gpt-5-codex" }); }
 const settingsValues: Record<string, unknown> = { injectWorkspaceServers: !params.has("inject-off"), providers: ["codex"], skipInlineCredentialServers: true, backgroundChecks: true, intervalMinutes: 10, showComposerPill: true, chatSignInNotices: true, hideAiRouter: params.has("promo-hidden"), libraries: [
@@ -444,10 +457,14 @@ export function SidebarRow({ icon, label, onPress, active, trailing }: { icon?: 
     {trailing}
   </View>;
 }
-export const Modal = Object.assign(({ children, open, title }: any) => open ? <View role="dialog" aria-label={title} style={{ position: "absolute", inset: 0, zIndex: 100, backgroundColor: "rgba(0,0,0,0.7)", alignItems: "center", justifyContent: "center" }}><View style={{ maxWidth: 520, padding: 20, backgroundColor: "#1a2029" }}><Text style={{ color: "#eef1f6", fontSize: 18 }}>{title}</Text>{children}</View></View> : null, { Content: ({ children }: any) => <View>{children}</View> });
-export function useToast() {
+// ?no-modal, ?no-toast, ?no-copy: an app without that export (0.20.0 falls back to the old way).
+export const Modal = params.has("no-modal") ? undefined : Object.assign(({ children, open, title }: any) => open ? <View role="dialog" aria-label={title} style={{ position: "fixed" as any, inset: 0, zIndex: 100, backgroundColor: "rgba(0,0,0,0.7)", alignItems: "center", justifyContent: "center" }}><View style={{ maxWidth: 520, padding: 20, backgroundColor: "#1a2029" }}><Text style={{ color: "#eef1f6", fontSize: 18 }}>{title}</Text>{children}</View></View> : null, { Content: ({ children }: any) => <View>{children}</View> });
+/** The app's clipboard (0.20.0 copies through it); the preview records the text rather than touching the real clipboard. */
+export const copied: string[] = [];
+export const copyText = params.has("no-copy") ? undefined : async (text: string): Promise<void> => { copied.push(text); console.info("[copy]", text.length, "chars"); };
+export const useToast = params.has("no-toast") ? undefined : function useToast() {
   return {
     show(message: string, options?: { variant?: string }) { toasts.push({ message, variant: options?.variant ?? "default" }); console.info("[toast]", options?.variant ?? "default", message); },
     error(message: string) { toasts.push({ message, variant: "error" }); console.error("[toast] error", message); },
   };
-}
+};

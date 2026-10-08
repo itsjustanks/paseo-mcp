@@ -10,6 +10,7 @@
  * and reads the answer the way a client would.
  */
 import type { McpHealthStatus } from "./contracts";
+import { redactSecrets } from "./redact";
 
 export const PROBE_TIMEOUT_MS = 5000;
 
@@ -145,7 +146,8 @@ export function redactNote(note: string, url: string, headers: Record<string, st
   // Belt and braces: query fragments and long opaque tokens that slipped through.
   out = out.replace(/[?&][A-Za-z0-9_-]+=[^\s&]+/g, "[redacted]");
   out = out.replace(/\b(eyJ[A-Za-z0-9_-]{8,}|[A-Za-z0-9_-]{32,})\b/g, "[redacted]");
-  return out;
+  // And the shared redactor every message a person sees goes through (0.20.0).
+  return redactSecrets(out);
 }
 
 // ------------------------------------------------------------------- probe

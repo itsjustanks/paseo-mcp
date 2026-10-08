@@ -1,7 +1,6 @@
 /** What an agent's chat used (the agent panel's fold-out) and the in-chat sign-in card (0.14.0). */
 import type { PluginTimelineItemProps } from "@getpaseo/plugin/client";
 import { useAgent, useRpc } from "@getpaseo/plugin/client";
-import { useToast } from "@getpaseo/plugin/client/react-native";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import React, { useMemo, useState } from "react";
 import { Text, View } from "react-native";
@@ -11,7 +10,7 @@ import { mcpAgentChat, mcpAgentServers, mcpTurnOffUnused } from "../shared/contr
 import { CHECKING_POLL_MS, backoffMs, failureStreak } from "../shared/schedule";
 import { SWITCH_EFFECT_NOTE } from "../shared/enabled";
 import { setSignInFocus } from "./focus";
-import { AccordionItem, Button, Loading, Notice, TokensProvider, useTokens, useUi } from "./ui";
+import { AccordionItem, Button, Loading, Notice, TokensProvider, useTokens, useUi, useToast } from "./ui";
 
 export const AGENT_CHAT_QUERY_KEY = ["paseo-mcp", "agent-chat"] as const;
 

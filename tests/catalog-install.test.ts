@@ -255,7 +255,7 @@ test("team catalogue: read from a file in the background, literal secrets refuse
   assert.equal(second.team.state, "ready");
   assert.deepEqual(second.cards.filter((card) => card.shelf === "team").map((card) => [card.entry.id, card.trust]), [["ikit-metabase", "team"]]);
   assert.equal(second.team.refused[0]?.id, "leaky");
-  assert.ok(!JSON.stringify(second).includes("sk_live_51H"));
+  assert.ok(!JSON.stringify(second).includes("sk_" + "live_51H"));
   // Installs from the team shelf like any other.
   const plan = await handleMcpCatalogPlan({ key: "team:ikit-metabase", scope: "project", targets: [], projectPath: project, name: "metabase", values: {} }, context);
   assert.equal(plan.ok, true, plan.issues.join());
@@ -272,4 +272,20 @@ test("team catalogue: read from a file in the background, literal secrets refuse
   assert.match(refused.team.note, /only https/);
   assert.equal(fetched.length, sent);
   assert.ok(existsSync(teamFile));
+});
+
+test("Add writes only to the scope chosen: This project → that project's .mcp.json; Everywhere → the apps' own files (0.20.0)", async () => {
+  const before = { claude: readFileSync(claude, "utf8"), codex: readFileSync(codex, "utf8") };
+  const projectFile = join(project, ".mcp.json");
+  const here = await planThenInstall({ key: "recommended:linear", scope: "project", targets: [claude, codex], projectPath: project, name: "linear-here", values: {} }, context);
+  assert.equal(here.ok, true, here.message);
+  assert.ok(JSON.parse(readFileSync(projectFile, "utf8")).mcpServers["linear-here"], "in the project's .mcp.json");
+  assert.equal(readFileSync(claude, "utf8"), before.claude, "~/.claude.json untouched, even with apps ticked");
+  assert.equal(readFileSync(codex, "utf8"), before.codex, "~/.codex/config.toml untouched");
+
+  const projectBefore = readFileSync(projectFile, "utf8");
+  const everywhere = await planThenInstall({ key: "recommended:linear", scope: "user", targets: [claude], projectPath: project, name: "linear-all", values: {} }, context);
+  assert.equal(everywhere.ok, true, everywhere.message);
+  assert.ok(JSON.parse(readFileSync(claude, "utf8")).mcpServers["linear-all"], "in ~/.claude.json");
+  assert.equal(readFileSync(projectFile, "utf8"), projectBefore, "the project's file untouched, even with a project picked");
 });

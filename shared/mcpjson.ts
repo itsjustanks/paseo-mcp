@@ -48,6 +48,8 @@ export const RawDefRowSchema = z.object({
   masked: z.boolean(),
   /** How this destination stores it, for the user's orientation. */
   nativePreview: z.string(),
+  /** 0.20.0: the connector's version in this file when read; the hand editor sends it back on Save. */
+  version: z.string().optional(),
 });
 export type RawDefRow = z.infer<typeof RawDefRowSchema>;
 
@@ -65,6 +67,8 @@ export const mcpRawPut = defineRpc({
     json: z.string(),
     /** Validate and show what would be written, touching nothing. */
     dryRun: z.boolean(),
+    /** 0.20.0: the version the definition was revealed at; a different version now refuses the save. */
+    version: z.string().optional(),
   }),
   output: z.object({
     ok: z.boolean(),

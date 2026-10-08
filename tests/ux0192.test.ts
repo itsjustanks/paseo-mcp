@@ -57,7 +57,7 @@ test("built-in Codex tools never count as a problem: not in the dot, not in a ch
   assert.equal(resultNeedsAttention({ status: "binary-missing" }), true);
   assert.equal(hostNeedsAttention(report, []), null);
   assert.deepEqual(chatAttention(report, [], { provider: "codex", cwd: "/p" }).failing, []);
-  assert.deepEqual(hostAttentionNames(report, []), { failing: [], signIn: [] });
+  assert.deepEqual(hostAttentionNames(report, []), { failing: [], signIn: [], where: {} });
 });
 
 // ------------------------------------------------------------------- chip

@@ -44,3 +44,82 @@ export function supportsButtonPills(client: unknown): boolean {
 export function canObserveAgents(paseo: unknown): boolean {
   return isFn(((paseo ?? {}) as Record<string, unknown>).observeEvents);
 }
+
+/**
+ * Paseo 0.9 and later: `copyText` on the client/react-native module, the
+ * app's own clipboard, in the browser and the mobile app alike (0.20.0). An
+ * app without it uses `fallback` (React Native's deprecated Clipboard). A
+ * rejected or `false` copy is a failed copy: resolves false, and the caller
+ * says "Couldn't copy".
+ */
+export function clipboardCopier(rnModule: unknown, fallback: (text: string) => unknown): (text: string) => Promise<boolean> {
+  const candidate = (rnModule ?? {}) as { copyText?: unknown };
+  const copyText = isFn(candidate.copyText) ? (candidate.copyText as (text: string) => Promise<void>) : null;
+  return async (text) => {
+    try {
+      if (copyText) {
+        await copyText(text);
+        return true;
+      }
+      return fallback(text) !== false;
+    } catch {
+      return false;
+    }
+  };
+}
+
+export type ToastVariant = "default" | "info" | "success" | "warning" | "error";
+export type ToastApi = { show(message: string, options?: { variant?: ToastVariant; durationMs?: number }): void; error(message: string): void };
+
+/**
+ * The toast hook every screen uses (0.20.0): the app's `useToast` where it
+ * has one, else `fallbackHook` (an inline message on the screen). Chosen once,
+ * here, so a component never calls a hook conditionally. Every message goes
+ * through `redact` first, whichever way it is shown.
+ */
+export function toastHook(rnModule: unknown, fallbackHook: () => ToastApi, redact: (text: string) => string): () => ToastApi {
+  const candidate = (rnModule ?? {}) as { useToast?: unknown };
+  const useBase = isFn(candidate.useToast) ? (candidate.useToast as () => ToastApi) : fallbackHook;
+  return () => {
+    const base = useBase();
+    return {
+      show: (message, options) => base.show(redact(message), options),
+      error: (message) => base.error(redact(message)),
+    };
+  };
+}
+
+/** The app's `Modal` (Paseo 0.8+), or null: then a confirm stays in the page, as before 0.20.0. */
+export function hostModal<T>(rnModule: unknown): T | null {
+  const candidate = (rnModule ?? {}) as { Modal?: unknown };
+  return isFn(candidate.Modal) || (candidate.Modal !== null && typeof candidate.Modal === "object") ? (candidate.Modal as T) : null;
+}
+
+export type InlineMessage = { id: number; message: string; variant: ToastVariant };
+
+/**
+ * Where toasts go on an app without `useToast`: the latest few messages,
+ * each dropped after its time. The screen shows them as inline lines.
+ */
+export function createMessageStore(schedule: (run: () => void, ms: number) => unknown = setTimeout, keep = 3) {
+  let messages: InlineMessage[] = [];
+  let next = 1;
+  const listeners = new Set<() => void>();
+  const emit = () => listeners.forEach((listener) => listener());
+  return {
+    push(message: string, variant: ToastVariant = "default", durationMs = 5000) {
+      const id = next++;
+      messages = [...messages, { id, message, variant }].slice(-keep);
+      emit();
+      schedule(() => {
+        messages = messages.filter((entry) => entry.id !== id);
+        emit();
+      }, durationMs);
+    },
+    read: () => messages,
+    subscribe(listener: () => void) {
+      listeners.add(listener);
+      return () => void listeners.delete(listener);
+    },
+  };
+}

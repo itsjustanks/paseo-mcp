@@ -15,7 +15,7 @@ import {
   type LibrarySource,
 } from "../shared/library-source";
 import { plainError } from "../shared/errors";
-import { Button, Card, ConfirmButton, ErrorText, Field, Loading, Row, Segmented, Tag, Toggle, TYPE, useTokens, type Status } from "./ui";
+import { Button, Card, ConfirmButton, ErrorText, Field, Loading, Row, Segmented, Tag, Toggle, TYPE, useTokens, type Status, useToast } from "./ui";
 
 const STATE: Record<LibraryState["state"], { label: string; tone: Status }> = {
   off: { label: "off", tone: "neutral" },
@@ -70,14 +70,17 @@ export function SecretField({ label, value, onChangeText, hint, placeholder }: {
 function LibraryKey({ library, onSaved }: { library: LibrarySource; onSaved: () => void }) {
   const t = useTokens();
   const callAuth = useRpc(mcpCatalogTeamAuth);
+  const toast = useToast();
   const [value, setValue] = useState("");
   const status = useQuery({ queryKey: ["paseo-mcp", "catalog-team-auth", library.id], queryFn: () => callAuth({ action: "status", value: "", library: library.id }), retry: 1 });
   const change = useMutation({
     mutationFn: (action: "set" | "clear") => callAuth({ action, value: action === "set" ? value : "", library: library.id }),
-    onSuccess: () => {
+    onSuccess: (_result, action) => {
       setValue("");
       void status.refetch();
       onSaved();
+      // The field empties on save, so without this nothing said it worked (0.20.0). Never the value itself.
+      toast.show(action === "set" ? `${library.name}: value saved.` : `${library.name}: value cleared.`, { variant: "success" });
     },
   });
   const isSet = status.data?.set === true;

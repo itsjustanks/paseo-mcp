@@ -4,6 +4,7 @@
  * Pure so the copy can be unit-tested; the client only renders it.
  */
 import type { Destination, McpAuthAccount, McpHealth, McpHealthStatus, McpServerRow } from "./contracts";
+import { EVERYWHERE, thisProject } from "./scope";
 import { healthNeedsAttention } from "./contracts";
 import { endpointKey } from "./catalog";
 
@@ -56,7 +57,8 @@ export function serverMatches(
   }
   switch (options.filter) {
     case "gaps":
-      return server.presentIn.length < options.destinationCount;
+      // A "just for you" copy only (0.20.0) is in no app on purpose: not a gap.
+      return server.presentIn.length > 0 && server.presentIn.length < options.destinationCount;
     case "issues":
       return Boolean(options.health && healthNeedsAttention(options.health.status));
     case "sign-in":
@@ -213,7 +215,30 @@ export type ServerCardModel = {
   missing: number;
   signIn: SignIn;
   signInText: string;
+  /** 0.20.0: "" unless a project also sets it up: "Also in data-glue · .mcp.json; that project uses its own copy". */
+  alsoIn: string;
 };
+
+/**
+ * A connector that is set up everywhere and also in projects' .mcp.json
+ * (0.20.0): one line naming them, in Claude Code's documented order (a "just
+ * for you" copy first, then the project's, then everywhere's:
+ * code.claude.com/docs/en/mcp). `localProjects` are the projects where you
+ * also have your own copy.
+ */
+export function alsoInProjects(projects: readonly string[], localProjects: readonly string[] = []): string {
+  const names = [...new Set(projects.filter(Boolean))];
+  if (names.length === 0) return "";
+  const local = new Set(localProjects);
+  if (names.length === 1) {
+    return local.has(names[0])
+      ? `Also in ${names[0]} · .mcp.json; there Claude Code uses your own "just for you" copy first, then the project's.`
+      : `Also in ${names[0]} · .mcp.json; Claude Code uses that project's own copy there.`;
+  }
+  return names.some((name) => local.has(name))
+    ? `Also in ${names.length} projects' .mcp.json; in each, Claude Code uses your own "just for you" copy if you have one there, then the project's.`
+    : `Also in ${names.length} projects' .mcp.json; Claude Code uses each project's own copy there.`;
+}
 
 /**
  * The Servers gallery: every card in name order, the ones the filter and the
@@ -228,6 +253,8 @@ export function serverGallery(input: {
   known: readonly KnownServer[];
   filter: ServerFilter;
   query: string;
+  /** 0.20.0: projects' own connectors, to note a name a project also sets up. */
+  projectServers?: readonly { project: string; name: string }[];
 }): { cards: ServerCardModel[]; counts: Record<ServerFilter, number>; total: number } {
   const counts: Record<ServerFilter, number> = { all: 0, issues: 0, "sign-in": 0, gaps: 0 };
   const cards: ServerCardModel[] = [];
@@ -240,7 +267,9 @@ export function serverGallery(input: {
       if (serverMatches(server, { ...base, filter: filter.value })) counts[filter.value] += 1;
     }
     if (!serverMatches(server, { ...base, filter: input.filter, query: input.query })) continue;
-    const apps = appsLine(server.presentIn, input.destinations);
+    // 0.20.0: a connector set up only as Claude Code's "just for you" copy says so instead of "in none of your apps".
+    const localOnly = server.presentIn.length === 0 && (server.localIn?.length ?? 0) > 0;
+    const apps = localOnly ? { line: `Claude Code · just for you in ${joinWords([...new Set((server.localIn ?? []).map((entry) => lastSegment(entry.project)))])}`, missing: 0 } : appsLine(server.presentIn, input.destinations);
     cards.push({
       name: server.name,
       description,
@@ -250,6 +279,10 @@ export function serverGallery(input: {
       missing: apps.missing,
       signIn,
       signInText: signInLine(server, signIn, accountsNeedingSignIn(server.name, input.accounts).length, input.authRead),
+      alsoIn: alsoInProjects(
+        (input.projectServers ?? []).filter((entry) => entry.name === server.name).map((entry) => entry.project),
+        (server.localIn ?? []).map((entry) => lastSegment(entry.project)),
+      ),
     });
   }
   return { cards, counts, total: input.servers.length };
@@ -274,6 +307,7 @@ export type RemovePlan = {
   targets: string[];
   /** Project `.mcp.json` paths `mcpRemove` will be called with (scope `everywhere` only). */
   projectFiles: string[];
+
   /** Destination labels, in the order they will be removed. */
   labels: string[];
   /** How many of those definitions carry a token in the definition itself. */
@@ -284,9 +318,11 @@ export type RemovePlan = {
   confirmLabel: string;
 };
 
-function plural(count: number, word: string): string {
-  return `${count} ${word}${count === 1 ? "" : "s"}`;
+function plural(count: number, word: string, many?: string): string {
+  return `${count} ${count === 1 ? word : many ?? `${word}s`}`;
 }
+
+const lastSegment = (path: string) => path.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || path;
 
 /**
  * The removal, spelled out before it happens. `destId` picks the editor for
@@ -295,7 +331,7 @@ function plural(count: number, word: string): string {
  * to remove, so the caller never offers an empty action.
  */
 export function removePlan(
-  server: Pick<McpServerRow, "name" | "presentIn" | "inlineCredentialsIn">,
+  server: Pick<McpServerRow, "name" | "presentIn" | "inlineCredentialsIn" | "localIn">,
   destinations: readonly Destination[],
   scope: RemoveScope,
   destId?: string,
@@ -304,6 +340,7 @@ export function removePlan(
   const present = destinations.filter((dest) => server.presentIn.includes(dest.id));
   const chosen = scope === "one" ? present.filter((dest) => dest.id === destId) : present;
   const files = scope === "everywhere" ? [...new Map(projects.map((entry) => [entry.path, entry])).values()] : [];
+  const allLocal = (server.localIn ?? []).filter((entry) => destinations.some((dest) => dest.id === entry.destId));
   if (chosen.length === 0 && files.length === 0) return null;
   const targets = chosen.map((dest) => dest.id);
   const credentialCount = chosen.filter((dest) => server.inlineCredentialsIn.includes(dest.id)).length;
@@ -313,21 +350,22 @@ export function removePlan(
   if (chosen.length > 0) {
     lines.push(
       scope === "one"
-        ? `It will be deleted from ${labels[0]}.`
-        : `It will be deleted from ${plural(chosen.length, "app")}: ${labels.join(", ")}.`,
+        ? `${EVERYWHERE}: it will be deleted from ${labels[0]}.`
+        : `${EVERYWHERE}: it will be deleted from ${plural(chosen.length, "app")}: ${labels.join(", ")}.`,
     );
   }
   if (scope === "everywhere") {
     lines.push(
       files.length > 0
-        ? `${plural(files.length, "project")} will lose it too: ${files.map((entry) => entry.path).join(", ")}. Those files are usually kept in git, so the change shows up in git status.`
+        ? `${files.length === 1 ? thisProject(files[0].project) : `${plural(files.length, "project")}`}: ${files.length === 1 ? "its" : "their"} .mcp.json will lose it too (${files.map((entry) => `${entry.project} · .mcp.json`).join(", ")}). Those files are usually kept in git, so the change shows up in git status.`
         : "No project lists it, so only your AI apps change.",
     );
   } else if (projects.length > 0) {
     lines.push(
-      `${plural(projects.length, "project")} still list${projects.length === 1 ? "s" : ""} it (${projects.map((entry) => entry.project).join(", ")}), and Claude Code picks it up again in ${projects.length === 1 ? "that project" : "those projects"}. Choose Remove everywhere to take it out of them too.`,
+      `${projects.length === 1 ? thisProject(projects[0].project) : plural(projects.length, "project")} still list${projects.length === 1 ? "s" : ""} it in .mcp.json (${projects.map((entry) => entry.project).join(", ")}), and Claude Code picks it up again in ${projects.length === 1 ? "that project" : "those projects"}. Choose "From all apps and project files" to take it out of them too.`,
     );
   }
+  if (allLocal.length > 0) lines.push(localStaysLine(server.name, allLocal));
   if (scope === "one" && present.length > 1) {
     lines.push(present.length - 1 === 1 ? `The other app keeps ${server.name}.` : `The other ${plural(present.length - 1, "app")} keep ${server.name}.`);
   }
@@ -355,11 +393,29 @@ export function removePlan(
     lines,
     confirmLabel:
       scope === "everywhere"
-        ? `Remove from ${[chosen.length > 0 ? plural(chosen.length, "app") : "", files.length > 0 ? plural(files.length, "project") : ""].filter(Boolean).join(" and ")}`
+        ? `Remove from ${[chosen.length > 0 ? plural(chosen.length, "app") : "", files.length > 0 ? plural(files.length, "project file") : ""].filter(Boolean).join(" and ")}`
         : scope === "all"
           ? `Remove from ${plural(chosen.length, "app")}`
           : "Remove from this app",
   };
+}
+
+/**
+ * Claude Code's "just for you" copies are read only here (0.20.0): Claude Code
+ * rewrites ~/.claude.json constantly, so a plugin can't change it safely. The
+ * dialog says so, with the command that does it in Claude Code.
+ */
+export function localStaysLine(name: string, local: readonly { project: string }[]): string {
+  const names = [...new Set(local.map((entry) => lastSegment(entry.project)))];
+  const where = names.length === 1 ? names[0] : `${plural(names.length, "project")} (${names.join(", ")})`;
+  return `Claude Code's "just for you" copy in ${where} stays. Remove it in Claude Code with: ${localRemoveCommand(name)}`;
+}
+
+/** The command that removes a "just for you" copy, run in that project's folder. */
+export function localRemoveCommand(name: string, project = ""): string {
+  const quoted = /^[A-Za-z0-9_.-]+$/.test(name) ? name : `'${name.replace(/'/g, `'\\''`)}'`;
+  const command = `claude mcp remove ${quoted} -s local`;
+  return project ? `cd '${project.replace(/'/g, `'\\''`)}' && ${command}` : command;
 }
 
 /** The project files that define `name`, from the auth report's flat list. */

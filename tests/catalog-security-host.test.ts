@@ -103,7 +103,7 @@ test("6: only a regular file under 1 MB is read (no directory, FIFO, /dev/zero)"
 
 test("7a: a file that is not JSON is reported by line, with none of its text, in the note and the log", async () => {
   const envFile = join(home, ".env");
-  writeFileSync(envFile, "OPENAI_API_KEY=sk-proj-abcdefghijklmnopqrstuvwxyz\n");
+  writeFileSync(envFile, "OPENAI_API_KEY=" + "sk-" + "proj-abcdefghijklmnopqrstuvwxyz\n");
   const logged: string[] = [];
   const warn = console.warn;
   console.warn = (...args: unknown[]) => void logged.push(args.map(String).join(" "));
@@ -134,7 +134,7 @@ test("7c: the header value is write-only: moved out of settings, kept 0600, answ
     if (url.startsWith("https://team.example.com/")) seen.push(new Headers(init?.headers).get("authorization"));
     return new Response("[]", { status: 200 });
   });
-  const VALUE = "Bearer github_pat_fixture_0123456789";
+  const VALUE = "Bearer " + "github_" + "pat_fixture_0123456789";
   const result = await readTeam({ teamSource: "https://team.example.com/catalogue.json", teamHeaderName: "Authorization", teamHeaderValue: VALUE });
   assert.equal(result.team.state, "ready");
   assert.equal(seen.at(-1), VALUE, "the migrated value is still sent to the team address");

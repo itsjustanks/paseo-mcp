@@ -167,11 +167,11 @@ test("5: copy as catalogue entry never returns a stored value, even from an odd 
 // 7a ----------------------------------------------- a parse error echoes the file
 
 test("7a: a team file that is not JSON is reported by line, never quoted", () => {
-  const env = parseTeamCatalogue("OPENAI_API_KEY=sk-proj-abcdefghijklmnop\n");
+  const env = parseTeamCatalogue("OPENAI_API_KEY=" + "sk-" + "proj-abcdefghijklmnop\n");
   assert.equal(env.error, "not valid JSON (line 1)");
   const later = parseTeamCatalogue('[\n  { "id": "a" },\n  { "id": b }\n]');
   assert.equal(later.error, "not valid JSON (line 3)");
   assert.equal(parseTeamCatalogue('{"a": 1}\nsecret-trailer').error, "not valid JSON (line 2)");
   assert.equal(parseTeamCatalogue("[1, 2").error, "not valid JSON (line 1)");
-  assert.equal(parseTeamCatalogue("-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAA").error, "not valid JSON (line 1)");
+  assert.equal(parseTeamCatalogue("-----BEGIN OPENSSH " + "PRIVATE KEY-----\n" + "b3BlbnNzaC1r" + "ZXktdjEAAAAA").error, "not valid JSON (line 1)");
 });

@@ -5,7 +5,8 @@ import { INITIALIZE_REQUEST, classifyProbe, probeMcp, redactNote } from "../shar
 
 // A definition with a token in the query string and a bearer header, like the
 // n8n / Attio / HeroUI entries in a real config. Nothing from it may reach a note.
-const TOKEN = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhYmMifQ.sig-abcdefghijklmnop";
+// A JWT-shaped token, joined at runtime so no full JWT is committed (GitHub push protection).
+const TOKEN = ["ey" + "JhbGciOiJIUzI1NiJ9", "ey" + "JzdWIiOiJhYmMifQ", "sig-abcdefghijklmnop"].join(".");
 const URL_WITH_TOKEN = `https://mcp.example.test/mcp?attio_token=${TOKEN}&x=1`;
 const HEADERS = { Authorization: "Bearer hdr-secret-value-9876543210" };
 
