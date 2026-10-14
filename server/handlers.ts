@@ -4,8 +4,8 @@ import { createHash, randomBytes } from "node:crypto";
 import { ConcurrentChangeError, NotUtf8Error, copyFileSafely, readStamped, replaceGuarded, writeFileSafely, type FileStamp } from "./safe-write";
 import { chmodSync, existsSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, join } from "node:path";
-import type { AuthState } from "../shared/accounts";
+import { basename, dirname, join, resolve } from "node:path";
+import { claudeGrantsFrom, claudeStates, type AuthState, type StoredGrant } from "../shared/accounts";
 import type { Destination, McpAuthAccount } from "../shared/contracts";
 import { probeMcp } from "../shared/health";
 import { normaliseConnectorName, tomlKeyPattern } from "../shared/names";
@@ -145,10 +145,27 @@ export function jsonLike(previous: string | null, value: unknown): string {
 
 // ---------------------------------------------------------------- accounts / slots
 
+/**
+ * The Claude Code folder and config file this daemon's own Claude uses (0.20.1).
+ * With CLAUDE_CONFIG_DIR set (the dev stack sets it to ~/.claude), Claude Code
+ * keeps its settings, connectors included, in `$CLAUDE_CONFIG_DIR/.claude.json`
+ * and never reads `~/.claude.json`. Before 0.20.1 this plugin always used
+ * `~/.claude.json`, so on such a host nothing it added for Claude reached Claude.
+ * Read at call time, so it follows the daemon's own environment.
+ */
+export function claudePrimaryDir(): string {
+  const dir = (process.env.CLAUDE_CONFIG_DIR ?? "").trim();
+  return dir ? resolve(dir.replace(/^~(?=\/|$)/, HOME)) : join(HOME, ".claude");
+}
+
+export function claudePrimaryConfig(): string {
+  return (process.env.CLAUDE_CONFIG_DIR ?? "").trim() ? join(claudePrimaryDir(), ".claude.json") : join(HOME, ".claude.json");
+}
+
 // Only the account email is ever read from credential-adjacent files — no token
 // material leaves the handler.
 function claudeAccountEmail(configDir: string): string {
-  const config = readJsonShared(configDir === HOME ? join(HOME, ".claude.json") : join(configDir, ".claude.json"));
+  const config = readJsonShared(configDir === HOME ? claudePrimaryConfig() : join(configDir, ".claude.json"));
   const account = config?.oauthAccount as { emailAddress?: string } | undefined;
   return account?.emailAddress ?? "";
 }
@@ -883,15 +900,15 @@ export async function buildDestinations(paseo: PluginHandlerContext["paseo"] | n
 
   // Claude's config sits directly in $HOME, so the generic parent-dir check in
   // push() cannot tell "Claude Code is installed" from "this is a home dir".
-  if (enabled("claude") && (existsSync(join(HOME, ".claude.json")) || existsSync(join(HOME, ".claude")))) {
+  if (enabled("claude") && (existsSync(claudePrimaryConfig()) || existsSync(claudePrimaryDir()))) {
     const account = claudeAccountEmail(HOME);
     push({
-      id: join(HOME, ".claude.json"),
-      label: `Claude · ${account || "primary"} (primary)`,
+      id: claudePrimaryConfig(),
+      label: account ? `Claude · ${account} (primary)` : "Claude",
       provider: "claude",
       providerId: "claude",
       account,
-      configPath: join(HOME, ".claude.json"),
+      configPath: claudePrimaryConfig(),
       format: "json-mcp",
     });
   }
@@ -1490,8 +1507,20 @@ export function collectAccounts(options: AccountOptions): McpAuthAccount[] {
     const data = readJsonShared(join(dir, "mcp-needs-auth-cache.json"));
     return data ? Object.keys(data) : [];
   };
-  const claude = (email: string, dir: string, configPath: string, isPrimary: boolean): McpAuthAccount => {
-    const needsAuth = readNeeds(dir);
+  // Claude's stored connector sign-ins (credentials file; read fresh, reduced to names at once, never
+  // cached). null: the store can't be read here (macOS keeps them in the Keychain).
+  const claudeGrants = (dir: string): StoredGrant[] | null => {
+    const file = join(dir, ".credentials.json");
+    const exists = existsSync(file);
+    return claudeGrantsFrom({ file: exists ? readJson(file) : null, exists, platform: process.platform, nowMs: Date.now() });
+  };
+  const claude = (email: string, dir: string, configPath: string, isPrimary: boolean, oauthElsewhere: ReadonlySet<string>): McpAuthAccount => {
+    const listed = readNeeds(dir);
+    const authStatus = claudeStates({ grants: claudeGrants(dir), servers: jsonMcpRead(configPath), needsAuth: listed, oauthElsewhere });
+    // A connector Claude has since signed in to drops off its needs-sign-in list here too: cards,
+    // the chip and the Overview read that list before authStatus.
+    const needsAuth = listed.filter((name) => authStatus[name] !== "connected");
+    const configDirEnv = isPrimary && (process.env.CLAUDE_CONFIG_DIR ?? "").trim() ? claudePrimaryDir() : undefined;
     return {
       provider: "claude",
       email,
@@ -1499,12 +1528,13 @@ export function collectAccounts(options: AccountOptions): McpAuthAccount[] {
       isPrimary,
       definedServers: Object.keys(jsonMcpRead(configPath)).length,
       needsAuth,
-      authStatus: Object.fromEntries(needsAuth.map((name) => [name, "not-connected" as AuthState])),
+      authStatus,
+      ...(configDirEnv ? { configDirEnv } : {}),
     };
   };
-  const codex = (email: string, dir: string, isPrimary: boolean): McpAuthAccount => {
+  const codex = (email: string, dir: string, isPrimary: boolean, ask = options.askCodex): McpAuthAccount => {
     const servers = destRead({ id: "", label: "", provider: "codex", providerId: "codex", account: email, configPath: join(dir, "config.toml"), format: "toml-mcp" });
-    const view = codexAuthView(dir, servers, { askCli: options.askCodex, force: options.force });
+    const view = codexAuthView(dir, servers, { askCli: ask, force: options.force });
     return {
       provider: "codex",
       email,
@@ -1519,22 +1549,44 @@ export function collectAccounts(options: AccountOptions): McpAuthAccount[] {
     };
   };
 
-  const accounts: McpAuthAccount[] = [];
   const slots = collectSlots();
-  const primaryEmail = claudeAccountEmail(HOME);
-  if (primaryEmail && wanted("claude", primaryEmail)) accounts.push(claude(primaryEmail, join(HOME, ".claude"), join(HOME, ".claude.json"), true));
-  for (const slot of slots) {
-    if (slot.provider === "claude" && wanted("claude", slot.email)) accounts.push(claude(slot.email, slot.dir, join(slot.dir, ".claude.json"), false));
-  }
+  // Codex first: a connector any account signs in to with an account (Codex's states, or any Claude
+  // sign-in record) is one Claude must sign in to as well, even before Claude has tried it. Every
+  // Codex account counts for that, even when only one Claude account was asked for (the agent
+  // panel); those are read from files only, never by asking Codex.
+  const codexAll: Array<{ account: McpAuthAccount; keep: boolean }> = [];
   const primaryCodexDir = join(HOME, ".codex");
   const primaryCodexEmail = codexAccountEmail(primaryCodexDir);
-  if (primaryCodexEmail && wanted("codex", primaryCodexEmail)) accounts.push(codex(primaryCodexEmail, primaryCodexDir, true));
+  if (primaryCodexEmail) {
+    const keep = wanted("codex", primaryCodexEmail);
+    codexAll.push({ account: codex(primaryCodexEmail, primaryCodexDir, true, keep && options.askCodex), keep });
+  }
   for (const slot of slots) {
     // The destination is keyed by the slot name. The Agents tab separately
     // flags a slot whose authenticated email does not match that name.
-    if (slot.provider === "codex" && slot.loggedIn && wanted("codex", slot.email)) accounts.push(codex(slot.email, slot.dir, false));
+    if (slot.provider !== "codex" || !slot.loggedIn) continue;
+    const keep = wanted("codex", slot.email);
+    codexAll.push({ account: codex(slot.email, slot.dir, false, keep && options.askCodex), keep });
   }
-  return accounts;
+  const codexAccounts = codexAll.filter((entry) => entry.keep).map((entry) => entry.account);
+  const claudeDirs = [claudePrimaryDir(), ...slots.filter((slot) => slot.provider === "claude").map((slot) => slot.dir)];
+  const oauthElsewhere = new Set<string>([
+    ...codexAll.flatMap(({ account }) => Object.entries(account.authStatus).filter(([, state]) => state === "connected" || state === "not-connected").map(([name]) => name)),
+    ...claudeDirs.flatMap((dir) => (claudeGrants(dir) ?? []).map((grant) => grant.serverName)),
+  ]);
+
+  const accounts: McpAuthAccount[] = [];
+  // 0.20.1: Claude is listed even with no Anthropic account signed in (Claude that runs through a
+  // router, say). Its connector sign-ins are its own, kept apart from that login, and every Claude
+  // chat on this computer uses them. Before, no email meant no Claude sign-in rows at all.
+  const primaryEmail = claudeAccountEmail(HOME);
+  if ((primaryEmail || existsSync(claudePrimaryConfig())) && wanted("claude", primaryEmail)) {
+    accounts.push(claude(primaryEmail, claudePrimaryDir(), claudePrimaryConfig(), true, oauthElsewhere));
+  }
+  for (const slot of slots) {
+    if (slot.provider === "claude" && wanted("claude", slot.email)) accounts.push(claude(slot.email, slot.dir, join(slot.dir, ".claude.json"), false, oauthElsewhere));
+  }
+  return [...accounts, ...codexAccounts];
 }
 
 export async function handleMcpAuth(
@@ -1592,7 +1644,7 @@ function mergeTrustedProjects(projects: Record<string, Record<string, unknown>>,
 export async function handleMcpSync(): Promise<{ ok: boolean; log: string }> {
   const logs: string[] = [];
   const slots = collectSlots();
-  const primary = readJson(join(HOME, ".claude.json"));
+  const primary = readJson(claudePrimaryConfig());
   if (primary) {
     const mcp = (primary.mcpServers as Record<string, unknown> | undefined) ?? {};
     const projects = (primary.projects as Record<string, Record<string, unknown>> | undefined) ?? {};

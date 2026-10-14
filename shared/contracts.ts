@@ -95,6 +95,9 @@ export const McpAuthAccountSchema = z.object({
   statusAsOf: z.string().nullable().optional(),
   checking: z.boolean().optional(),
   statusNote: z.string().optional(),
+  // 0.20.1: the CLAUDE_CONFIG_DIR this daemon's own Claude runs with, on the
+  // primary Claude account, so "Sign in from a terminal" names it. Absent when unset.
+  configDirEnv: z.string().optional(),
 });
 export type McpAuthAccount = z.infer<typeof McpAuthAccountSchema>;
 

@@ -72,6 +72,7 @@ import { CopyAllPanel } from "./copy-all";
 import { ServerHealthTag, healthCheckedLabel, healthStatus, healthWord, splitIssues, useHealth } from "./health";
 import { setSignInFocus, useSignInFocus } from "./focus";
 import { canOpenMcp, canSyncTab, openMcp, openMcpAdd, syncTab, takePendingAdd, takePendingServer, type AddStart } from "./navigate";
+import { loginCommand } from "../shared/accounts";
 import { GuideParts, OverviewGuide } from "./guide";
 import { useOpenLink } from "./links";
 import { AskAgentButton } from "./ask";
@@ -151,18 +152,6 @@ function errorText(error: unknown): string {
 /** "14:05" for a query's last successful read. */
 function readAt(updatedAt: number): string {
   return clockTime(updatedAt ? new Date(updatedAt).toISOString() : null);
-}
-
-function shellQuote(value: string): string {
-  return `'${value.replace(/'/g, `'"'"'`)}'`;
-}
-
-function loginCommand(account: McpAuthAccount, server: string, directory = ""): string {
-  const variable = account.provider === "claude" ? "CLAUDE_CONFIG_DIR" : "CODEX_HOME";
-  const login = account.isPrimary
-    ? `${account.provider} mcp login ${shellQuote(server)}`
-    : `${variable}=${shellQuote(account.dir)} ${account.provider} mcp login ${shellQuote(server)}`;
-  return directory ? `cd ${shellQuote(directory)} && ${login}` : login;
 }
 
 /** How current a Codex account's sign-in state is; Codex is asked in the background on the host. */
@@ -732,14 +721,17 @@ function AuthRows({
                   ? "Needs sign-in"
                   : "Not checked yet";
           const app = account.provider === "claude" ? "Claude" : "Codex";
+          // 0.20.1: Claude with no Anthropic account signed in (it runs through a router) has no email,
+          // and its connector sign-ins still count for every Claude chat on this computer.
+          const who = account.email || `${app} on this computer`;
           return (
             <Row
               key={`${account.provider}-${account.dir}`}
               first={index === 0}
-              title={bare ? "Sign-in" : account.email}
+              title={bare ? "Sign-in" : who}
               subtitle={
                 (bare
-                  ? `${account.email} · ${app}${account.isPrimary ? "" : " (extra account)"}`
+                  ? `${account.email ? `${account.email} · ${app}` : who}${account.isPrimary ? "" : " (extra account)"}`
                   : `${app}${account.isPrimary ? "" : " (extra account)"}`) +
                 codexCheckLine(account)
               }

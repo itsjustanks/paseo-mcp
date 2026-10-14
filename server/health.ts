@@ -8,6 +8,7 @@ import { HEALTH_DEFAULTS, healthSettings, type HealthSettings } from "../shared/
 import { mapLimit } from "../shared/tools";
 import { backgroundPass } from "./background";
 import {
+  claudePrimaryConfig,
   binaryOnPath,
   buildDestinations,
   collectAccounts,
@@ -146,8 +147,8 @@ function rememberProviders(destinations: ReadonlyArray<{ configPath: string; pro
 
 function accountConfigPath(account: McpAuthAccount): string {
   if (account.provider === "codex") return join(account.dir, "config.toml");
-  // The primary Claude account keeps its config beside its directory: ~/.claude.json next to ~/.claude.
-  return account.isPrimary ? join(dirname(account.dir), ".claude.json") : join(account.dir, ".claude.json");
+  // The primary Claude account's config is whatever this daemon's Claude reads (CLAUDE_CONFIG_DIR, 0.20.1).
+  return account.isPrimary ? claudePrimaryConfig() : join(account.dir, ".claude.json");
 }
 
 /** Connectors an account still has to sign in to, from each editor's own files (never by asking Codex), for the composer chip. */

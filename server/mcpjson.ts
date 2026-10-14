@@ -27,6 +27,7 @@ import {
   searchPath,
   tomlApply,
   tomlMcpNamesFromText,
+  claudePrimaryDir,
   tomlMcpReadOneFromText,
   tomlKey,
   STALE_REVEAL,
@@ -1256,11 +1257,14 @@ export function cliPath(provider: "claude" | "codex"): string {
 
 export function accountEnvironment(provider: "claude" | "codex", accountDir: string) {
   const variable = envVarFor(provider);
-  const defaultDir = join(HOME, provider === "claude" ? ".claude" : ".codex");
+  const defaultDir = provider === "claude" ? claudePrimaryDir() : join(HOME, ".codex");
   const primary = !accountDir || resolve(accountDir) === resolve(defaultDir);
   const env = { ...process.env } as NodeJS.ProcessEnv;
-  if (primary) delete env[variable];
-  else env[variable] = accountDir;
+  // The primary Claude is whatever this daemon's Claude uses, so its CLAUDE_CONFIG_DIR stays (0.20.1).
+  // Before, it was removed, and a sign-in looked at ~/.claude.json, which that Claude never reads.
+  if (primary) {
+    if (provider !== "claude") delete env[variable];
+  } else env[variable] = accountDir;
   return { env, effectiveDir: primary ? "" : accountDir, keyDir: primary ? "primary" : accountDir };
 }
 
@@ -1479,7 +1483,10 @@ export async function handleMcpLogin(
   const session: LoginSession = {
     key,
     server,
-    account: account || basename(accountConfig.effectiveDir || HOME),
+    // The page matches a sign-in to its row by this email. The primary Claude with no Anthropic account
+    // signed in has none (0.20.1), so it keeps "" rather than the folder name; an extra account's
+    // folder name is still the fallback.
+    account: account || (accountDir ? basename(accountConfig.effectiveDir || HOME) : ""),
     provider,
     workspaceId: workspaceId ?? "",
     state: "starting",

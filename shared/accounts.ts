@@ -1,5 +1,5 @@
 /**
- * Codex sign-in state per MCP server, read without starting Codex where the
+ * Codex and Claude sign-in state per connector, read without starting either where the
  * files allow it. Pure so it can be unit-tested; server/codex-auth.ts does the
  * reading, the caching, and the rare background `codex mcp list`.
  *
@@ -107,4 +107,98 @@ export function codexStatesFromGrants(grants: StoredGrant[], servers: Record<str
  */
 export function mergeCodexStates(fromCli: Record<string, AuthState>, fromFile: Record<string, AuthState>): Record<string, AuthState> {
   return { ...fromCli, ...fromFile };
+}
+
+// ------------------------------------------------------------------- Claude
+
+/**
+ * Claude Code's stored connector sign-ins (0.20.1): `.credentials.json` →
+ * `mcpOAuth`, one entry per connector keyed `name|hash`, with `serverName` and
+ * `serverUrl` in the clear. (On macOS they're in the Keychain instead, so there
+ * is no file and nothing is known from it.) Usable by Claude's own rule: an
+ * access token that hasn't expired, or a refresh token once it has. Claude
+ * writes an entry with an EMPTY token as soon as a sign-in starts, so a
+ * sign-in that never finished shows up here as unusable. Keeps no token.
+ */
+export function claudeStoredGrants(file: unknown, nowMs: number): StoredGrant[] {
+  const store = file && typeof file === "object" && !Array.isArray(file) ? (file as Record<string, unknown>).mcpOAuth : null;
+  if (!store || typeof store !== "object" || Array.isArray(store)) return [];
+  const grants: StoredGrant[] = [];
+  for (const [key, raw] of Object.entries(store as Record<string, unknown>)) {
+    const entry = raw as Record<string, unknown> | null;
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+    const serverName = text(entry.serverName) || (key.split("|")[0] ?? "").trim();
+    if (!serverName) continue;
+    const expiresAt = typeof entry.expiresAt === "number" && entry.expiresAt > 0 ? entry.expiresAt : null;
+    const expired = expiresAt !== null && nowMs + REFRESH_SKEW_MS >= expiresAt;
+    const usable = text(entry.accessToken) !== "" && (!expired || text(entry.refreshToken) !== "");
+    grants.push({ serverName, serverUrl: text(entry.serverUrl), usable });
+  }
+  return grants;
+}
+
+/**
+ * Whether Claude's sign-in store can be read, and what it holds (0.20.1).
+ * `null` means it can't be inspected: on macOS Claude keeps connector sign-ins
+ * in the Keychain, so a missing `.credentials.json` there says nothing. On
+ * other systems Claude Code uses that file, so a missing file means no
+ * sign-ins at all.
+ */
+export function claudeGrantsFrom(input: { file: unknown; exists: boolean; platform: string; nowMs: number }): StoredGrant[] | null {
+  if (!input.exists) return input.platform === "darwin" ? null : [];
+  return claudeStoredGrants(input.file, input.nowMs);
+}
+
+/**
+ * Claude's sign-in state per connector (0.20.1). Before, only Claude's own
+ * needs-sign-in list counted, so a connector Claude had never tried showed no
+ * sign-in row at all, even when it needed one.
+ * - On Claude's needs-sign-in list: `not-connected`.
+ * - A usable stored sign-in for that connector's address: `connected`.
+ * - A stored sign-in that isn't usable, or a connector another app signs in to
+ *   with an account (`oauthElsewhere`): `not-connected`.
+ * - Anything else stays unknown, as before. A connector with a static key has
+ *   no sign-in.
+ * `grants: null` (the store can't be read, macOS) leaves only Claude's own
+ * list: nothing is inferred from the other app, so a Keychain sign-in is never
+ * reported as missing.
+ */
+export function claudeStates(input: {
+  grants: readonly StoredGrant[] | null;
+  servers: Record<string, ServerShape>;
+  needsAuth: readonly string[];
+  oauthElsewhere: ReadonlySet<string>;
+}): Record<string, AuthState> {
+  const states: Record<string, AuthState> = {};
+  for (const name of input.needsAuth) states[name] = "not-connected";
+  if (input.grants === null) return states;
+  const grants = input.grants;
+  for (const [name, def] of Object.entries(input.servers)) {
+    if (!def.url || staticToken(def)) continue;
+    const mine = grants.filter((grant) => grant.serverName === name && (!grant.serverUrl || grant.serverUrl === def.url));
+    if (mine.some((grant) => grant.usable)) states[name] = "connected";
+    else if (mine.length > 0 || input.oauthElsewhere.has(name)) states[name] = "not-connected";
+  }
+  return states;
+}
+
+// ------------------------------------------------------- terminal sign-in
+
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'"'"'`)}'`;
+}
+
+/**
+ * "Sign in from a terminal instead": the command for one account and connector.
+ * An extra account names its own folder. The primary one names the daemon's
+ * CLAUDE_CONFIG_DIR when that is set (`configDirEnv`, 0.20.1), so a terminal
+ * without it still signs into the file this daemon's Claude reads.
+ */
+export function loginCommand(account: Pick<McpAuthAccount, "provider" | "dir" | "isPrimary" | "configDirEnv">, server: string, directory = ""): string {
+  const variable = account.provider === "claude" ? "CLAUDE_CONFIG_DIR" : "CODEX_HOME";
+  const dir = account.isPrimary ? (account.configDirEnv ?? "") : account.dir;
+  const login = dir
+    ? `${variable}=${shellQuote(dir)} ${account.provider} mcp login ${shellQuote(server)}`
+    : `${account.provider} mcp login ${shellQuote(server)}`;
+  return directory ? `cd ${shellQuote(directory)} && ${login}` : login;
 }

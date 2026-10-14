@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.20.1 — 2026-10-14
+
+The user: "I can't sign into multiple agents. It's just Codex… what happened to the ability to sync them across providers? Did they even work in the first place?" Found on paseo-ankit, and fixed.
+
+### Fixed
+- **Connectors added for Claude never reached Claude on hosts that set CLAUDE_CONFIG_DIR.**
+  - With CLAUDE_CONFIG_DIR set (the dev stack sets it to ~/.claude), Claude Code keeps its settings, connectors included, in `$CLAUDE_CONFIG_DIR/.claude.json` and never reads `~/.claude.json`.
+  - The plugin always used `~/.claude.json`. So on paseo-ankit, 20 connectors (Supercut, Slashy, Airtable, Notion, PostHog, …) showed as "In Claude" while Claude itself had only 1. Codex was fine.
+  - Now the main Claude config is the one this daemon's Claude reads (`claudePrimaryDir()` / `claudePrimaryConfig()`): the page, Add, Copy to all my AI apps, the health and sign-in reads, "bring your own sign-in app" writes, and sign-ins started from the page. A host without CLAUDE_CONFIG_DIR behaves as before.
+  - Connectors already saved to `~/.claude.json` on such a host are not moved by the plugin. On paseo-ankit they were moved by hand, with a backup.
+- **Only Codex was offered a sign-in.** Claude was listed for connector sign-in only when an Anthropic account email was saved, and Claude that runs through a router has none. So no Claude sign-in rows showed at all, for any connector.
+  - Claude is now listed as "Claude on this computer". Its connector sign-ins are its own, kept apart from the Anthropic login, and every Claude chat on the computer uses them.
+- **Claude's sign-in state is read from its own records** (`.credentials.json` → `mcpOAuth`; names, addresses and whether usable, never a token), not only from Claude's "needs sign-in" list.
+  - A sign-in that started and never finished (Claude saves an empty token) now shows as Needs sign-in.
+  - A connector another app signs in to (Codex's Supercut, say) shows Needs sign-in for Claude too, before Claude has ever tried it.
+  - On macOS these records are in the Keychain. With no file there, nothing is guessed from the other app, so a Keychain sign-in is never reported as missing.
+  - A connector Claude has signed in to since it was listed leaves the "needs sign-in" list, so its card, the chat chip and Overview stop warning.
+- **"Sign in from a terminal instead"** names the daemon's CLAUDE_CONFIG_DIR for the main Claude, so a terminal without it still signs into the file Claude reads.
+
+### Tests
+- `tests/claude-signin-host.test.ts` and `tests/claude-config-dir-host.test.ts` rebuild the paseo-ankit layout: no Anthropic email, CLAUDE_CONFIG_DIR=~/.claude, a stray ~/.claude.json, and Supercut signed in on Codex only. Plus unit tests for the Claude grant rules, the macOS case and the terminal command. Reviewed by GPT-6 Astra; its four findings are fixed. 554 tests.
+
 ## 0.20.0 — 2026-10-08
 
 Paseo's own plugin UI where it removes friction (the user: "improve each of these plugins with more Paseo plugin features").
